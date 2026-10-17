@@ -6,7 +6,9 @@
   "author": "Mrinal",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env server/index.js",
     "dev": "node --watch --env-file-if-exists=.env server/index.js",
@@ -18,12 +20,15 @@
     "test:editors": "node tests/editor-smoke.js",
     "test:manychat": "node tests/manychat-smoke.js",
     "test:whatsapp": "node tests/whatsapp-smoke.js",
+    "test:destinations": "node tests/destinations-ui.js",
+    "icons:build": "node scripts/build-icons.mjs",
     "check": "node --check server/index.js && node --check client/app.js"
   },
   "dependencies": {
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
+    "lucide-static": "^1.59.0",
     "multer": "^2.0.2",
     "playwright": "^1.56.0",
     "sharp": "^0.34.4",

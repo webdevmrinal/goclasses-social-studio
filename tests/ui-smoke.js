@@ -18,6 +18,10 @@ await fs.mkdir('test-results', { recursive: true });
 const { app, queue } = await createApp({ dataDir });
 const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
 const browser = await chromium.launch({ headless: true });
+const fixtureConfig = structuredClone(defaults);
+fixtureConfig.platforms.instagram.handle = 'goclasses_cse'; fixtureConfig.platforms.x.handle = 'GOClasses_CSE';
+fixtureConfig.platforms.youtubeDA.channelId = 'UCkOaW747107QQNo-o0yhJGg'; fixtureConfig.platforms.youtubeCS.channelId = 'UCyvbBJhLJ-5YqwPA884vj0Q';
+await fetch(`http://127.0.0.1:${server.address().port}/api/config`, { method: 'PUT', headers: { Origin: `http://127.0.0.1:${server.address().port}`, 'Content-Type': 'application/json' }, body: JSON.stringify(fixtureConfig) });
 const errors = [];
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 }, deviceScaleFactor: 1, reducedMotion: 'reduce' });
@@ -98,6 +102,7 @@ try {
   await page.locator('.asset').nth(1).locator('[data-remove]').click();
   await page.screenshot({ path: 'test-results/desktop-whatsapp.png', fullPage: true });
   await page.getByRole('button', { name: 'Preview posts' }).click();
+  await page.getByRole('heading', { name: 'Looks like your next post.' }).waitFor();
   assert.equal(await page.locator('.preview-card').count(), PLATFORMS.length);
   await page.getByRole('button', { name: 'Keep editing' }).click();
   await page.getByRole('button', { name: 'Undo image change', exact: true }).click();
