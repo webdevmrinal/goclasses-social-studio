@@ -16,6 +16,8 @@ import { Queue } from './queue.js';
 import { destinationUrl } from './automation/platforms.js';
 import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
+import { mediaFor, selectionErrors } from '../shared/media.js';
+import { destinationReadiness } from '../shared/readiness.js';
 
 export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {} } = {}) {
   await fs.mkdir(path.join(dataDir, 'uploads'), { recursive: true });
@@ -111,16 +113,29 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     media.push(item); const snapshot = structuredClone(media); mediaWrite = mediaWrite.then(() => atomicWrite(path.join(dataDir, 'media.json'), snapshot)); await mediaWrite;
     res.status(201).json({ media: item });
   });
-  const checkDraft = async draft => {
+  const libraryFor = draft => {
     if (!Array.isArray(draft?.mediaIds) || draft.mediaIds.length > 10 || new Set(draft.mediaIds).size !== draft.mediaIds.length) throw new Error('Choose up to 10 unique images.');
     const selectedMedia = draft.mediaIds.map(id => media.find(m => m.id === id));
     if (selectedMedia.some(m => !m)) throw new Error('An image is no longer available. Upload it again.');
+    const structureErrors = selectionErrors(draft);
+    if (Object.keys(draft.mediaByPlatform || {}).some(id => !PLATFORMS.some(p => p.id === id))) structureErrors.push('Unknown destination image selection.');
+    if (structureErrors.length) throw new Error(structureErrors.join('\n'));
+    return selectedMedia;
+  };
+  const checkDraft = async draft => {
+    const selectedMedia = libraryFor(draft);
     const errors = validateDraft(draft, selectedMedia, xLength);
     if (draft.selected?.includes('manychat')) validateManychatDraft(draft.manychat, draft.captions?.manychat);
     if (errors.length) throw new Error(errors.join('\n'));
-    await verifyMediaIntegrity(selectedMedia, dataDir);
-    return selectedMedia;
+    const usedIds = new Set(draft.selected.flatMap(id => mediaFor(draft, selectedMedia, id).map(m => m.id)));
+    const usedMedia = selectedMedia.filter(m => usedIds.has(m.id));
+    await verifyMediaIntegrity(usedMedia, dataDir);
+    return usedMedia;
   };
+  app.post('/api/readiness', (req, res) => {
+    const selectedMedia = libraryFor(req.body);
+    res.json({ destinations: destinationReadiness(req.body, selectedMedia, config, queue.login.items, xLength, queue.runs) });
+  });
   app.post('/api/validate', async (req, res) => {
     await checkDraft(req.body);
     res.json({ valid: true, setupErrors: setupErrors(config, req.body.selected), xLength: xLength(req.body.captions.x || '') });
@@ -129,6 +144,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const { draft, mode, confirmation } = req.body;
     const selectedMedia = await checkDraft(draft);
     const errors = setupErrors(config, draft.selected);
+    const readiness = destinationReadiness(draft, selectedMedia, config, queue.login.items, xLength, queue.runs);
+    for (const id of draft.selected) errors.push(...readiness[id].errors);
     if (errors.length) return res.status(400).json({ error: errors.join('\n') });
     const run = await queue.start({ draft, config, mode, confirmation, media: selectedMedia });
     res.status(201).json({ id: run.id });
@@ -136,13 +153,18 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/runs/:id/retry', async (req, res) => {
     const original = queue.runs.find(run => run.id === req.params.id);
     if (!original) return res.status(404).json({ error: 'Run not found.' });
-    const selected = original.items.filter(item => item.status === 'failed').map(item => item.id);
+    const failed = original.items.filter(item => item.status === 'failed').map(item => item.id);
+    if (req.body.platform !== undefined && !failed.includes(req.body.platform)) return res.status(400).json({ error: 'Only a failed destination can be retried. Verify uncertain outcomes first.' });
+    const selected = req.body.platform ? [req.body.platform] : failed;
     if (!selected.length) return res.status(400).json({ error: 'There are no failed destinations to retry. Verify uncertain results on the platform first.' });
     const errors = setupErrors(config, selected);
     if (errors.length) return res.status(400).json({ error: errors.join('\n') });
     const instagramItem = original.items.find(item => item.id === 'instagram' && item.status === 'posted');
     const sourceInstagramPublication = instagramItem?.publication || original.sourceInstagramPublication;
-    const run = await queue.start({ draft: { selected, captions: original.captions, manychat: original.manychat }, config, mode: req.body.mode || 'TEST', confirmation: req.body.confirmation, media: original.media, retryOf: original.id, sourceInstagramPublication });
+    const retryDraft = { selected, captions: original.captions, manychat: original.manychat, mediaIds: original.media.map(m => m.id), mediaByPlatform: original.mediaByPlatform };
+    const draftErrors = validateDraft(retryDraft, original.media, xLength);
+    if (draftErrors.length) return res.status(400).json({ error: draftErrors.join('\n') });
+    const run = await queue.start({ draft: retryDraft, config, mode: req.body.mode || 'TEST', confirmation: req.body.confirmation, media: original.media, retryOf: original.id, sourceInstagramPublication });
     res.status(201).json({ id: run.id });
   });
   app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });

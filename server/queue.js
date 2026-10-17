@@ -8,6 +8,7 @@ import { automate, checkLogin } from './automation/platforms.js';
 import { assertNoChallenge, InterventionError, NetworkError } from './automation/utils.js';
 import { replyBatch, validateManychatDraft } from '../shared/manychat.js';
 import { verifyMediaIntegrity } from './image-metadata.js';
+import { mediaFor } from '../shared/media.js';
 
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'];
 export class Queue extends EventEmitter {
@@ -48,6 +49,7 @@ export class Queue extends EventEmitter {
     const run = {
       id: randomUUID(), createdAt: new Date().toISOString(), mode, confirmedLive: mode === 'LIVE' && confirmation === 'POST',
       status: 'running', config: structuredClone(config), captions: structuredClone(draft.captions), media: structuredClone(media), retryOf,
+      mediaByPlatform: Object.fromEntries(draft.selected.map(id => [id, mediaFor(draft, media, id).map(m => m.id)])),
       items: [...draft.selected.filter(id => id !== 'manychat'), ...draft.selected.filter(id => id === 'manychat')].map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
     };
     if (draft.selected.includes('manychat')) run.manychat = { ...validateManychatDraft(draft.manychat, draft.captions?.manychat), replies: replyBatch(config.platforms.manychat.replyMessages, this.replyRotation.offset) };
@@ -171,14 +173,15 @@ export class Queue extends EventEmitter {
         await this.change();
         let page, timer;
         try {
-          await verifyMediaIntegrity(run.media, this.dataDir);
+          const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
+          await verifyMediaIntegrity(destinationMedia, this.dataDir);
           page = await this.browser.page(item.id);
           const deadline = item.id === 'whatsapp' ? this.whatsappDeadline : this.deadline;
           const timeout = new Promise((_, reject) => {
             timer = setTimeout(() => { reject(new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`)); page.close().catch(() => {}); }, deadline);
           });
           const result = await Promise.race([this.runner({
-            page, id: item.id, config: run.config, caption: run.captions[item.id], files: run.media.map(m => path.join(this.dataDir, 'uploads', m.filename)),
+            page, id: item.id, config: run.config, caption: run.captions[item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
             mode: run.mode, confirmedLive: run.confirmedLive,
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.find(i => i.id === 'instagram' && i.status === 'posted')?.publication || run.sourceInstagramPublication,

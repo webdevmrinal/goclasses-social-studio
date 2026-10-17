@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import { mediaFor, selectionErrors } from './media.js';
 export const PLATFORMS = [
   { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Feed post', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
   { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company photo gallery', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10 },
@@ -30,17 +31,18 @@ export function parseCaptions(input) {
 }
 
 export function validateDraft(draft, media, xLength = countCharacters) {
-  const errors = [];
+  const errors = selectionErrors(draft);
   const selected = Array.isArray(draft.selected) ? draft.selected : [];
   if (!selected.length) errors.push('Select at least one destination.');
   if (new Set(selected).size !== selected.length) errors.push('Duplicate destinations are not allowed.');
   if (selected.some(id => !PLATFORMS.some(p => p.id === id))) errors.push('Unknown destination.');
   for (const p of PLATFORMS.filter(p => selected.includes(p.id))) {
+    const images = mediaFor(draft, media, p.id);
     const caption = draft.captions?.[p.id];
     if (typeof caption !== 'string' || !caption.trim()) errors.push(`${p.name}: add a caption.`);
     else if ((p.id === 'x' ? xLength(caption) : countCharacters(caption)) > p.limit) errors.push(`${p.name}: caption exceeds ${p.limit.toLocaleString()} characters.`);
-    if (p.id !== 'manychat' && !p.textOnly && !media.length) errors.push(`${p.name}: add at least one image.`);
-    if (media.length > p.maxImages) errors.push(`${p.name}: use ${p.maxImages} image${p.maxImages === 1 ? '' : 's'} or fewer.`);
+    if (p.id !== 'manychat' && !p.textOnly && !images.length) errors.push(`${p.name}: add at least one image.`);
+    if (p.id !== 'manychat' && images.length > p.maxImages) errors.push(`${p.name}: use ${p.maxImages} image${p.maxImages === 1 ? '' : 's'} or fewer.`);
   }
   return errors;
 }
