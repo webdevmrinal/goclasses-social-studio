@@ -1,0 +1,11 @@
+node_modules/
+.npm-cache/
+.env
+data/
+chrome-profile/
+logs/
+uploads/
+test-results/
+.DS_Store
+Thumbs.db
+*.log

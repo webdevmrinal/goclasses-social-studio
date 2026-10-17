@@ -1,0 +1,32 @@
+{
+  "name": "goc-social-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GO Classes Social Studio — created by Mrinal",
+  "author": "Mrinal",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "dev": "node --watch --env-file-if-exists=.env server/index.js",
+    "setup": "playwright install chromium",
+    "test": "node --test tests/*.test.js",
+    "test:ui": "node tests/ui-smoke.js",
+    "test:browser": "node tests/browser-smoke.js",
+    "test:accounts": "node tests/accounts-smoke.js",
+    "test:editors": "node tests/editor-smoke.js",
+    "test:manychat": "node tests/manychat-smoke.js",
+    "test:whatsapp": "node tests/whatsapp-smoke.js",
+    "check": "node --check server/index.js && node --check client/app.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.2",
+    "playwright": "^1.56.0",
+    "sharp": "^0.34.4",
+    "twitter-text": "^3.1.0"
+  }
+}
