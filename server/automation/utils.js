@@ -134,6 +134,7 @@ export async function finishPost({ mode, confirmedLive, publish, verify, snapsho
   await markSubmitting(); // Persist before the side effect, including on process interruption.
   await publish();
   await verify();
-  await snapshot('published');
+  try { await snapshot('published'); }
+  catch { try { await step('Publication confirmed. Its diagnostic screenshot was unavailable.'); } catch { /* Do not downgrade a confirmed publication because diagnostics failed. */ } }
   return 'posted';
 }

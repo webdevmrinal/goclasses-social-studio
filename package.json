@@ -21,6 +21,7 @@
     "test:manychat": "node tests/manychat-smoke.js",
     "test:whatsapp": "node tests/whatsapp-smoke.js",
     "test:destinations": "node tests/destinations-ui.js",
+    "test:publications": "node tests/publication-smoke.js",
     "icons:build": "node scripts/build-icons.mjs",
     "check": "node --check server/index.js && node --check client/app.js"
   },

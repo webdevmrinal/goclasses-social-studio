@@ -168,13 +168,41 @@ async function clearOwnText(page, caption) {
   await editor.click(); await editor.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A'); await editor.press('Backspace');
   if ((await readCaption(editor)).trim()) throw attention('needs_attention', 'WhatsApp rehearsal text could not be cleared. Review the unsent draft before continuing.');
 }
+export async function confirmWhatsAppPublication({ page, expected, caption, baseline, hasImage, timeout = 60000, verifyContext = async () => {} }) {
+  const end = Date.now() + timeout; let stableId, confirmations = 0;
+  do {
+    await verifyChannelSurface(page, expected); await verifyContext();
+    const candidates = await main(page).locator('[data-id]').evaluateAll((els, { previous, caption, hasImage }) => {
+      const plain = node => node.nodeType === Node.TEXT_NODE ? node.textContent : node.nodeName === 'IMG' ? node.getAttribute('alt') || '' : node.nodeName === 'BR' ? '\n' : [...node.childNodes].map(plain).join('') + (/^(P|DIV)$/.test(node.nodeName) ? '\n' : '');
+      const normalized = text => text.replace(/\s+/gu, ' ').trim();
+      return [...new Set(els.filter(el => {
+        const meta = el.querySelector('[data-testid="msg-meta"]');
+        if (previous.includes(el.getAttribute('data-id')) || !meta) return false;
+        if (el.querySelector('[data-testid="msg-time"],[data-icon="msg-time"],[data-testid="msg-error"]') || [...meta.querySelectorAll('svg title')].some(title => /clock|pending|schedule/i.test(title.textContent))) return false;
+        // Native "Sent"/delivered acknowledgement is independent of audience
+        // view counts, which can appear later or remain unavailable.
+        const sent = [...meta.querySelectorAll('[aria-label]')].some(node => /^(sent|delivered|read)$/i.test(node.getAttribute('aria-label').trim())) || [...meta.querySelectorAll('svg title')].some(node => /^wds-ic-(delivered|read)$/.test(node.textContent));
+        if (!sent) return false;
+        const content = el.querySelector('[data-testid="image-caption selectable-text"]') || el.querySelector('[data-testid="selectable-text"]:not(img)');
+        return content && normalized(plain(content)) === normalized(caption) && (!hasImage || !!el.querySelector('[data-testid="image-thumb"]'));
+      }).map(el => el.getAttribute('data-id')))];
+    }, { previous: baseline, caption, hasImage });
+    if (candidates.length === 1) { confirmations = candidates[0] === stableId ? confirmations + 1 : 1; stableId = candidates[0]; if (confirmations >= 3) return { updateId: stableId, channelUrl: expected.channelUrl, channelName: expected.channelName, verifiedBy: 'sent_update', verifiedAt: new Date().toISOString() }; }
+    else { stableId = undefined; confirmations = 0; }
+    await wait(300);
+  } while (Date.now() < end);
+  throw new Error('WhatsApp did not confirm a newly sent channel update. Verify the channel manually before retrying.');
+}
 export async function prepareWhatsApp(ctx) {
   const { page, files, caption, config, step, snapshot } = ctx, expected = config.platforms.whatsapp;
   if (files.length > 1) throw new Error('WhatsApp Channels currently accepts one image per update in this worker. Choose one image or run WhatsApp separately.');
   const channel = await openWhatsAppChannel({ ...ctx, requireEmpty: true });
   await snapshot('account-verified', main(page).getByTestId('conversation-header'));
+  // Capture existing updates before uploading: a native optimistic draft must
+  // never become part of the pre-publication baseline.
+  const before = await main(page).locator('[data-id]').evaluateAll(els => els.map(el => el.getAttribute('data-id')));
   const guard = await installGuard(page, expected);
-  let editor, preview, result, publishedUpdateId;
+  let editor, preview, result, publishedUpdateId, publication;
   try {
     if (files.length) {
       await step('Preparing one image in the verified WhatsApp channel…');
@@ -203,7 +231,6 @@ export async function prepareWhatsApp(ctx) {
     };
     await ctx.recordPreparation?.({ ...channel, imageCount: files.length, textOnly: !files.length });
     // Only IDs already visible in this channel are compared; chat history is not persisted.
-    const before = await main(page).locator('[data-id]').evaluateAll(els => els.map(el => el.getAttribute('data-id')));
     result = await finishPost({ ...ctx, preflight, snapshot: label => snapshot(label, label === 'published' && publishedUpdateId ? main(page).locator(`[data-id=${JSON.stringify(publishedUpdateId)}]`) : preview),
       publish: async () => {
         await assertWhatsAppSession(page); await verifyGuard(page, guard); await verifyCaption(editor, caption);
@@ -214,24 +241,8 @@ export async function prepareWhatsApp(ctx) {
         } finally { await page.evaluate(key => { if (window[key]) window[key].armed = false; }, guard).catch(() => {}); }
       },
       verify: async () => {
-        const end = Date.now() + (ctx.confirmationTimeout ?? 60000); let stableId, confirmations = 0;
-        while (Date.now() < end) {
-          await assertWhatsAppSession(page); await verifyGuard(page, guard);
-          const candidates = await main(page).locator('[data-id]').evaluateAll((els, { previous, caption, hasImage }) => {
-            const plain = node => node.nodeType === Node.TEXT_NODE ? node.textContent : node.nodeName === 'IMG' ? node.getAttribute('alt') || '' : node.nodeName === 'BR' ? '\n' : [...node.childNodes].map(plain).join('') + (/^(P|DIV)$/.test(node.nodeName) ? '\n' : '');
-            const normalized = text => text.replace(/\s+/gu, ' ').trim();
-            return els.filter(el => {
-              if (previous.includes(el.getAttribute('data-id')) || !el.querySelector('[data-testid="view-count"]') || !el.querySelector('[data-testid="msg-meta"]')) return false;
-              if (el.querySelector('[data-testid="msg-time"],[data-icon="msg-time"],[data-testid="msg-error"]') || [...el.querySelectorAll('svg title')].some(title => /clock|pending|schedule/i.test(title.textContent))) return false;
-              const content = el.querySelector('[data-testid="image-caption selectable-text"]') || el.querySelector('[data-testid="selectable-text"]');
-              return content && normalized(plain(content)) === normalized(caption) && (!hasImage || !!el.querySelector('[data-testid="image-thumb"]'));
-            }).map(el => el.getAttribute('data-id'));
-          }, { previous: before, caption, hasImage: Boolean(files.length) });
-          if (candidates.length === 1) { confirmations = candidates[0] === stableId ? confirmations + 1 : 1; stableId = candidates[0]; if (confirmations >= 3) { publishedUpdateId = stableId; return; } }
-          else { stableId = undefined; confirmations = 0; }
-          await wait(400);
-        }
-        throw new Error('WhatsApp did not confirm a newly sent channel update. Verify the channel manually before retrying.');
+        publication = await confirmWhatsAppPublication({ page, expected, caption, baseline: before, hasImage: Boolean(files.length), timeout: ctx.confirmationTimeout ?? 60000, verifyContext: () => verifyGuard(page, guard) });
+        publishedUpdateId = publication.updateId;
       }
     });
     if (result === 'dry_run') {
@@ -242,7 +253,7 @@ export async function prepareWhatsApp(ctx) {
       await editOwnDraft(page, guard, () => clearOwnText(page, caption));
       await step('TEST complete · Send was blocked and never clicked. Only this rehearsal draft was discarded.');
     }
-    return { status: result };
+    return { status: result, ...(publication ? { publication } : {}) };
   } finally {
     if (ctx.mode !== 'LIVE' && result !== 'dry_run' && editor) {
       try {

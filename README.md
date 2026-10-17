@@ -48,7 +48,7 @@ Add `=====WHATSAPP=====` to imported captions. WhatsApp supports text-only updat
 
 TEST prepares the native channel composer, verifies its caption and attachment, and captures only the channel header or prepared update. Send and Enter-to-send are blocked during preparation. TEST never clicks Send; it discards its own media selection and clears any caption WhatsApp copies back into the update box only if it exactly matches the rehearsal text. Changed or human-written drafts are preserved for review. Private chat lists, full WhatsApp page HTML and QR codes are not captured in Activity.
 
-LIVE still requires that run's reviewed `POST` confirmation. Navigation, channel-title changes or human edits invalidate preparation. Only the verified Send control is armed for one final action. The worker then looks for one new matching channel update with stable metadata and view-count confirmation. An unconfirmed outcome requires manual verification before retrying. Native platform notices and disclosure requirements remain applicable.
+LIVE still requires that run's reviewed `POST` confirmation. Navigation, channel-title changes or human edits invalidate preparation. Only the verified Send control is armed for one final action. The worker then looks for one new matching channel update with a native Sent/delivered acknowledgement, independently of audience view counts. An unconfirmed outcome requires manual verification before retrying. Native platform notices and disclosure requirements remain applicable.
 
 ## ManyChat
 
@@ -122,6 +122,7 @@ The appearance button in the top bar cycles **System → Dark → Light → Syst
 - Authentication checks, detected challenges, and exhausted navigation retries pause for intervention. The operator fixes the worker browser and selects Continue. Other preparation errors are recorded as failed, allowing the queue to continue.
 - A missing selector fails with an error screenshot and HTML diagnostic when the page remains available. WhatsApp omits full-page diagnostics to protect personal chats and login codes. No “best guess” identity match is accepted.
 - Navigation is retried up to three times, with increasing waits; all retries and preparation share a 120-second per-destination deadline after the browser opens (240 seconds for WhatsApp's slower loading and final confirmation). Upload actions have a 60-second limit. Failed file uploads are not automatically repeated inside a potentially populated composer; retry the failed destination after inspection.
+- Confirmation uses LinkedIn’s visible company-specific View post receipt or a new matching company-feed record, YouTube’s new post permalink with the exact channel/caption (expanding shortened link labels), and WhatsApp’s new update ID plus native Sent/delivered marker. Existing post IDs are captured before submission so an older matching post cannot confirm a new publication. Published permalinks appear in Activity. A failed diagnostic screenshot or tab cleanup after positive confirmation does not downgrade the publication. Resolving all uncertain items also clears the run’s error summary.
 - Final publication actions are **never automatically retried**. A lost confirmation is **Verify outcome**, not Failed. Check the actual platform and mark “Verified published” or “Verified not published” before proceeding. This protects against duplicate posts.
 - A worker restart does not resume LIVE work. In-flight submission becomes Verify outcome; interrupted preparation becomes Failed; untouched destinations become Skipped. Starting a new reviewed run is explicit.
 - Closing the workspace tab does not stop the queue. Reopen it from any authorized device to reconnect.
@@ -192,6 +193,7 @@ npm run test:editors
 npm run test:manychat
 npm run test:whatsapp
 npm run test:destinations
+npm run test:publications
 npm run dev
 ```
 
@@ -202,6 +204,8 @@ The test suite uses an isolated temporary data directory and injected offline ad
 Authenticated TEST verification on 17 October 2026: run `2e46e782-e19c-4cc4-a7ca-e665afa0ed2a` completed **6/6** destinations in Activity with two images for each publishing destination. This includes the exact multiline Unicode X caption from failed run `21e6dd08-3d07-43af-94db-0cf56b30ee58`. X's Draft.js caption is read as logical text blocks, and its DOM is never overwritten using a fill fallback. Captions are checked again immediately before final publication intent is recorded. LinkedIn intercepts its file chooser before Add media is clicked, selects all files through that chooser, and verifies both the editor thumbnails and the final multi-photo preview without a native Explorer window. YouTube switched between both editor-access channels. Instagram prepared its carousel. One test-only PNG exercised origin-metadata detection, lossless cleaning and pre-upload rescanning on the actual worker. ManyChat prepared an inactive draft on an existing post, with no Go live click. Earlier run `bbbf3379-6a70-403e-83d2-c72aa34a139d` also verified three automatically detected link buttons. The device's saved draft was not replaced. Actual public publication and Go live were not exercised.
 
 WhatsApp authenticated TEST verification on the same date, after a worker restart: run `59f71fe3-2faf-40a4-980d-e09673c2766a` prepared one image and imported multiline Unicode text; run `3a925165-a80d-4a4e-8d92-edd6486e0b51` prepared text only. Both passed the queue's fresh session/channel preflight and adapter checks, recorded `dry_run` with no submission intent, and cleared their own rehearsal drafts. Screenshots in Activity contain only the target channel header and prepared update. No WhatsApp update was sent; actual public-send confirmation is covered by intercepted local fixtures and has not been exercised against the real channel.
+
+Read-only verification of user LIVE run `99b484e9-6a54-437f-90d7-1b8c4aedd435` on 17 October 2026 confirmed its LinkedIn receipt, both YouTube post permalinks with matching captions, and the matching WhatsApp channel update with native Sent acknowledgement. No new post, Send or Go live action was invoked during this repair. The confirmation regression suite reproduces hidden LinkedIn success headings, shortened links, native delivery markers, optimistic draft IDs, delayed view counts, wrong authors, old IDs, ambiguous posts and unavailable diagnostic screenshots.
 
 ## Attribution
 

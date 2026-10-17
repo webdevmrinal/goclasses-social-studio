@@ -9,6 +9,7 @@ import { assertNoChallenge, InterventionError, NetworkError } from './automation
 import { replyBatch, validateManychatDraft } from '../shared/manychat.js';
 import { verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor } from '../shared/media.js';
+import { publicationUrl } from './automation/publication.js';
 
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'];
 export class Queue extends EventEmitter {
@@ -22,6 +23,7 @@ export class Queue extends EventEmitter {
     this.replyRotation = await readJson(path.join(this.dataDir, 'manychat-rotation.json'), { offset: 0 });
     if (!Number.isSafeInteger(this.replyRotation.offset) || this.replyRotation.offset < 0) this.replyRotation = { offset: 0 };
     for (const run of this.runs) {
+      if (['completed', 'completed_with_errors'].includes(run.status)) run.status = run.items.some(i => ['failed', 'uncertain', 'needs_setup'].includes(i.status)) ? 'completed_with_errors' : 'completed';
       if (!busyStates.includes(run.status)) continue;
       run.status = 'interrupted'; run.confirmedLive = false;
       for (const item of run.items) {
@@ -90,13 +92,29 @@ export class Queue extends EventEmitter {
       else this.process(run).catch(error => this.emit('workerError', error));
     }
   }
-  async resolve(runId, id, resolution) {
+  async resolve(runId, id, resolution, proof) {
     if (!['posted', 'failed', 'skipped'].includes(resolution)) throw new Error('Invalid resolution.');
     const run = this.runs.find(r => r.id === runId);
-    const item = run?.items.find(i => i.id === id && i.status === 'uncertain');
+    const item = run?.items.find(i => i.id === id && (i.status === 'uncertain' || i.status === 'posted' && resolution === 'posted' && proof));
     if (!item) throw new Error('Only an uncertain result can be resolved manually.');
+    const alreadyPosted = item.status === 'posted';
+    let publication;
+    if (proof && resolution === 'posted') {
+      if (id === 'whatsapp') {
+        const expected = run.config?.platforms.whatsapp;
+        if (!expected || proof.channelUrl !== expected.channelUrl || proof.channelName !== expected.channelName || !/^[A-Za-z0-9_-]{8,80}$/.test(proof.updateId || '')) throw new Error('The WhatsApp verification record does not match this run.');
+        publication = { updateId: proof.updateId, channelName: expected.channelName, channelUrl: expected.channelUrl };
+      } else {
+        const url = publicationUrl(id, proof.postUrl);
+        if (!url) throw new Error('Use a native publication permalink for this destination.');
+        publication = { postUrl: url };
+      }
+      publication.verifiedBy = 'read_only_recheck'; publication.verifiedAt = new Date().toISOString();
+    }
     item.status = resolution; item.message = `Operator verified outcome: ${resolution === 'failed' ? 'not published; may retry' : resolution}.`;
-    if (resolution === 'posted') await this.advanceReplies(run, item);
+    if (publication) { item.publication = publication; item.message = 'Published; verified against the existing platform record. No repost was performed.'; }
+    if (resolution === 'posted' && !alreadyPosted) await this.advanceReplies(run, item);
+    if (['completed', 'completed_with_errors'].includes(run.status)) run.status = run.items.some(i => ['failed', 'uncertain', 'needs_setup'].includes(i.status)) ? 'completed_with_errors' : 'completed';
     await this.change();
   }
   async snapshot(run, item, page, label, errorHtml = false, target = page) {

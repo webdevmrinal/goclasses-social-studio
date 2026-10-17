@@ -168,7 +168,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     res.status(201).json({ id: run.id });
   });
   app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });
-  app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution); res.json({ ok: true }); });
+  app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
   app.post('/api/logins', (req, res) => {
     const selected = req.body.selected;
     if (!Array.isArray(selected) || !selected.length || selected.length > PLATFORMS.length || new Set(selected).size !== selected.length || selected.some(id => !PLATFORMS.some(p => p.id === id))) return res.status(400).json({ error: 'Select valid destinations to check.' });

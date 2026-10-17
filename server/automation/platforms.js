@@ -4,6 +4,7 @@ import { setupErrors } from '../config.js';
 import { prepareManychat } from './manychat.js';
 import { instagramBaseline, instagramPublication } from './instagram-reference.js';
 import { checkWhatsAppLogin, prepareWhatsApp } from './whatsapp.js';
+import { publicationBaseline, confirmPublication } from './publication.js';
 
 export function destinationUrl(id, config) {
   const p = config.platforms[id];
@@ -192,12 +193,14 @@ async function instagram(ctx) {
     await step('Finding the published Instagram post for ManyChat…');
     publication = await instagramPublication(page.context(), ctx.config.platforms.instagram.handle, baseline, caption);
   }
-  await page.close();
+  await page.close().catch(() => {});
   return publication ? { status: result, publication } : result;
 }
 
 async function linkedin(ctx) {
   const { page, files, caption, config, step, snapshot } = ctx;
+  const expected = config.platforms.linkedin;
+  let baseline = await publicationBaseline(page, 'linkedin', expected), publication;
   await step('Opening the company composer…');
   const entry = await firstVisible([page.getByRole('button', { name: /start a post|create a post/i }), page.getByRole('link', { name: /^create$/i }), page.getByRole('button', { name: /^create$/i })]);
   const createMenu = (await entry.innerText()).trim() === 'Create';
@@ -223,12 +226,12 @@ async function linkedin(ctx) {
   const post = dialog.getByRole('button', { name: 'Post', exact: true });
   await preparedButton(page, post);
   const result = await finishPost({ ...ctx,
-    preflight: () => verifyCaption(editor, caption),
+    preflight: async () => { await verifyCaption(editor, caption); baseline = [...new Set([...baseline, ...await publicationBaseline(page, 'linkedin', expected)])]; },
     publish: () => post.click(),
-    verify: () => page.getByText(/post successful|your post was successfully|post published/i).first().waitFor({ timeout: 30000 })
+    verify: async () => { publication = await confirmPublication({ page, id: 'linkedin', expected, caption, baseline, imageCount: files.length }); }
   });
-  await page.close();
-  return result;
+  await page.close().catch(() => {});
+  return publication ? { status: result, publication } : result;
 }
 
 async function x(ctx) {
@@ -251,12 +254,14 @@ async function x(ctx) {
     publish: () => post.click(),
     verify: () => page.getByText(/your post was sent/i).waitFor({ timeout: 30000 })
   });
-  await page.close();
+  await page.close().catch(() => {});
   return result;
 }
 
 async function youtube(ctx) {
   const { page, files, caption, step, snapshot } = ctx;
+  const expected = ctx.config.platforms[ctx.id];
+  let baseline = await publicationBaseline(page, ctx.id, expected), publication;
   await step('Opening the community composer…');
   const entry = await firstVisible([page.locator('ytd-backstage-post-dialog-renderer #contenteditable-root[contenteditable="true"]').filter({ visible: true }), page.getByText('Post an update to your fans', { exact: false }), page.getByRole('button', { name: /^create a post$|^create post$/i }), page.locator('#placeholder-area')]);
   await entry.click();
@@ -274,11 +279,11 @@ async function youtube(ctx) {
   const post = composer.getByRole('button', { name: 'Post', exact: true });
   await preparedButton(page, post);
   const result = await finishPost({ ...ctx,
-    preflight: () => verifyCaption(editor, caption),
-    snapshot: label => snapshot(label, composer),
+    preflight: async () => { await verifyCaption(editor, caption); baseline = [...new Set([...baseline, ...await publicationBaseline(page, ctx.id, expected)])]; },
+    snapshot: label => snapshot(label, label === 'published' && publication ? page.locator('ytd-backstage-post-renderer').filter({ has: page.locator(`#published-time-text a[href*="${new URL(publication.postUrl).pathname}"]`) }) : composer),
     publish: () => post.click(),
-    verify: () => page.getByText(/post published|your post has been published/i).first().waitFor({ timeout: 30000 })
+    verify: async () => { publication = await confirmPublication({ page, id: ctx.id, expected, caption, baseline, imageCount: files.length }); }
   });
-  await page.close();
-  return result;
+  await page.close().catch(() => {});
+  return publication ? { status: result, publication } : result;
 }
