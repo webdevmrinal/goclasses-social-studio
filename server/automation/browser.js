@@ -97,9 +97,9 @@ export class BrowserManager {
   async page(id) {
     const context = await this.open();
     let page = this.pages.get(id);
-    if (id === 'whatsapp') {
-      const linkedTabs = context.pages().filter(tab => !tab.isClosed() && tab.url().startsWith('https://web.whatsapp.com/'));
-      if (linkedTabs.length > 1) throw new InterventionError('More than one WhatsApp Web tab is open in the worker. Keep one tab and continue; the worker will not choose a session or take one over.');
+    if (['whatsapp', 'telegram'].includes(id)) {
+      const linkedTabs = context.pages().filter(tab => !tab.isClosed() && tab.url().startsWith(id === 'whatsapp' ? 'https://web.whatsapp.com/' : 'https://web.telegram.org/'));
+      if (linkedTabs.length > 1) throw new InterventionError(`More than one ${id === 'whatsapp' ? 'WhatsApp' : 'Telegram'} Web tab is open in the worker. Keep one tab and continue; the worker will not choose a session or take one over.`);
       page = linkedTabs[0] || page;
     }
     if (!page || page.isClosed()) {

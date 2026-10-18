@@ -194,6 +194,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
       res.json({ ok: true, browser: label });
     } finally { queue.login.running = false; queue.emit('change', queue.state()); }
   });
+  app.use('/vendor/webawesome', express.static(path.join(ROOT, 'node_modules/@awesome.me/webawesome/dist-cdn'), { dotfiles: 'deny', index: false }));
   app.use('/shared', express.static(path.join(ROOT, 'shared')));
   app.use(express.static(path.join(ROOT, 'client'), { etag: true }));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint not found.' }));

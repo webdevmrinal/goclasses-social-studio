@@ -96,7 +96,8 @@ try {
   await page.getByRole('button', { name: 'Undo image change', exact: true }).click(); assert.equal(await page.locator('.asset').count(), 2);
   await page.getByRole('tab', { name: 'Instagram', exact: true }).focus();
   await page.getByRole('tab', { name: 'Instagram', exact: true }).press('End');
-  assert.equal(await page.getByRole('tab', { name: 'WhatsApp Channel', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByRole('tab', { name: 'Telegram Channel', exact: true }).getAttribute('aria-selected'), 'true');
+  await page.getByRole('tab', { name: 'WhatsApp Channel', exact: true }).click();
   assert.match(await page.locator('#caption-whatsapp').inputValue(), /A fresh chapter starts here/);
   assert((await page.locator('.media-destinations .badge.bad').innerText()).includes('WhatsApp Channel'));
   await page.locator('.asset').nth(1).locator('[data-remove]').click();
@@ -124,7 +125,7 @@ try {
   await page.screenshot({ path: 'test-results/desktop-manychat.png', fullPage: true });
   await page.getByRole('button', { name: 'Preview posts' }).click();
   await page.getByRole('heading', { name: 'Looks like your next post.' }).waitFor();
-  assert.equal(await page.locator('.preview-card').count(), 6);
+  assert.equal(await page.locator('.preview-card').count(), PLATFORMS.length - 1);
   assert(await page.locator('.manychat-review').getByText('Course details', { exact: true }).isVisible());
   assert((await page.locator('.manychat-review').innerText()).includes('https://www.instagram.com/p/EXAMPLE/'));
   await page.screenshot({ path: 'test-results/desktop-preview.png', fullPage: true });
@@ -205,5 +206,5 @@ try {
   assert.match(mismatch.message, /@goclasses_cse/);
   await identityPage.close();
   assert.deepEqual(errors, []);
-  console.log('UI checks passed: responsive layouts, upload/import, seven previews, WhatsApp media limit, live guard, TEST reset, sign-in/out, Instagram identity/setup regression checks, no console errors.');
+  console.log('UI checks passed: responsive layouts, upload/import, eight previews, WhatsApp media limit, live guard, TEST reset, sign-in/out, Instagram identity/setup regression checks, no console errors.');
 } finally { await browser.close(); server.closeAllConnections(); server.close(); }

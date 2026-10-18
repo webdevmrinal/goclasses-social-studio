@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_REPLY_MESSAGES, replyPool, manychatBuilderUrl } from '../shared/manychat.js';
 import { DEFAULT_WHATSAPP_NAME, DEFAULT_WHATSAPP_URL, whatsappChannelUrl } from '../shared/whatsapp.js';
+import { DEFAULT_TELEGRAM_NAME, DEFAULT_TELEGRAM_URL, telegramChannelUrl } from '../shared/telegram.js';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DATA = path.resolve(ROOT, process.env.DATA_DIR || 'data');
 export const defaults = {
@@ -14,7 +15,8 @@ export const defaults = {
     youtubeDA: { channelId: '', channelName: 'GO Classes for GATE DA', handle: 'GOClassesforGATEDA' },
     youtubeCS: { channelId: '', channelName: 'GO Classes for GATE CS', handle: 'GOClassesforGATECS' },
     manychat: { flowUrl: 'https://app.manychat.com/fb5759472/cms/easy-builder?campaign_type=easy_builder_cgt_next_post_multi_links', replyMessages: DEFAULT_REPLY_MESSAGES.join('\n') },
-    whatsapp: { channelName: DEFAULT_WHATSAPP_NAME, channelUrl: DEFAULT_WHATSAPP_URL }
+    whatsapp: { channelName: DEFAULT_WHATSAPP_NAME, channelUrl: DEFAULT_WHATSAPP_URL },
+    telegram: { channelName: DEFAULT_TELEGRAM_NAME, channelUrl: DEFAULT_TELEGRAM_URL }
   }
 };
 export async function atomicWrite(file, value) {
@@ -53,6 +55,9 @@ export function validateConfig(input) {
   const wa = result.platforms.whatsapp;
   if (wa.channelName.length > 100) throw new Error('WhatsApp: channel names can contain up to 100 characters.');
   if (wa.channelUrl) { const url = whatsappChannelUrl(wa.channelUrl); if (!url) throw new Error('WhatsApp: use the exact https://whatsapp.com/channel/… channel link, not a chat, group, or phone link.'); wa.channelUrl = url; }
+  const tg = result.platforms.telegram;
+  if (tg.channelName.length > 128) throw new Error('Telegram: channel names can contain up to 128 characters.');
+  if (tg.channelUrl) { const url = telegramChannelUrl(tg.channelUrl); if (!url) throw new Error('Telegram: use an exact public https://t.me/channel_username link, not a discussion group invite, bot or post link.'); tg.channelUrl = url; }
   return result;
 }
 export function setupErrors(config, selected) {
@@ -64,6 +69,7 @@ export function setupErrors(config, selected) {
     if (id.startsWith('youtube') && (!p.channelId || !p.channelName || !p.handle)) errors.push(`Set the ${id === 'youtubeDA' ? 'GATE DA' : 'GATE CS'} channel ID, handle, and name in Settings.`);
     if (id === 'manychat' && !p.flowUrl) errors.push('Set the ManyChat flow URL in Settings.');
     if (id === 'manychat' && !config.platforms.instagram.handle) errors.push('Set the Instagram account handle in Connections so ManyChat can verify its connected account.');
+    if (id === 'telegram' && (!p.channelName || !p.channelUrl)) errors.push('Set the exact Telegram channel name and public channel link in Connections.');
     if (id === 'whatsapp' && (!p.channelName || !p.channelUrl)) errors.push('Set the exact WhatsApp channel name and public channel link in Connections.');
   }
   return errors;

@@ -4,6 +4,8 @@ import { setupErrors } from '../config.js';
 import { prepareManychat } from './manychat.js';
 import { instagramBaseline, instagramPublication } from './instagram-reference.js';
 import { checkWhatsAppLogin, prepareWhatsApp } from './whatsapp.js';
+import { telegramWebUrl } from '../../shared/telegram.js';
+import { checkTelegramLogin, prepareTelegram } from './telegram.js';
 import { publicationBaseline, confirmPublication } from './publication.js';
 
 export function destinationUrl(id, config) {
@@ -12,6 +14,7 @@ export function destinationUrl(id, config) {
   if (id === 'linkedin') return p.companyPageUrl;
   if (id === 'x') return 'https://x.com/home';
   if (id === 'whatsapp') return 'https://web.whatsapp.com/';
+  if (id === 'telegram') return telegramWebUrl(p.channelUrl);
   if (id.startsWith('youtube')) return p.channelId ? `https://www.youtube.com/channel/${p.channelId}/posts` : `https://www.youtube.com/@${p.handle}`;
   return p.flowUrl || 'https://manychat.com/';
 }
@@ -106,6 +109,7 @@ async function verifyIdentity(page, id, config, maySwitch = true, step = async (
 }
 
 export async function checkLogin({ page, id, config, step, requireEmpty }) {
+  if (id === 'telegram') return checkTelegramLogin({ page, config, step, requireEmpty });
   if (id === 'whatsapp') return checkWhatsAppLogin({ page, config, step, requireEmpty });
   let discoveredId, discoveredHandle, detectedSettings;
   const resolved = structuredClone(config);
@@ -141,6 +145,7 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
 
 export async function automate(ctx) {
   if (ctx.id === 'whatsapp') return prepareWhatsApp(ctx);
+  if (ctx.id === 'telegram') return prepareTelegram(ctx);
   const { page, id, config, step, snapshot } = ctx;
   const url = id.startsWith('youtube') ? `https://www.youtube.com/channel/${config.platforms[id].channelId}/posts` : destinationUrl(id, config);
   await navigate(page, url, step);

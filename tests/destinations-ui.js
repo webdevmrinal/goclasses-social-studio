@@ -28,7 +28,7 @@ try {
   const files = await Promise.all(['#86b1dc', '#91bca7', '#dcad83', '#b8a4d0', '#d999a3'].map(async (background, i) => ({ name: `GO Classes artwork ${i + 1}.png`, mimeType: 'image/png', buffer: await sharp({ create: { width: 600, height: 600, channels: 3, background } }).png().toBuffer() })));
   await page.locator('#file-input').setInputFiles(files); await page.getByText('Images ready.', { exact: true }).waitFor();
   assert.equal(await page.locator('.asset').count(), 5); assert(await page.locator('.asset-list').evaluate(el => el.scrollHeight > el.clientHeight));
-  for (const id of ['linkedin', 'youtubeDA', 'youtubeCS', 'manychat']) await page.locator(`[data-destination="${id}"]`).click();
+  for (const id of ['linkedin', 'youtubeDA', 'youtubeCS', 'manychat', 'telegram']) await page.locator(`[data-destination="${id}"]`).click();
   await tab('x'); assert.match(await editor('x').locator('[data-editor-readiness]').innerText(), /Excluded/);
   await editor('x').locator('[data-pick-media]').nth(4).click(); assert.equal(await editor('x').locator('.image-choice.chosen').count(), 4);
   const xIds = await editor('x').locator('.image-choice.chosen').evaluateAll(els => els.map(el => el.dataset.mediaId));
@@ -62,6 +62,9 @@ try {
   const started = page.waitForRequest(req => req.url().endsWith('/api/runs') && req.method() === 'POST'); await page.getByRole('button', { name: 'Run test', exact: true }).click();
   assert.deepEqual((await started).postDataJSON().draft.selected, ['instagram', 'x']);
   await page.getByRole('heading', { name: 'Every step. In sight.' }).waitFor();
+  await page.locator('[data-retry-platform="x"]').waitFor({ state: 'attached' });
+  const failedCard = page.locator('.run-card').filter({ has: page.locator('[data-retry-platform="x"]') });
+  if (!await failedCard.evaluate(el => el.open)) await failedCard.locator('.run-summary').click();
   await page.locator('[data-retry-platform="x"]').waitFor();
   assert.deepEqual(calls.map(c => c.files.length), [5, 4]); assert(!calls.some(c => c.id === 'whatsapp'));
   const firstRun = queue.runs[0]; assert.deepEqual(firstRun.mediaByPlatform.whatsapp, undefined); assert.deepEqual(firstRun.mediaByPlatform.x, [xIds[1], xIds[0], ...xIds.slice(2)]);

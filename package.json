@@ -23,9 +23,12 @@
     "test:destinations": "node tests/destinations-ui.js",
     "test:publications": "node tests/publication-smoke.js",
     "icons:build": "node scripts/build-icons.mjs",
-    "check": "node --check server/index.js && node --check client/app.js"
+    "check": "node --check server/index.js && node --check client/app.js",
+    "test:telegram": "node tests/telegram-smoke.js",
+    "test:connections": "node tests/connections-ui.js"
   },
   "dependencies": {
+    "@awesome.me/webawesome": "^3.14.0",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",

@@ -5,6 +5,7 @@ export function publicationUrl(id, value) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+    if (id === 'telegram' && url.hostname === 't.me' && /^\/[a-z][a-z0-9_]{4,31}\/[1-9][0-9]*\/?$/i.test(url.pathname) && !url.search && !url.hash) return 'https://t.me' + url.pathname.replace(/\/$/, '');
     if (id === 'linkedin' && url.hostname === 'www.linkedin.com' && /^\/feed\/update\/urn:li:(?:share|activity):\d+\/?$/.test(url.pathname)) return `https://www.linkedin.com${url.pathname.replace(/\/$/, '')}`;
     if (id.startsWith('youtube') && url.hostname === 'www.youtube.com' && /^\/post\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) return `https://www.youtube.com${url.pathname.replace(/\/$/, '')}`;
   } catch { /* No valid native permalink. */ }

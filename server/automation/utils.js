@@ -63,7 +63,7 @@ export async function pasteCaption(page, locator, text) {
     const current = await readCaption(locator);
     if (current.replace(/\r\n/g, '\n').trim() === text.replace(/\r\n/g, '\n').trim()) return;
   } catch { /* fill() inserts complete Unicode strings without keyboard-layout dependence. */ }
-  if (await locator.locator('[data-contents="true"]').count() || await locator.getAttribute('data-lexical-editor') === 'true') {
+  if (await locator.locator('[data-contents="true"]').count() || await locator.getAttribute('data-lexical-editor') === 'true' || await locator.getAttribute('data-chat-input-editor') === 'tiptap') {
     // Draft.js owns its DOM. fill() bypasses that state and can append duplicate
     // text on the next React update. Fail safely rather than mutate it directly.
     throw new Error('The rich-text editor did not accept the caption through the clipboard. Nothing was published; retry after checking the active composer.');
@@ -81,8 +81,8 @@ export async function readCaption(locator) {
     // X/Draft.js has one data-block per logical line. innerText adds visual
     // newlines around empty blocks and is not the underlying caption.
     if (el.querySelector('[data-contents="true"]')) return [...el.querySelectorAll('[data-block="true"]')].map(block => block.textContent).join('\n');
-    if (el.getAttribute('data-lexical-editor') === 'true') {
-      const text = node => node.nodeType === Node.TEXT_NODE ? node.textContent : node.nodeName === 'IMG' ? node.getAttribute('alt') || '' : node.nodeName === 'BR' ? '\n' : [...node.childNodes].map(text).join('');
+    if (el.getAttribute('data-lexical-editor') === 'true' || el.getAttribute('data-chat-input-editor') === 'tiptap') {
+      const text = node => node.nodeType === Node.TEXT_NODE ? node.textContent : node.nodeName === 'IMG' ? node.getAttribute('alt') || '' : node.nodeName === 'BR' ? (node.classList.contains('ProseMirror-trailingBreak') ? '' : '\n') : [...node.childNodes].map(text).join('');
       return [...el.children].map(block => block.childNodes.length === 1 && block.firstChild.nodeName === 'BR' ? '' : text(block)).join('\n');
     }
     // Quill stores one paragraph per newline. innerText adds extra newlines

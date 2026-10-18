@@ -8,7 +8,7 @@ export function setupIssues(config, id) {
   if (id === 'linkedin' && (!p.companyPageUrl || !p.companyName)) return ['Set the company admin URL and exact name in Connections.'];
   if (id.startsWith('youtube') && (!p.channelId || !p.channelName || !p.handle)) return ['Set the channel ID, exact name and handle in Connections.'];
   if (id === 'manychat' && (!p.flowUrl || !config?.platforms?.instagram?.handle)) return ['Set the ManyChat builder and Instagram account in Connections.'];
-  if (id === 'whatsapp' && (!p.channelName || !p.channelUrl)) return ['Set the exact channel name and public channel link in Connections.'];
+  if (['whatsapp', 'telegram'].includes(id) && (!p.channelName || !p.channelUrl)) return ['Set the exact channel name and public channel link in Connections.'];
   return [];
 }
 export const blockedLoginStatuses = ['needs_login', 'wrong_account', 'needs_access', 'needs_setup', 'verification_failed', 'loading_timeout', 'network_error', 'needs_attention', 'manual_login'];

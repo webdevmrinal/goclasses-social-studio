@@ -14,7 +14,7 @@ import { publicationUrl } from './automation/publication.js';
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'];
 export class Queue extends EventEmitter {
   constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline } = {}) {
-    super(); this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.whatsappDeadline = deadline ?? 240000;
+    super(); this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.channelDeadline = deadline ?? 240000;
     this.runs = []; this.login = { running: false, items: {} }; this.persistChain = Promise.resolve(); this.processing = false;
   }
   get active() { return this.runs.find(run => busyStates.includes(run.status)); }
@@ -106,7 +106,7 @@ export class Queue extends EventEmitter {
         publication = { updateId: proof.updateId, channelName: expected.channelName, channelUrl: expected.channelUrl };
       } else {
         const url = publicationUrl(id, proof.postUrl);
-        if (!url) throw new Error('Use a native publication permalink for this destination.');
+        if (!url || id === 'telegram' && !url.startsWith(run.config?.platforms.telegram?.channelUrl + '/')) throw new Error('Use a native publication permalink for this destination.');
         publication = { postUrl: url };
       }
       publication.verifiedBy = 'read_only_recheck'; publication.verifiedAt = new Date().toISOString();
@@ -126,6 +126,14 @@ export class Queue extends EventEmitter {
       const heading = page.getByTestId('conversation-panel-wrapper').getByTestId('conversation-info-header-chat-title');
       if (!expected || await heading.count() !== 1 || (await heading.innerText()).trim() !== expected) return;
       if (target === page) target = page.getByTestId('conversation-header');
+    }
+    if (item.id === 'telegram') {
+      // Never capture Telegram's private sidebar, login QR, unknown chats or full DOM.
+      if (errorHtml) return;
+      const expected = (run.config || this.settings)?.platforms.telegram?.channelName;
+      const surface = page.locator('#column-center .chat.active'), heading = surface.locator('.topbar .user-title .peer-title');
+      if (!expected || await heading.count() !== 1 || (await heading.innerText()).trim() !== expected) return;
+      if (target === page) target = surface.locator('.topbar');
     }
     const dir = path.join(this.dataDir, 'logs', run.id);
     await fs.mkdir(dir, { recursive: true });
@@ -165,17 +173,18 @@ export class Queue extends EventEmitter {
     if (this.processing) return;
     this.processing = true;
     try {
-      const whatsapp = run.items.find(item => item.id === 'whatsapp' && item.status === 'queued');
-      if (whatsapp && run.status !== 'stopping') {
-        await this.log(run, whatsapp, 'Checking WhatsApp session, exact channel link and unsent drafts before any destination runs…');
+      for (const channelId of ['whatsapp', 'telegram']) {
+        const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
+        if (!channelItem || run.status === 'stopping') continue;
+        await this.log(run, channelItem, `Checking ${channelId === 'whatsapp' ? 'WhatsApp' : 'Telegram'} session, exact channel link and unsent drafts before any destination runs…`);
         let checked;
         try {
-          const page = await this.browser.page('whatsapp');
-          checked = await this.loginChecker({ page, id: 'whatsapp', config: run.config, requireEmpty: true, step: message => this.log(run, whatsapp, message) });
+          const page = await this.browser.page(channelId);
+          checked = await this.loginChecker({ page, id: channelId, config: run.config, requireEmpty: true, step: message => this.log(run, channelItem, message) });
         } catch (error) { checked = { status: 'needs_attention', message: error.message }; }
-        this.login.items.whatsapp = { ...checked, checkedAt: new Date().toISOString() };
+        this.login.items[channelId] = { ...checked, checkedAt: new Date().toISOString() };
         if (checked.status !== 'verified' && run.status !== 'stopping') {
-          whatsapp.status = 'attention'; whatsapp.message = checked.message; run.status = 'attention'; await this.change(); return;
+          channelItem.status = 'attention'; channelItem.message = checked.message; run.status = 'attention'; await this.change(); return;
         }
         await this.change();
       }
@@ -194,7 +203,7 @@ export class Queue extends EventEmitter {
           const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
           page = await this.browser.page(item.id);
-          const deadline = item.id === 'whatsapp' ? this.whatsappDeadline : this.deadline;
+          const deadline = ['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
           const timeout = new Promise((_, reject) => {
             timer = setTimeout(() => { reject(new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`)); page.close().catch(() => {}); }, deadline);
           });

@@ -5,3 +5,5 @@ const paths=Object.fromEntries(Object.entries(names).map(([key,name])=>{if(!node
 fs.writeFileSync('client/icons.js','// Lucide icons (ISC). See THIRD_PARTY_NOTICES.md. Integrated by Mrinal.\nexport const lucidePaths = '+JSON.stringify(paths,null,2)+';\n');
 fs.writeFileSync('THIRD_PARTY_NOTICES.md','# Third-party notices\n\nUI icons from [Lucide](https://lucide.dev/), distributed locally with this app. Social service marks are separate.\n\n'+fs.readFileSync('node_modules/lucide-static/LICENSE','utf8'));
 
+
+fs.appendFileSync('THIRD_PARTY_NOTICES.md','\n\n## Web Awesome\n\nComponents from [Web Awesome](https://webawesome.com/), served locally.\n\n'+fs.readFileSync('node_modules/@awesome.me/webawesome/LICENSE.md','utf8'));

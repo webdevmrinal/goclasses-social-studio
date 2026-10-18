@@ -7,9 +7,12 @@ export const PLATFORMS = [
   { id: 'youtubeDA', delimiter: 'YOUTUBE_DA', name: 'YouTube · GATE DA', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10 },
   { id: 'youtubeCS', delimiter: 'YOUTUBE_CS', name: 'YouTube · GATE CS', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10 },
   { id: 'manychat', delimiter: 'MANYCHAT', name: 'ManyChat', detail: 'Instagram comment → DM', color: '#168b78', icon: 'message', limit: 1000, maxImages: 10 },
-  { id: 'whatsapp', delimiter: 'WHATSAPP', name: 'WhatsApp Channel', detail: 'Channel update · 1 image', color: '#138b63', icon: 'whatsapp', limit: 1024, maxImages: 1, optionalImport: true, textOnly: true }
+  { id: 'whatsapp', delimiter: 'WHATSAPP', name: 'WhatsApp Channel', detail: 'Channel update · 1 image', color: '#138b63', icon: 'whatsapp', limit: 1024, maxImages: 1, optionalImport: true, textOnly: true },
+  { id: 'telegram', delimiter: 'TELEGRAM', name: 'Telegram Channel', detail: 'Channel post · photo album', color: '#2488b8', icon: 'telegram', limit: 4096, maxImages: 10, optionalImport: true, textOnly: true }
 ];
 
+export const captionLimit = (p, images = 0) => p.id === 'telegram' && images ? 1024 : p.limit;
+export const captionLength = (p, text = '') => p.id === 'telegram' ? text.length : countCharacters(text);
 export const countCharacters = text => [...(text || '')].length;
 
 export function parseCaptions(input) {
@@ -40,7 +43,7 @@ export function validateDraft(draft, media, xLength = countCharacters) {
     const images = mediaFor(draft, media, p.id);
     const caption = draft.captions?.[p.id];
     if (typeof caption !== 'string' || !caption.trim()) errors.push(`${p.name}: add a caption.`);
-    else if ((p.id === 'x' ? xLength(caption) : countCharacters(caption)) > p.limit) errors.push(`${p.name}: caption exceeds ${p.limit.toLocaleString()} characters.`);
+    else if ((p.id === 'x' ? xLength(caption) : captionLength(p, caption)) > captionLimit(p, images.length)) errors.push(`${p.name}: caption exceeds ${captionLimit(p, images.length).toLocaleString()} characters${p.id === 'telegram' && images.length ? ' with images' : ''}.`);
     if (p.id !== 'manychat' && !p.textOnly && !images.length) errors.push(`${p.name}: add at least one image.`);
     if (p.id !== 'manychat' && images.length > p.maxImages) errors.push(`${p.name}: use ${p.maxImages} image${p.maxImages === 1 ? '' : 's'} or fewer.`);
   }
