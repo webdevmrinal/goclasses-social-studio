@@ -25,7 +25,12 @@
     "icons:build": "node scripts/build-icons.mjs",
     "check": "node --check server/index.js && node --check client/app.js",
     "test:telegram": "node tests/telegram-smoke.js",
-    "test:connections": "node tests/connections-ui.js"
+    "test:connections": "node tests/connections-ui.js",
+    "android:status": "node scripts/android-worker.mjs status",
+    "android:start": "node scripts/android-worker.mjs start",
+    "android:stop": "node scripts/android-worker.mjs stop",
+    "android:doctor": "node scripts/android-worker.mjs doctor",
+    "android:play-store": "node scripts/android-worker.mjs play-store"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

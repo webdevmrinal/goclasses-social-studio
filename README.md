@@ -64,6 +64,23 @@ LIVE requires the existing per-run **POST** confirmation. The adapter persists s
 
 The interface uses locally served [Web Awesome](https://webawesome.com/docs/) components for the segmented mode group, contextual tooltips and run progress. TEST and LIVE have distinct accessible colors in light and dark themes. No UI assets require an external CDN. Motion honors reduced-motion settings. Library licenses remain in THIRD_PARTY_NOTICES.md; Social Studio’s Mrinal attribution is retained.
 
+## Experimental Instagram music test (Windows)
+
+The dedicated Android worker is a feasibility test for choosing music while keeping Instagram photo and carousel posts. The current web publishing flow is unchanged. Android publishing and a Compose music picker are not enabled; the native music interface must be inspected with the signed-in account first.
+
+On the configured test computer, double-click **start-android-test.cmd** or run `npm run android:start`. The emulator, SDK and Appium tools live under `%LOCALAPPDATA%\GoClassesSocialStudio\android-worker`, separately from the app's browser profiles. Google Play and Instagram sign-in happen inside that emulator; keep passwords and login codes there. Install Instagram from [its official Play Store listing](https://play.google.com/store/apps/details?id=com.instagram.android).
+
+- `npm run android:status` checks only the configured test device and owned local driver.
+- `npm run android:doctor` checks the Android driver prerequisites.
+- `npm run android:play-store` opens Instagram's store page on the verified test emulator.
+- `npm run android:stop` stops only the named emulator and the verified owned Appium process. Android user data is preserved.
+
+The test device uses 2 GB RAM, two CPU cores and a 720 × 1560 display. On the configured Windows worker, hardware acceleration, Android 15 boot, a native UiAutomator2 hierarchy/screenshot, reusable startup and owned shutdown were verified without an Instagram action. Driver diagnostics report zero required fixes.
+
+The launcher uses the exact AVD name **GOC_Instagram_Music_Test**, serial **emulator-5556**, and loopback-only Appium address **127.0.0.1:4731**. It refuses occupied ports belonging to an unverified service and never selects another connected phone. It does not reset apps or contain Instagram Share/Post actions. Mrinal attribution is retained.
+
+[Appium's Android driver](https://github.com/appium/appium-uiautomator2-driver#requirements) supports native apps on real devices and emulators. [Google documents Play Store-enabled virtual devices](https://developer.android.com/studio/run/managing-avds). This establishes the tooling path; Instagram login, accessible music results, song/clip verification and safe carousel preparation still require a non-publishing signed-in test.
+
 ## ManyChat
 
 The worker opens **New Automation → Auto-DM links from comments** in your ManyChat workspace. Existing library URLs are upgraded to its new-automation builder. It selects a specific post, checks **any word**, enables public comment replies, keeps the default opening DM, and fills the final **DM with a link** field with your ManyChat caption. Follow and email requests and the follow-up DM stay off.
