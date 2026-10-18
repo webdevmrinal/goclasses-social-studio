@@ -30,7 +30,7 @@ The interface works on desktop, tablet, and mobile browsers. Browser automation 
 
 ### Google says “This browser or app may not be secure”
 
-In Connections, use **Manual sign-in** for ManyChat or YouTube. This closes the tool's connected browser and opens installed Chrome (or Edge) with a separate saved profile and **no automation connection or debugging switches during sign-in**. Complete the login yourself, then **close that separate window completely** so the profile is saved and unlocked. Click **Open & check** in Connections to reconnect automation to that same profile.
+In Connections, expand the account’s **Settings** and use **Manual sign-in** for ManyChat or YouTube. This closes the tool's connected browser and opens installed Chrome (or Edge) with a separate saved profile and **no automation connection or debugging switches during sign-in**. Complete the login yourself, then **close that separate window completely** so the profile is saved and unlocked. Click **Open & check** in Connections to reconnect automation to that same profile.
 
 The worker now prefers installed Chrome, then Edge, then bundled Chromium. Install/update Chrome if needed. Google can impose additional account, device, or organization restrictions; this feature does not guarantee authentication or bypass Google's checks. Keep normal account security and two-factor authentication enabled.
 
@@ -120,6 +120,8 @@ Set APP_ORIGIN to the generated HTTPS URL, set the password and secure-cookie op
 The app refuses shared binding or a configured public origin without a password of at least 16 characters. Without a password, it also rejects non-loopback hostnames, including a tunnel hostname.
 
 ## Editing each destination
+
+The workspace keeps secondary controls collapsed: account fields and manual sign-in are under **Settings**, per-platform selections and order are under **Edit images**, and per-file metadata cleaning, restore and download are under **Options**. Click a file’s metadata status for its full report. Run screenshots and full diagnostics are under **Details**. Posting errors, excluded destinations, retry actions and LIVE confirmation remain visible. Mrinal’s attribution stays in the sidebar and mobile header.
 
 Upload up to ten originals to the shared library, then open each platform tab on the right. The tab shows exactly its own images, their numbered order, its caption and any blocking issues. Click thumbnails to choose images, use the order arrows to rearrange just that platform, and scroll the thumbnail strip or use the carousel arrows to inspect every image. **Clear** creates an empty selection; **Use all** restores the library order when it fits the platform limit. Selecting an image on WhatsApp replaces its prior image. X supports up to four. The image library scrolls independently when it is long. Metadata cleaning, restoring originals and Undo preserve destination assignments.
 

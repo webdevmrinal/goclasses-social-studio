@@ -21,7 +21,7 @@ async function contrast() {
  });
 }
 try {
- await page.goto(origin);await page.getByRole('heading',{name:'Make the connections.'}).waitFor();
+ await page.goto(origin);await page.getByRole('heading',{name:'Connections'}).waitFor();
  assert.equal(await page.locator('[name="telegram.channelName"]').inputValue(),'GO Classes');
  assert.equal(await page.locator('[name="telegram.channelUrl"]').inputValue(),'https://t.me/goclasses_cse');
  const request=page.waitForRequest(r=>r.url().endsWith('/api/logins')&&r.method()==='POST');

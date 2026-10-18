@@ -13,6 +13,8 @@ import { defaults } from '../server/config.js';
 import { checkLogin } from '../server/automation/platforms.js';
 import { pngChunk } from '../server/image-metadata.js';
 
+async function imageOptions(asset) { const menu = asset.locator('.asset-options'); if (!await menu.evaluate(el => el.open)) await menu.locator('summary').click(); }
+
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mrinal-studio-ui-'));
 await fs.mkdir('test-results', { recursive: true });
 const { app, queue } = await createApp({ dataDir });
@@ -28,11 +30,12 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
-  await page.getByRole('heading', { name: 'Make the connections.' }).waitFor();
+  await page.getByRole('heading', { name: 'Connections' }).waitFor();
   assert.equal(await page.locator('.nav-item').first().textContent(), 'Connections');
   assert(await page.getByRole('button', { name: 'Continue to Compose' }).isDisabled());
   assert.equal(await page.locator('input[name="whatsapp.channelName"]').inputValue(), 'GO Classes for GATE CSE/DA');
   assert.match(await page.locator('input[name="whatsapp.channelUrl"]').inputValue(), /^https:\/\/whatsapp.com\/channel\//);
+  await page.locator('[data-disclosure="connection-manychat"] > summary').click();
   const replyPool = page.locator('textarea[name="manychat.replyMessages"]');
   assert.equal((await replyPool.inputValue()).split('\n').length, 20);
   const customReplies = (await replyPool.inputValue()).replace('Thanks for your interest!', 'Thanks for joining us!');
@@ -41,7 +44,7 @@ try {
   await page.getByText('Connections saved.', { exact: true }).waitFor();
   assert.equal(await replyPool.inputValue(), customReplies);
   await page.getByRole('button', { name: 'Compose', exact: true }).click();
-  await page.getByRole('heading', { name: 'One idea. Everywhere.' }).waitFor();
+  await page.getByRole('heading', { name: 'New post' }).waitFor();
   await page.screenshot({ path: 'test-results/desktop-compose.png', fullPage: true });
   assert(await page.getByText('Mrinal', { exact: true }).isVisible());
   await page.locator('[data-action="import"]').click();
@@ -66,23 +69,25 @@ try {
   assert.equal(await page.locator('#caption-instagram').inputValue(), 'A fresh chapter starts here. ✨\n\nBuild your GATE preparation with GO Classes.\nहिन्दी captions work, too.\n\n#GOClasses #GATE');
   const tagged = Buffer.concat([image.subarray(0, 33), pngChunk('caBX', Buffer.from('c2pa ChatGPT gpt-image trainedAlgorithmicMedia')), image.subarray(33)]);
   await page.locator('#file-input').setInputFiles({ name: 'origin-test.png', mimeType: 'image/png', buffer: tagged });
-  await page.locator('.asset').nth(1).locator('[data-metadata]').filter({ hasText: 'Origin metadata found' }).waitFor();
+  await page.locator('.asset').nth(1).locator('[data-metadata]').filter({ hasText: 'Origin metadata' }).waitFor();
   await page.locator('.asset').nth(1).locator('[data-metadata]').click();
   await page.getByRole('heading', { name: 'Image metadata report', exact: true }).waitFor();
   assert((await page.locator('#modal').innerText()).includes('ChatGPT'));
   assert((await page.locator('#modal').innerText()).includes('Label outcome unknown'));
   await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await imageOptions(page.locator('.asset').nth(1));
   await page.locator('.asset').nth(1).locator('[data-clean-media]').click();
-  await page.getByText('Metadata removed · pixels verified', { exact: true }).waitFor();
+  await page.getByText('Cleaned', { exact: true }).waitFor();
   await page.locator('.asset').nth(1).locator('[data-metadata]').click();
   await page.getByRole('heading', { name: 'Image metadata report', exact: true }).waitFor();
   assert((await page.locator('#modal').innerText()).includes('Identical decoded pixels'));
   await page.screenshot({ path: 'test-results/metadata-report.png', fullPage: true });
   await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await imageOptions(page.locator('.asset').nth(1));
   await page.locator('.asset').nth(1).locator('[data-restore-media]').click();
-  await page.getByRole('button', { name: 'Origin metadata found', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Origin metadata', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Undo image change', exact: true }).click();
-  await page.getByText('Metadata removed · pixels verified', { exact: true }).waitFor();
+  await page.getByText('Cleaned', { exact: true }).waitFor();
   const orderBefore = await page.locator('.asset').evaluateAll(els => els.map(el => el.dataset.assetId));
   await page.locator('.asset').first().scrollIntoViewIfNeeded();
   const grip = await page.locator('.asset').nth(1).locator('[data-drag-media]').boundingBox();
@@ -99,11 +104,11 @@ try {
   assert.equal(await page.getByRole('tab', { name: 'Telegram Channel', exact: true }).getAttribute('aria-selected'), 'true');
   await page.getByRole('tab', { name: 'WhatsApp Channel', exact: true }).click();
   assert.match(await page.locator('#caption-whatsapp').inputValue(), /A fresh chapter starts here/);
-  assert((await page.locator('.media-destinations .badge.bad').innerText()).includes('WhatsApp Channel'));
+  assert((await page.locator('[data-editor-readiness="whatsapp"]').innerText()).includes('1 image'));
   await page.locator('.asset').nth(1).locator('[data-remove]').click();
   await page.screenshot({ path: 'test-results/desktop-whatsapp.png', fullPage: true });
   await page.getByRole('button', { name: 'Preview posts' }).click();
-  await page.getByRole('heading', { name: 'Looks like your next post.' }).waitFor();
+  await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   assert.equal(await page.locator('.preview-card').count(), PLATFORMS.length);
   await page.getByRole('button', { name: 'Keep editing' }).click();
   await page.getByRole('button', { name: 'Undo image change', exact: true }).click();
@@ -124,7 +129,7 @@ try {
   assert.equal(await page.locator('[data-link-field="url"]').count(), 1);
   await page.screenshot({ path: 'test-results/desktop-manychat.png', fullPage: true });
   await page.getByRole('button', { name: 'Preview posts' }).click();
-  await page.getByRole('heading', { name: 'Looks like your next post.' }).waitFor();
+  await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   assert.equal(await page.locator('.preview-card').count(), PLATFORMS.length - 1);
   assert(await page.locator('.manychat-review').getByText('Course details', { exact: true }).isVisible());
   assert((await page.locator('.manychat-review').innerText()).includes('https://www.instagram.com/p/EXAMPLE/'));
@@ -136,7 +141,7 @@ try {
   await page.locator('#live-confirmation').fill('post'); assert(await page.locator('#confirm-live').isDisabled());
   await page.locator('#live-confirmation').fill('POST'); assert(await page.locator('#confirm-live').isEnabled());
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.reload(); await page.getByRole('heading', { name: 'Make the connections.' }).waitFor();
+  await page.reload(); await page.getByRole('heading', { name: 'Connections' }).waitFor();
   await page.getByRole('button', { name: 'Compose', exact: true }).click();
   assert.equal(await page.locator('[data-mode="TEST"]').getAttribute('aria-pressed'), 'true');
   await page.setViewportSize({ width: 390, height: 844 });
@@ -152,11 +157,11 @@ try {
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
-  await page.getByRole('heading', { name: 'Make the connections.' }).waitFor();
+  await page.getByRole('heading', { name: 'Connections' }).waitFor();
   await page.screenshot({ path: 'test-results/mobile-settings.png', fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByRole('button', { name: 'Activity', exact: true }).click();
-  await page.getByRole('heading', { name: 'Your first run starts here.' }).waitFor();
+  await page.getByRole('heading', { name: 'No runs yet' }).waitFor();
   queue.runs = [{ id: 'accordion-fixture', mode: 'TEST', status: 'completed_with_errors', createdAt: new Date().toISOString(), captions: { x: 'A compact run summary' }, items: [{ id: 'x', status: 'failed', message: 'A detailed error belongs inside the accordion.', screenshots: [] }] }];
   queue.emit('change', queue.state());
   await page.getByText('A compact run summary', { exact: true }).waitFor();
@@ -182,7 +187,7 @@ try {
     await page.screenshot({ path: 'test-results/signin.png', fullPage: true });
     await page.getByLabel('Workspace password').fill('ui-test-workspace-password');
     await page.getByRole('button', { name: 'Enter workspace' }).click();
-    await page.getByRole('heading', { name: 'Make the connections.' }).waitFor();
+    await page.getByRole('heading', { name: 'Connections' }).waitFor();
     await page.getByRole('button', { name: 'Sign out' }).click();
     await page.getByRole('heading', { name: 'A little more connected.' }).waitFor();
   } finally { protectedServer.closeAllConnections(); protectedServer.close(); }

@@ -9,6 +9,8 @@ import { chromium } from 'playwright';
 import { createApp } from '../server/index.js';
 import { defaults } from '../server/config.js';
 import { PLATFORMS } from '../shared/platforms.js';
+async function imageOptions(asset) { const menu = asset.locator('.asset-options'); if (!await menu.evaluate(el => el.open)) await menu.locator('summary').click(); }
+
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mrinal-destination-ui-')), calls = [];
 let fail = true;
 const { app, queue } = await createApp({ dataDir, browser: { page: async () => ({ isClosed: () => true }) }, queueOptions: { runner: async ctx => { assert.equal(ctx.mode, 'TEST'); assert.equal(ctx.confirmedLive, false); calls.push({ id: ctx.id, files: ctx.files.map(file => path.basename(file)) }); if (fail) throw Error('Offline fixture failure'); return 'dry_run'; } } });
@@ -20,7 +22,7 @@ await fs.mkdir('test-results', { recursive: true });
 const errors = [], page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
 page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 const editor = id => page.locator(`#editor-${id}`);
-const tab = id => page.locator(`[data-caption-tab="${id}"]`).click();
+const tab = async id => { await page.locator(`[data-caption-tab="${id}"]`).click(); const options = editor(id).locator('.image-options'); if (await options.count() && !await options.evaluate(el => el.open)) await options.locator('summary').click(); };
 const capture = async name => { await page.locator('.toast button').evaluateAll(buttons => buttons.forEach(button => button.click())); await page.screenshot({ path: `test-results/${name}.png`, fullPage: true }); };
 try {
   await page.goto(origin); await page.getByRole('button', { name: 'Compose', exact: true }).click();
@@ -29,18 +31,19 @@ try {
   await page.locator('#file-input').setInputFiles(files); await page.getByText('Images ready.', { exact: true }).waitFor();
   assert.equal(await page.locator('.asset').count(), 5); assert(await page.locator('.asset-list').evaluate(el => el.scrollHeight > el.clientHeight));
   for (const id of ['linkedin', 'youtubeDA', 'youtubeCS', 'manychat', 'telegram']) await page.locator(`[data-destination="${id}"]`).click();
-  await tab('x'); assert.match(await editor('x').locator('[data-editor-readiness]').innerText(), /Excluded/);
+  await tab('x'); assert.match(await editor('x').locator('[data-editor-readiness]').innerText(), /Fix before running/);
   await editor('x').locator('[data-pick-media]').nth(4).click(); assert.equal(await editor('x').locator('.image-choice.chosen').count(), 4);
   const xIds = await editor('x').locator('.image-choice.chosen').evaluateAll(els => els.map(el => el.dataset.mediaId));
   await editor('x').locator('[data-destination-move][data-direction="1"]').first().click();
   await editor('x').getByRole('button', { name: 'Next image', exact: true }).click(); assert.match(await editor('x').locator('.image-count').innerText(), /2 \/ 4/);
-  await tab('whatsapp'); assert.match(await editor('whatsapp').locator('[data-editor-readiness]').innerText(), /Excluded/);
+  await tab('whatsapp'); assert.match(await editor('whatsapp').locator('[data-editor-readiness]').innerText(), /Fix before running/);
   await editor('whatsapp').locator('[data-pick-media]').nth(2).click(); assert.equal(await editor('whatsapp').locator('.image-choice.chosen').count(), 1);
   assert.match(await editor('whatsapp').locator('.destination-image img').getAttribute('alt'), /artwork 3/);
   const waId = await editor('whatsapp').locator('.image-choice.chosen').getAttribute('data-media-id');
   await tab('instagram'); assert.equal(await editor('instagram').locator('.image-choice.chosen').count(), 5);
   // Clean/undo replacements must propagate into existing custom selections.
-  await page.locator('.asset').first().locator('[data-clean-media]').click(); await page.getByText('Metadata removed · pixels verified', { exact: true }).waitFor();
+  await imageOptions(page.locator('.asset').first());
+  await page.locator('.asset').first().locator('[data-clean-media]').click(); await page.getByText('Cleaned', { exact: true }).waitFor();
   await tab('x'); let selectedIds = await editor('x').locator('.image-choice.chosen').evaluateAll(els => els.map(el => el.dataset.mediaId)); assert(!selectedIds.includes(xIds[0])); assert.equal(selectedIds.length, 4);
   await page.getByRole('button', { name: 'Undo image change', exact: true }).click();
   selectedIds = await editor('x').locator('.image-choice.chosen').evaluateAll(els => els.map(el => el.dataset.mediaId)); assert.deepEqual(selectedIds, xIds);
@@ -52,16 +55,16 @@ try {
   await capture('destinations-dark-mobile');
   assert.equal(await editor('x').evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Looks like your next post.' }).waitFor();
+  await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   const xPreview = page.locator('[data-preview-destination="x"]'), waPreview = page.locator('[data-preview-destination="whatsapp"]');
   assert.equal(await xPreview.locator('.carousel-thumb').count(), 4); assert.equal(await waPreview.locator('.carousel-thumb').count(), 1);
   assert.match(await xPreview.locator('.destination-image img').getAttribute('alt'), /artwork 2/); assert.match(await waPreview.locator('.destination-image img').getAttribute('alt'), /artwork 3/);
   await page.getByRole('button', { name: 'Keep editing' }).click(); await tab('whatsapp'); await page.locator('#caption-whatsapp').fill('');
-  await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Looks like your next post.' }).waitFor();
+  await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   assert.match(await waPreview.locator('.preview-meta').innerText(), /Excluded/); assert.equal(await page.getByRole('button', { name: 'Run test', exact: true }).isEnabled(), true);
   const started = page.waitForRequest(req => req.url().endsWith('/api/runs') && req.method() === 'POST'); await page.getByRole('button', { name: 'Run test', exact: true }).click();
   assert.deepEqual((await started).postDataJSON().draft.selected, ['instagram', 'x']);
-  await page.getByRole('heading', { name: 'Every step. In sight.' }).waitFor();
+  await page.getByRole('heading', { name: 'Activity' }).waitFor();
   await page.locator('[data-retry-platform="x"]').waitFor({ state: 'attached' });
   const failedCard = page.locator('.run-card').filter({ has: page.locator('[data-retry-platform="x"]') });
   if (!await failedCard.evaluate(el => el.open)) await failedCard.locator('.run-summary').click();
@@ -71,6 +74,9 @@ try {
   fail = false; const retryRequest = page.waitForRequest(req => req.url().endsWith('/retry'));
   await page.locator('[data-retry-platform="x"]').click(); await page.getByRole('heading', { name: 'Retry X', exact: true }).waitFor(); await page.getByRole('button', { name: 'Retry in TEST', exact: true }).click();
   assert.deepEqual((await retryRequest).postDataJSON(), { mode: 'TEST', platform: 'x' });
+  await page.getByText('Test complete', { exact: true }).first().waitFor({ state: 'attached' });
+  const retryCard = page.locator('.run-card').first();
+  if (!await retryCard.evaluate(el => el.open)) await retryCard.locator('.run-summary').click();
   await page.getByText('Test complete', { exact: true }).first().waitFor(); assert.deepEqual(calls.map(c => c.id), ['instagram', 'x', 'x']);
   assert(await page.locator(`[data-run-id="${firstRun.id}"] [data-retry]:not([data-retry-platform])`).isVisible(), 'Bulk retry remains available');
   await page.reload(); await page.getByRole('button', { name: 'Compose', exact: true }).click(); assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
