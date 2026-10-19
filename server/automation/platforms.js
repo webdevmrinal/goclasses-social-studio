@@ -145,6 +145,10 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
 }
 
 export async function automate(ctx) {
+  if(ctx.id==='instagramStory'||ctx.id==='instagram'&&ctx.instagram?.music?.enabled){
+    if(!ctx.instagramWorker)throw new InterventionError('The Android Instagram worker is unavailable.');
+    return ctx.instagramWorker.run(ctx);
+  }
   if (ctx.id === 'whatsapp') return prepareWhatsApp(ctx);
   if (ctx.id === 'telegram') return prepareTelegram(ctx);
   const { page, id, config, step, snapshot } = ctx;

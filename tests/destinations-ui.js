@@ -81,7 +81,7 @@ try {
   assert(await page.locator(`[data-run-id="${firstRun.id}"] [data-retry]:not([data-retry-platform])`).isVisible(), 'Bulk retry remains available');
   await page.reload(); await page.getByRole('button', { name: 'Compose', exact: true }).click(); assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   await tab('whatsapp'); assert.equal(await editor('whatsapp').locator('.image-choice.chosen').getAttribute('data-media-id'), waId);
-  await tab('instagram'); assert.match(await editor('instagram').locator('[data-editor-readiness]').innerText(), /Last attempt needs review/);
+  await tab('instagram'); assert.match(await editor('instagram').locator('[data-editor-readiness="instagram"]').innerText(), /Last attempt needs review/);
   await page.locator('[data-action="theme"]').click(); assert.equal(await page.locator('html').getAttribute('data-theme'), 'light'); await capture('destinations-light-desktop');
   await page.locator('[data-action="theme"]').click(); await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' }); await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
   assert.deepEqual(errors, []);

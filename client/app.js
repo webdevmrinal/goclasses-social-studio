@@ -1,6 +1,8 @@
 // Social Studio — Created by Mrinal. Copyright (c) 2026 Mrinal.
-import { PLATFORMS, countCharacters, parseCaptions, captionLimit, captionLength } from '/shared/platforms.js';
+import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, captionLength } from '/shared/platforms.js';
 import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
+import { DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory } from '/shared/instagram.js';
+import { instagramTabs, musicControl, storyEditor, storyMockup } from './instagram.js';
 import { mediaFor, mediaIdsFor } from '/shared/media.js';
 import { destinationReadiness, setupIssues } from '/shared/readiness.js';
 import '/vendor/webawesome/components/button-group/button-group.js';
@@ -54,9 +56,14 @@ draft.manychat = { postUrl: '', links: [], ...draft.manychat };
 if (!Array.isArray(draft.manychat.links)) draft.manychat.links = [];
 if (typeof draft.manychat.postUrl !== 'string') draft.manychat.postUrl = '';
 draft.manychat.linksMode ||= draft.manychat.links.length ? 'manual' : 'auto';
-draft.selected = Array.isArray(draft.selected) ? draft.selected.filter(id => PLATFORMS.some(p => p.id === id)) : [];
+draft.selected = Array.isArray(draft.selected) ? draft.selected.filter(id => DESTINATIONS.some(p => p.id === id)) : [];
 draft.mediaIds = Array.isArray(draft.mediaIds) ? draft.mediaIds : [];
 draft.mediaByPlatform = draft.mediaByPlatform && typeof draft.mediaByPlatform === 'object' && !Array.isArray(draft.mediaByPlatform) ? draft.mediaByPlatform : {};
+draft.instagram={music:{enabled:false,...draft.instagram?.music},story:{enabled:false,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
+draft.instagram.story.enabled=draft.instagram.story.enabled===true;draft.instagram.music.enabled=draft.instagram.music.enabled===true;
+try{draft.instagram.story.layout=storyLayout(draft.instagram.story.layout);}catch{draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);}
+draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
+let instagramTab='feed';
 let theme = 'system';
 try { theme = localStorage.getItem('mrinal.social-studio.theme') || 'system'; } catch { /* Use system appearance. */ }
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
@@ -88,9 +95,9 @@ const readiness = () => remoteReadiness || destinationReadiness(draft, selectedM
 const runnableIds = () => draft.selected.filter(id => readiness()[id]?.ready);
 function renderReadiness() {
   const ready = readiness();
-  document.querySelectorAll('[data-destination-status]').forEach(el => { const id = el.dataset.destinationStatus; el.textContent = !draft.selected.includes(id) ? '' : ready[id].ready ? 'Ready' : 'Needs attention'; el.classList.toggle('error-text', draft.selected.includes(id) && !ready[id].ready); });
-  document.querySelectorAll('[data-editor-readiness]').forEach(el => { const item = ready[el.dataset.editorReadiness]; el.className = 'destination-readiness blocked'; el.hidden = item.ready || !draft.selected.includes(el.dataset.editorReadiness); el.innerHTML = item.ready ? '' : `${icon('info')}<div><strong>Fix before running</strong><ul>${item.errors.map(error => `<li>${escape(error)}</li>`).join('')}</ul></div>`; });
-  document.querySelectorAll('[data-caption-tab]').forEach(el => { el.classList.toggle('needs-fix', draft.selected.includes(el.dataset.captionTab) && !ready[el.dataset.captionTab].ready); });
+  document.querySelectorAll('[data-destination-status]').forEach(el => { const id = el.dataset.destinationStatus; el.textContent = !draft.selected.includes(id) ? '' : ready[id]?.ready ? 'Ready' : 'Needs attention'; el.classList.toggle('error-text', draft.selected.includes(id) && !ready[id]?.ready); });
+  document.querySelectorAll('[data-editor-readiness]').forEach(el => { const item = ready[el.dataset.editorReadiness]; if(!item)return; el.className = 'destination-readiness blocked'; el.hidden = item.ready || !draft.selected.includes(el.dataset.editorReadiness); el.innerHTML = item.ready ? '' : `${icon('info')}<div><strong>Fix before running</strong><ul>${item.errors.map(error => `<li>${escape(error)}</li>`).join('')}</ul></div>`; });
+  document.querySelectorAll('[data-caption-tab]').forEach(el => { el.classList.toggle('needs-fix', draft.selected.includes(el.dataset.captionTab) && !ready[el.dataset.captionTab]?.ready); });
   const bar = document.querySelector('.actionbar'); if (bar) { const host = document.createElement('div'); host.innerHTML = actionbar(); bar.replaceWith(host.firstElementChild); }
 }
 async function refreshReadiness() {
@@ -100,7 +107,7 @@ async function refreshReadiness() {
 const verifiedDestinations = () => PLATFORMS.filter(p => state.login.items[p.id]?.status === 'verified').map(p => p.id);
 const activeRun = () => state.runs.find(r => ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'].includes(r.status));
 const workerBusy = () => state.workerBusy || Boolean(activeRun()) || state.login.running;
-const platform = id => PLATFORMS.find(p => p.id === id);
+const platform = id => DESTINATIONS.find(p => p.id === id);
 const platformIcon = p => `<span class="platform-icon ${p.icon}">${icon(p.icon)}</span>`;
 const bytes = size => size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${Math.round(size / 1024)} KB`;
 const prettyDate = date => new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(date));
@@ -165,7 +172,7 @@ function composePage() {
   const heroImage = media[mediaPreviewIndex];
   return `<div class="hero"><div class="title-row"><h1>New post</h1><small id="draft-status" class="save-status">Saved</small></div><div class="hero-actions"><button class="button subtle" data-action="export" title="Export captions">${icon('download')}<span>Export</span></button><button class="button" data-action="import" title="Import all captions">${icon('upload')}<span>Import captions</span></button></div></div>
     ${mode === 'LIVE' ? liveBanner() : ''}
-    <section aria-labelledby="destinations-title"><div class="section-heading"><h2 id="destinations-title">Destinations</h2><small>${draft.selected.length} of ${PLATFORMS.length} selected</small></div>
+    <section aria-labelledby="destinations-title"><div class="section-heading"><h2 id="destinations-title">Destinations</h2><small>${draft.selected.filter(id=>id!=='instagramStory').length} of ${PLATFORMS.length} selected</small></div>
     <div class="destination-grid">${PLATFORMS.map(p => `<button class="destination ${draft.selected.includes(p.id) ? 'selected' : ''}" data-destination="${p.id}" aria-pressed="${draft.selected.includes(p.id)}" title="${p.name}: ${p.detail}">${platformIcon(p)}<span class="check">${icon('check')}</span><span class="destination-name">${escape(p.name.replace(' · GATE ', ' · '))}</span><span class="destination-status" data-destination-status="${p.id}"></span></button>`).join('')}</div></section>
 
     <div class="composer-grid"><section class="panel media-panel" aria-label="Media upload"><div class="panel-label">Images <small>${media.length ? `${media.length} image${media.length === 1 ? '' : 's'}` : 'Up to 10 images'}</small></div>
@@ -202,7 +209,7 @@ async function showMetadata(id) {
   showDialog('Image metadata report', `<p><strong>${escape(m.name)}</strong><br>${m.width} × ${m.height} · ${bytes(m.size)}</p><dl class="metadata-facts"><dt>Content Credentials</dt><dd>${report.credentials ? 'Present · signature not validated' : 'Not found in embedded data'}</dd><dt>AI-origin markers</dt><dd>${escape(report.aiMarkers.join(', ') || 'None found in embedded data')}</dd><dt>Metadata containers</dt><dd>${escape(report.fields.join(', ') || 'No removable containers found')}</dd><dt>Quality verification</dt><dd>${m.verification ? 'Identical decoded pixels, dimensions and compressed image data' : m.preservedOriginal ? 'Uploaded original kept byte for byte' : 'Earlier optimized copy; reupload the original to preserve its original quality'}</dd></dl><table class="metadata-platforms"><thead><tr><th>Platform</th><th>What this scan can say</th></tr></thead><tbody><tr><td>Instagram</td><td>${signals ? 'Embedded origin signals present; an AI label is possible.' : 'No embedded origin signals found. Label outcome unknown.'}</td></tr><tr><td>LinkedIn</td><td>${report.credentials ? 'Content Credentials may be shown.' : 'No embedded C2PA found. Label outcome unknown.'}</td></tr><tr><td>X</td><td>Label outcome unknown.</td></tr><tr><td>YouTube posts</td><td>Community image label outcome unknown; published automatic C2PA guidance covers videos.</td></tr><tr><td>WhatsApp Channel</td><td>Label outcome unknown. Native channel disclosure requirements still apply.</td></tr><tr><td>Telegram Channel</td><td>Label outcome unknown. Embedded metadata checks cannot predict platform labels.</td></tr></tbody></table><p>Pixel watermarks, remote provenance and platform systems are outside this scan. Removing metadata cannot guarantee that AI labels will disappear.</p><p class="metadata-sources"><a href="https://about.fb.com/news/2024/02/labeling-ai-generated-images-on-facebook-instagram-and-threads/" target="_blank" rel="noopener noreferrer">Meta guidance</a> · <a href="https://www.linkedin.com/help/linkedin/answer/a6282984/" target="_blank" rel="noopener noreferrer">LinkedIn Content Credentials</a> · <a href="https://support.google.com/youtube/answer/14328491?hl=en" target="_blank" rel="noopener noreferrer">YouTube guidance</a></p>`, '<button class="button primary" data-dialog-close>Done</button>');
 }
 function accountLabel(p) {
-  const config = state.config?.platforms[p.id];
+  const config = state.config?.platforms[p.id==='instagramStory'?'instagram':p.id];
   if (!config) return p.detail;
   if (config.handle) return `@${config.handle}`;
   if (p.id === 'linkedin') return config.companyName || 'Company page · set up in Connections';
@@ -229,11 +236,11 @@ function captionEditor(p) {
   const count = captionLength(p, text), limit = captionLimit(p, platformMedia(p.id).length);
   return `<div class="caption-body ${captionTab !== p.id ? 'hidden' : ''}" id="editor-${p.id}" role="tabpanel" aria-labelledby="tab-${p.id}">
     <div class="caption-toolbar"><div class="caption-account">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id !== 'instagram' ? `<button class="button subtle small" data-copy-instagram="${p.id}" title="Copy caption from Instagram">${icon('copy')}<span>From Instagram</span></button>` : ''}</div>
-    <div data-editor-readiness="${p.id}"></div>${destinationMediaEditor(p)}
+    <div data-editor-readiness="${p.id}"></div>${p.id==='instagram'?instagramTabs(instagramTab)+`<div data-ig-panel="feed" class="${instagramTab!=='feed'?'hidden':''}">`:''}${destinationMediaEditor(p)}
     <label class="editor-label" for="caption-${p.id}">${p.id === 'manychat' ? 'DM text' : 'Post caption'}</label>
     <textarea class="caption-editor" id="caption-${p.id}" data-caption="${p.id}" placeholder="${p.id === 'manychat' ? 'Write your DM…' : 'Write a caption…'}" spellcheck="true">${escape(text)}</textarea>
     <div class="caption-bottom"><span></span><span id="count-${p.id}" class="${count > limit ? 'error-text' : ''}">${count.toLocaleString()} / ${limit.toLocaleString()}${p.id === 'x' ? ' *' : ''}</span></div>
-    ${p.id === 'x' ? '<p class="caption-hint">Link and Unicode counts are checked before running.</p>' : ''}${p.id === 'manychat' ? manychatOptions() : ''}</div>`;
+    ${p.id==='instagram'?musicControl(draft.instagram,workerBusy())+'</div>'+storyEditor({options:draft.instagram,images:platformMedia('instagram'),caption:text,handle:state.config?.platforms.instagram.handle,tab:instagramTab,busy:workerBusy(),captions:draft.captions,preview:latestStoryPreview()}):''}${p.id === 'x' ? '<p class="caption-hint">Link and Unicode counts are checked before running.</p>' : ''}${p.id === 'manychat' ? manychatOptions() : ''}</div>`;
 }
 const nextManychatReplies = () => state.manychatNextReplies || replyBatch(state.config?.platforms.manychat.replyMessages);
 const currentManychatLinks = () => manychatLinks(draft.manychat, draft.captions.manychat);
@@ -283,10 +290,10 @@ function actionbar() {
 }
 function previewPage() {
   const ready = readiness(), images = selectedMedia();
-  return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${PLATFORMS.filter(p => draft.selected.includes(p.id)).map(p => {
+  return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
     const images = platformMedia(p.id), caption = draft.captions[p.id] || '';
     const valid = ready[p.id].ready;
-    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
+    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagramStory'?escape(draft.instagram.story.label+' ? '+draft.instagram.story.url):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
   }).join('')}</div>${!draft.selected.length ? '<div class="panel empty-state"><h2>No destinations selected</h2><p>Choose destinations in Compose to see your previews.</p></div>' : ''}${footer()}`;
 }
 const statusLabels = { queued: 'Queued', running: 'In progress', dry_run: 'Test complete', posted: 'Published', failed: 'Failed', uncertain: 'Verify outcome', attention: 'Needs attention', awaiting_manual: 'Your turn', needs_setup: 'Choose flow', skipped: 'Skipped' };
@@ -308,7 +315,7 @@ function runMessage(item) {
 }
 function runDetails(run, item) {
   const message = item.message && runMessage(item) !== item.message ? `<p>${escape(item.message)}</p>` : '';
-  const preparation = item.id === 'manychat' ? preparedAutomation(item) : item.preparation?.channelName ? `<p>${escape(item.preparation.channelName)} · ${item.preparation.imageCount || 0} images</p>` : '';
+  const preparation = item.preparation?.kind==='instagramStory'?`<p><a href="${escape(item.preparation.postUrl)}" target="_blank" rel="noopener noreferrer">Shared feed post</a> ? ${escape(item.preparation.music.title)}${item.preparation.testExistingPost?' &middot; TEST used an existing post':''}</p>`:item.preparation?.kind==='instagramMusic'?`<p>${escape(item.preparation.music.title)} ? ${escape(item.preparation.music.artist)}</p>`:item.id === 'manychat' ? preparedAutomation(item) : item.preparation?.channelName ? `<p>${escape(item.preparation.channelName)} · ${item.preparation.imageCount || 0} images</p>` : '';
   const links = (item.screenshots || []).map(shot => `<a href="${escape(shot.url)}" target="_blank" rel="noopener noreferrer">${escape(shot.label.replaceAll('-', ' '))} ${icon('external')}</a>`).join('');
   return message || preparation || links ? disclosure('run-' + run.id + '-' + item.id, 'Details', message + preparation + `<div class="run-links">${links}</div>`, false, 'run-evidence') : '';
 }
@@ -355,6 +362,7 @@ function navigate(next) {
   view = next; shell(); window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function bindPage() {
+  bindStoryGestures();
   for (const handle of document.querySelectorAll('[data-drag-media]')) {
     handle.onpointerdown = event => {
       if (handle.disabled || event.button !== 0) return;
@@ -465,18 +473,18 @@ async function checkLogins(selected = PLATFORMS.map(p => p.id)) {
   navigate('settings'); toast('Checking connections in the worker browser. Any account needing sign-in will appear below.');
 }
 function exportText() {
-  const text = PLATFORMS.map(p => `=====${p.delimiter}=====\n${draft.captions[p.id] || ''}`).join('\n\n');
+  const text = DESTINATIONS.map(p => `=====${p.delimiter}=====\n${p.id==='instagramStory'&&draft.instagram.story.enabled?draft.instagram.story.label+'\n'+draft.instagram.story.url:draft.captions[p.id] || ''}`).join('\n\n');
   download('social-studio-captions.txt', text, 'text/plain;charset=utf-8');
 }
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function importDialog() {
-  showDialog('Import captions', '<p>Paste your platform sections. Optional channel sections: <code>=====WHATSAPP=====</code> and <code>=====TELEGRAM=====</code>.</p><label class="field"><span>Structured captions</span><textarea id="import-captions" placeholder="=====INSTAGRAM=====&#10;Your caption here…&#10;&#10;=====LINKEDIN=====&#10;Your company update…"></textarea></label><div id="dialog-error" class="dialog-error" role="alert"></div>', '<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="parse-captions">Import captions</button>');
+  showDialog('Import captions', '<p>Paste your platform sections. Optional sections: <code>=====INSTAGRAM_STORY=====</code> (button text and URL), <code>=====WHATSAPP=====</code> and <code>=====TELEGRAM=====</code>.</p><label class="field"><span>Structured captions</span><textarea id="import-captions" placeholder="=====INSTAGRAM=====&#10;Your caption here…&#10;&#10;=====LINKEDIN=====&#10;Your company update…"></textarea></label><div id="dialog-error" class="dialog-error" role="alert"></div>', '<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="parse-captions">Import captions</button>');
   document.querySelector('#parse-captions').onclick = () => {
     const { captions, errors } = parseCaptions(document.querySelector('#import-captions').value);
     if (errors.length) { document.querySelector('#dialog-error').textContent = errors.join('\n'); return; }
-    draft.captions = captions; saveDraft(); modal.close(); view = 'compose'; shell(); toast('Captions imported.');
+    draft.captions = captions; draft.instagram.story=importStory(captions);draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(draft.instagram.story.enabled)draft.selected.push('instagramStory');saveDraft(); modal.close(); view = 'compose'; shell(); toast('Captions imported.');
   };
 }
 async function copyText(text) {
@@ -490,13 +498,17 @@ async function copyText(text) {
 document.addEventListener('click', async e => {
   const button = e.target.closest('button'); if (!button || button.disabled) return;
   try {
-    if (button.hasAttribute('data-dialog-close')) { modal.close(); return; }
+    if(button.dataset.igTab){instagramTab=button.dataset.igTab;shell();return;}
+    if(button.hasAttribute('data-story-reset')){draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);saveDraft();shell();return;}
+    if(button.hasAttribute('data-story-suggestion')){const link=storyLinks(draft.captions)[Number(button.dataset.storySuggestion)];if(link){Object.assign(draft.instagram.story,{url:link.url,label:link.label});saveDraft();shell();}return;}
+    if(button.hasAttribute('data-ig-music')){await musicDialog();return;}
+    if(button.hasAttribute('data-dialog-close')) { modal.close(); return; }
     if (button.dataset.action === 'theme') {
       theme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
       try { localStorage.setItem('mrinal.social-studio.theme', theme); } catch { /* Session preference still applies. */ }
       applyTheme(); button.innerHTML = icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun'); button.setAttribute('aria-label', `Appearance: ${theme}. Change theme`); button.title = `Appearance: ${theme}`; return;
     }
-    if (button.dataset.fixDestination) { captionTab = button.dataset.fixDestination; navigate('compose'); document.querySelector(`#editor-${captionTab}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+    if (button.dataset.fixDestination) { captionTab = button.dataset.fixDestination==='instagramStory'?'instagram':button.dataset.fixDestination;if(button.dataset.fixDestination==='instagramStory')instagramTab='story'; navigate('compose'); document.querySelector(`#editor-${captionTab}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (button.dataset.pickMedia) {
       const id = button.dataset.pickMedia, p = platform(id), selected = [...mediaIdsFor(draft, id)], image = button.dataset.mediaId;
       draft.mediaByPlatform[id] = p.maxImages === 1 ? selected.length === 1 && selected[0] === image ? [] : [image] : selected.includes(image) ? selected.filter(key => key !== image) : [...selected, image];
@@ -600,6 +612,11 @@ document.addEventListener('click', async e => {
   } catch (error) { toast(error.message, true); }
 });
 document.addEventListener('input', e => {
+  if(e.target.dataset.igField){const [section,key]=e.target.dataset.igField.split('.');draft.instagram[section][key]=e.target.type==='checkbox'?e.target.checked:e.target.value;
+    if(section==='story'&&key==='enabled'){draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(e.target.checked)draft.selected.push('instagramStory');saveDraft();shell();return;}
+    const label=document.querySelector('[data-story-label]');if(label&&key==='label')label.textContent=e.target.value||'Application Form';saveDraft();return;}
+  if(e.target.dataset.storySize){const key=e.target.dataset.storySize,item=draft.instagram.story.layout[key];item.width=Number(e.target.value)/100;item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,item.x));updateStoryItem(key);saveDraft();return;}
+
   if (e.target.hasAttribute('data-manychat-post')) { draft.manychat.postUrl = e.target.value; saveDraft(); return; }
   if (e.target.hasAttribute('data-manychat-link')) {
     const index = Number(e.target.dataset.manychatLink);
@@ -631,7 +648,7 @@ document.addEventListener('keydown', e => {
     if (target >= 0 && target < ids.length) { [ids[i], ids[target]] = [ids[target], ids[i]]; changeMediaOrder(ids, 'Image order updated.'); document.querySelector(`[data-drag-media="${id}"]`)?.focus(); } return;
   }
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && view === 'compose' && !modal.open) { e.preventDefault(); preview(); }
-  if (e.target.matches('[role="tab"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+  if (e.target.matches('[data-caption-tab]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
     e.preventDefault(); const index = PLATFORMS.findIndex(p => p.id === captionTab);
     captionTab = PLATFORMS[e.key === 'Home' ? 0 : e.key === 'End' ? PLATFORMS.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + PLATFORMS.length) % PLATFORMS.length].id;
     shell(); document.querySelector(`#tab-${captionTab}`).focus();
@@ -705,4 +722,68 @@ try {
 } catch (error) {
   app.innerHTML = `<div class="signin"><div class="panel signin-card"><h1>The worker is unavailable.</h1><p>${escape(error.message)}<br>Start the server with npm start, then reload this page.</p><button class="button primary" id="reload-app">Try again</button><div class="signin-credit">Created by Mrinal</div></div></div>`;
   document.querySelector('#reload-app').onclick = () => location.reload();
+}
+
+let musicPickerOpen=false;
+async function musicDialog(){
+  if(workerBusy())return toast('Finish the current operation first.',true);
+  musicPickerOpen=true;let pickerOwned=false,pickerOpening=true;
+  showDialog('Instagram music','<p id="music-state" role="status">Opening your Instagram library...</p><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results"></div>','<button class="button" data-music-close>Cancel</button>');
+  const close=async()=>{if(pickerOpening){document.querySelector('#music-state').textContent='Wait for the Instagram library to open.';return;}if(!pickerOwned){musicPickerOpen=false;modal.close();await refresh();shell();return;}try{await api('/api/instagram/music/close',{method:'POST',body:{}});musicPickerOpen=false;modal.close();await refresh();shell();}catch(e){document.querySelector('#music-state').textContent=e.message;}};
+  modal.querySelector('[data-music-close]').onclick=close;
+  modal.oncancel=e=>{if(musicPickerOpen){e.preventDefault();close();}};
+  const results=data=>{
+    document.querySelector('#music-state').textContent=data.results.length?'Select a song':document.querySelector('#music-query').value.trim()?'No songs found':'Search by song or artist';
+    document.querySelector('#music-results').innerHTML=data.results.map(track=>'<div class="ig-song"><button type="button" class="ig-song-listen" data-music-preview="'+escape(track.key)+'" aria-label="Listen to '+escape(track.title)+' on the worker PC" title="Listen on the worker PC">'+icon('play')+'</button><button type="button" class="ig-song-select" data-music-key="'+escape(track.key)+'"><span><strong>'+escape(track.title)+'</strong><small>'+escape(track.artist)+'</small></span><small>'+escape(track.length)+'</small></button></div>').join('');
+    for(const button of modal.querySelectorAll('[data-music-preview]'))button.onclick=async()=>{
+      modal.querySelectorAll('button,input').forEach(el=>el.disabled=true);
+      try{await api('/api/instagram/music/preview',{method:'POST',body:{key:button.dataset.musicPreview}});document.querySelector('#music-state').textContent='Playing on the worker PC';}
+      catch(e){document.querySelector('#music-state').textContent=e.message;}finally{modal.querySelectorAll('button,input').forEach(el=>el.disabled=false);}
+    };
+    for(const button of modal.querySelectorAll('[data-music-key]'))button.onclick=async()=>{
+      modal.querySelectorAll('button,input').forEach(el=>el.disabled=true);
+      try{const chosen=await api('/api/instagram/music/select',{method:'POST',body:{key:button.dataset.musicKey}});draft.instagram.music={enabled:true,selection:chosen.selection};saveDraft();musicPickerOpen=false;modal.close();await refresh();shell();}
+      catch(e){document.querySelector('#music-state').textContent=e.message;modal.querySelectorAll('button,input').forEach(el=>el.disabled=false);}
+    };
+  };
+  try{
+    const opened=await api('/api/instagram/music/open',{method:'POST',body:{postUrl:draft.instagram.story.sourcePostUrl||undefined}});pickerOwned=true;pickerOpening=false;results(opened);
+    modal.querySelector('#music-search-form button').disabled=false;
+    modal.querySelector('#music-search-form').onsubmit=async e=>{
+      e.preventDefault();const form=e.target,button=form.querySelector('button');button.disabled=true;document.querySelector('#music-state').textContent='Searching Instagram...';
+      try{results(await api('/api/instagram/music/search',{method:'POST',body:{query:document.querySelector('#music-query').value}}));}catch(e){document.querySelector('#music-state').textContent=e.message;}finally{button.disabled=false;}
+    };
+  }catch(e){document.querySelector('#music-state').textContent=e.message;}finally{pickerOpening=false;}
+}
+function updateStoryItem(key){
+  const item=draft.instagram.story.layout[key],el=document.querySelector('[data-story-item="'+key+'"]');
+  if(el){el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
+}
+function moveStoryItem(key,x,y){
+  const item=draft.instagram.story.layout[key];item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,x));item.y=Math.max(key==='card'?.26:.69,Math.min(key==='card'?.62:.88,y));updateStoryItem(key);
+}
+function bindStoryGestures(){
+  for(const canvas of document.querySelectorAll('[data-ig-canvas]')){
+    const layout=JSON.parse(canvas.dataset.igLayout);if(canvas.dataset.igPhoto)canvas.style.setProperty('--story-image','url("'+canvas.dataset.igPhoto+'")');
+    for(const key of ['card','link']){const el=canvas.querySelector('[data-ig-item="'+key+'"]'),item=layout[key];el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
+  }
+
+  for(const el of document.querySelectorAll('[data-story-item]')){
+    el.onpointerdown=e=>{
+      if(e.button!==0)return;e.preventDefault();el.setPointerCapture(e.pointerId);
+      const key=el.dataset.storyItem,rect=el.closest('[data-story-canvas]').getBoundingClientRect(),start={...draft.instagram.story.layout[key]},origin={x:e.clientX,y:e.clientY};
+      el.onpointermove=move=>moveStoryItem(key,start.x+(move.clientX-origin.x)/rect.width,start.y+(move.clientY-origin.y)/rect.height);
+      el.onpointerup=el.onpointercancel=up=>{el.releasePointerCapture(up.pointerId);el.onpointermove=el.onpointerup=el.onpointercancel=null;saveDraft();};
+    };
+    el.onkeydown=e=>{
+      if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();
+      const key=el.dataset.storyItem,item=draft.instagram.story.layout[key],step=e.shiftKey?.04:.01;
+      moveStoryItem(key,item.x+(e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0),item.y+(e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0));saveDraft();
+    };
+  }
+}
+
+function latestStoryPreview(){
+  const run=state.runs.find(run=>JSON.stringify(run.instagram?.story)===JSON.stringify(draft.instagram.story)&&run.instagram?.music?.selection?.id===draft.instagram.music.selection?.id&&run.items.some(item=>item.id==='instagramStory'&&item.screenshots?.length));
+  const item=run?.items.find(item=>item.id==='instagramStory');return item?.screenshots.find(s=>s.label==='story-preview')?.url||item?.screenshots.at(-1)?.url;
 }

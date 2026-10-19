@@ -17,6 +17,9 @@ import { destinationUrl } from './automation/platforms.js';
 import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor, selectionErrors } from '../shared/media.js';
+import { InstagramAndroidWorker } from './automation/instagram-android.js';
+import { instagramOptions } from '../shared/instagram.js';
+import { instagramBaseline } from './automation/instagram-reference.js';
 import { destinationReadiness } from '../shared/readiness.js';
 
 export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {} } = {}) {
@@ -46,7 +49,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   let config = validateConfig(await readJson(path.join(dataDir, 'config.json'), defaults));
   let media = await readJson(path.join(dataDir, 'media.json'), []);
   let mediaWrite = Promise.resolve();
-  const queue = new Queue(browser, { dataDir, ...queueOptions });
+  const instagramWorker=new InstagramAndroidWorker({dataDir});await instagramWorker.init();
+  const queue = new Queue(browser, { dataDir, instagramWorker, ...queueOptions });
   queue.settings = config;
   await queue.init();
   queue.on('workerError', error => console.error('Worker error:', error));
@@ -65,7 +69,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     req.on('close', () => { clearInterval(heartbeat); queue.off('change', send); });
   });
   app.put('/api/config', async (req, res) => {
-    if (queue.active || queue.login.running || queue.processing || browser.manualProcess) return res.status(409).json({ error: 'Finish the current run or login check before changing account settings.' });
+    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check before changing account settings.' });
     const updated = validateConfig(req.body);
     await atomicWrite(path.join(dataDir, 'config.json'), updated);
     for (const id of Object.keys(updated.platforms)) {
@@ -125,6 +129,11 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const checkDraft = async draft => {
     const selectedMedia = libraryFor(draft);
     const errors = validateDraft(draft, selectedMedia, xLength);
+    if(draft.selected.some(id=>['instagram','instagramStory'].includes(id))){
+      const options=instagramOptions({...draft.instagram,story:{...draft.instagram?.story,enabled:draft.selected.includes('instagramStory')}});
+      if(options.music.enabled||draft.selected.includes('instagramStory'))options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
+      draft.instagram=options;
+    }
     if (draft.selected?.includes('manychat')) validateManychatDraft(draft.manychat, draft.captions?.manychat);
     if (errors.length) throw new Error(errors.join('\n'));
     const usedIds = new Set(draft.selected.flatMap(id => mediaFor(draft, selectedMedia, id).map(m => m.id)));
@@ -134,7 +143,13 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   };
   app.post('/api/readiness', (req, res) => {
     const selectedMedia = libraryFor(req.body);
-    res.json({ destinations: destinationReadiness(req.body, selectedMedia, config, queue.login.items, xLength, queue.runs) });
+    const destinations=destinationReadiness(req.body,selectedMedia,config,queue.login.items,xLength,queue.runs);
+    for(const id of ['instagram','instagramStory']){
+      if(id==='instagram'?!req.body.instagram?.music?.enabled:!req.body.selected?.includes(id))continue;
+      try{instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
+      catch(error){destinations[id].ready=false;destinations[id].errors.push(error.message);}
+    }
+    res.json({destinations});
   });
   app.post('/api/validate', async (req, res) => {
     await checkDraft(req.body);
@@ -161,18 +176,30 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if (errors.length) return res.status(400).json({ error: errors.join('\n') });
     const instagramItem = original.items.find(item => item.id === 'instagram' && item.status === 'posted');
     const sourceInstagramPublication = instagramItem?.publication || original.sourceInstagramPublication;
-    const retryDraft = { selected, captions: original.captions, manychat: original.manychat, mediaIds: original.media.map(m => m.id), mediaByPlatform: original.mediaByPlatform };
+    const retryDraft = { selected, captions: original.captions, manychat: original.manychat, mediaIds: original.media.map(m => m.id), mediaByPlatform: original.mediaByPlatform, instagram:structuredClone(original.instagram||{}) };
+    if(selected.includes('instagramStory')&&!selected.includes('instagram')&&sourceInstagramPublication?.postUrl)retryDraft.instagram.story.sourcePostUrl=sourceInstagramPublication.postUrl;
     const draftErrors = validateDraft(retryDraft, original.media, xLength);
     if (draftErrors.length) return res.status(400).json({ error: draftErrors.join('\n') });
     const run = await queue.start({ draft: retryDraft, config, mode: req.body.mode || 'TEST', confirmation: req.body.confirmation, media: original.media, retryOf: original.id, sourceInstagramPublication });
     res.status(201).json({ id: run.id });
   });
+  const requireIdle=()=>{if(queue.active||queue.processing||queue.login.running||browser.manualProcess)throw new Error('Finish the current run or login check first.');};
+  app.post('/api/instagram/music/open',async(req,res)=>{
+    requireIdle();if(instagramWorker.busy)throw new Error('Close the existing music picker first.');
+    const page=await browser.page('instagram');
+    const url=req.body.postUrl||(await instagramBaseline(page.context(),config.platforms.instagram.handle))[0];
+    const result=await instagramWorker.startPicker(config,url);queue.emit('change',queue.state());res.json(result);
+  });
+  app.post('/api/instagram/music/search',async(req,res)=>{requireIdle();res.json(await instagramWorker.query(req.body.query));});
+  app.post('/api/instagram/music/preview',async(req,res)=>{requireIdle();res.json(await instagramWorker.preview(req.body.key));});
+  app.post('/api/instagram/music/select',async(req,res)=>{requireIdle();try{res.json(await instagramWorker.choose(req.body.key));}finally{queue.emit('change',queue.state());}});
+  app.post('/api/instagram/music/close',async(req,res)=>{requireIdle();try{await instagramWorker.cancelPicker();res.json({ok:true});}finally{queue.emit('change',queue.state());}});
   app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });
   app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
   app.post('/api/logins', (req, res) => {
     const selected = req.body.selected;
     if (!Array.isArray(selected) || !selected.length || selected.length > PLATFORMS.length || new Set(selected).size !== selected.length || selected.some(id => !PLATFORMS.some(p => p.id === id))) return res.status(400).json({ error: 'Select valid destinations to check.' });
-    if (queue.active || queue.login.running || queue.processing || browser.manualProcess) return res.status(409).json({ error: 'Finish the current run or login check first.' });
+    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });
     queue.checkLogins(config, selected, async (id, detected) => {
       const updated = structuredClone(config);
       const field = id.startsWith('youtube') ? 'channelId' : id === 'x' ? 'handle' : null;
@@ -184,7 +211,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     }).catch(error => console.error(error)); res.status(202).json({ ok: true });
   });
   app.post('/api/manual-login', async (req, res) => {
-    if (queue.active || queue.login.running || queue.processing || browser.manualProcess) return res.status(409).json({ error: 'Finish the current run or login check first.' });
+    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });
     const id = req.body.platform;
     if (!PLATFORMS.some(p => p.id === id)) return res.status(400).json({ error: 'Choose a valid destination.' });
     queue.login.running = true; queue.emit('change', queue.state());

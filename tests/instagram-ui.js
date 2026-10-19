@@ -1,0 +1,54 @@
+// Copyright (c) 2026 Mrinal. Isolated UI fixtures; never opens a social site.
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {once} from 'node:events';
+import {chromium} from 'playwright';
+import sharp from 'sharp';
+import {createApp} from '../server/index.js';
+import {defaults} from '../server/config.js';
+import {PLATFORMS} from '../shared/platforms.js';
+const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'mrinal-instagram-ui-'));
+const selection={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',key:'123',title:'Fixture song',artist:'Fixture artist',length:'3:44',query:'Fixture song',durationSeconds:30,account:'goclasses_cse'};
+const config=structuredClone(defaults);config.platforms.instagram.handle=selection.account;
+await fs.writeFile(path.join(dataDir,'config.json'),JSON.stringify(config));await fs.writeFile(path.join(dataDir,'instagram-music.json'),JSON.stringify([selection]));
+const {app,queue}=await createApp({dataDir,browser:{page:async()=>{throw Error('No live browser permitted in this test');}},queueOptions:{runner:async()=>{throw Error('No publication permitted in UI fixture');}}});
+const server=app.listen(0,'127.0.0.1');await once(server,'listening');const origin='http://127.0.0.1:'+server.address().port;
+const browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[];
+page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+await page.route('**/api/instagram/music/**',route=>{
+  const endpoint=route.request().url().split('/').at(-1);
+  return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(endpoint==='select'?{selection}:endpoint==='close'?{ok:true}:{results:[selection]})});
+});
+try{
+  await page.goto(origin);await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await page.locator('[data-action="import"]').click();
+  await page.locator('#import-captions').fill(PLATFORMS.map(p=>'====='+p.delimiter+'=====\nAn admission update\nhttps://www.goclasses.in/apply').join('\n\n')+'\n\n=====INSTAGRAM_STORY=====\nApplication Form\nhttps://www.goclasses.in/apply');
+  await page.locator('#parse-captions').click();
+  for(const p of PLATFORMS.filter(p=>p.id!=='instagram'))await page.locator('[data-destination="'+p.id+'"]').click();
+  const buffer=await sharp({create:{width:800,height:800,channels:3,background:'#e5b37c'}}).png().toBuffer();
+  await page.locator('#file-input').setInputFiles({name:'Admission artwork.png',mimeType:'image/png',buffer});await page.getByText('Image ready.',{exact:true}).waitFor();
+  await page.locator('[data-ig-tab="story"]').click();assert.equal(await page.locator('[data-ig-field="story.enabled"]').isChecked(),true);
+  assert.equal(await page.locator('[data-ig-field="story.label"]').inputValue(),'Application Form');
+  assert.equal(await page.locator('[data-ig-field="story.url"]').inputValue(),'https://www.goclasses.in/apply');
+  assert.equal(await page.locator('[data-ig-panel="feed"]').isVisible(),false);
+  await page.locator('[data-ig-panel="story"] [data-ig-music]').click();
+  await page.locator('[data-music-preview]').click();await page.getByText('Playing on the worker PC',{exact:true}).waitFor();await page.locator('[data-music-key]').click();await page.locator('#modal').waitFor({state:'hidden'});
+  assert.match(await page.locator('[data-ig-panel="story"] .ig-music').innerText(),/Fixture song/);
+  const card=page.locator('[data-story-item="card"]'),link=page.locator('[data-story-item="link"]');
+  const start=await card.evaluate(e=>parseFloat(e.style.top));await card.focus();await card.press('ArrowUp');assert.equal(await card.evaluate(e=>parseFloat(e.style.top)),start-1);
+  const b=await link.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2,b.y+b.height/2-20);await page.mouse.up();
+  await page.locator('[data-ig-field="story.label"]').fill('Apply now');assert.equal(await link.locator('b').innerText(),'APPLY NOW');
+  await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/instagram-story-light-desktop.png',fullPage:true});
+  await page.locator('[data-action="theme"]').click();await page.setViewportSize({width:390,height:844});await page.locator('[data-ig-panel="story"]').scrollIntoViewIfNeeded();
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'test-results/instagram-story-dark-mobile.png',fullPage:true});
+  await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();
+  assert.equal(await page.locator('[data-preview-destination="instagramStory"]').count(),1);
+  assert.match(await page.locator('[data-preview-destination="instagramStory"] .preview-meta').innerText(),/Included/);
+  await page.getByRole('button',{name:'Keep editing'}).click();await page.locator('[data-ig-tab="story"]').click();
+  await page.locator('[data-ig-field="story.enabled"]').uncheck();await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();
+  assert.equal(await page.locator('[data-preview-destination="instagramStory"]').count(),0);
+  assert.deepEqual(errors,[]);assert.equal(queue.runs.length,0);
+  console.log('Instagram UI passed: native-song dialog, optional repost, editable link, touch/keyboard placement, separate preview, dark/mobile layout. No social site or publishing API was used.');
+}finally{await browser.close();await new Promise(r=>server.close(r));await fs.rm(dataDir,{recursive:true,force:true});}

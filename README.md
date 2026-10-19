@@ -66,7 +66,7 @@ The interface uses locally served [Web Awesome](https://webawesome.com/docs/) co
 
 ## Experimental Instagram music test (Windows)
 
-The dedicated Android worker has passed a non-publishing rehearsal with Instagram's native music library and a two-photo carousel. Android publishing and the Compose music picker are still experimental and are **not connected to the posting queue**. The existing web publishing flow is unchanged.
+Instagram now has **Feed / Story** sub-tabs in Compose. Choose a song from the signed-in Android account's actual music library. Feed music uses the dedicated Windows Android worker; feed posts without music retain the web flow. This native integration remains experimental: run TEST and inspect the native preview before authorizing LIVE with POST.
 
 On the configured test computer, double-click **start-android-test.cmd** or run `npm run android:start`. The emulator, SDK and Appium tools live under `%LOCALAPPDATA%\GoClassesSocialStudio\android-worker`, separately from the app's browser profiles. Google Play and Instagram sign-in happen inside that emulator; keep passwords and login codes there. Install Instagram from [its official Play Store listing](https://play.google.com/store/apps/details?id=com.instagram.android).
 
@@ -88,7 +88,7 @@ Authenticated rehearsal on **19 October 2026**, Instagram **451.0.0.53.80**, And
 - Chose **altitude (higher purpose)** by **Uppermost** for the rehearsal. Reopened the music editor and confirmed the exact title and artist. Changing the native duration picker from 30 to **29 seconds** persisted after reopening. Directly setting the number-picker text did not persist, so it must not be treated as a successful duration change.
 - Reached **New post** review with both photos, the exact multiline test caption, song title and artist present together. The rehearsal helper refused final **Share/Post** controls; **Share** was never clicked. Backed out, used **Start over** to discard only this rehearsal draft, and returned to the same account with its post count unchanged at **1,998**.
 
-Native text entry and Android's hardware keyboard device were verified. Mrinal confirmed physical PC keyboard typing in Instagram Search after the final emulator restart. Exact clip-start positioning, repeatable media-identity verification, queue integration, native publication confirmation and recovery remain required before enabling Android LIVE posting. The rehearsal demonstrates native music selection; it does not yet add a music control to Compose.
+Native text entry and Android's hardware keyboard device were verified. Mrinal confirmed physical PC keyboard typing in Instagram Search after the final emulator restart. The Compose picker is now connected to the run queue. Song IDs are issued by this worker and tied to the configured Instagram account. The worker reopens the same native search result, checks title and artist, selects a 30-second feed clip, reads its native suggested segment, and verifies caption and image previews again before the single publication boundary. Custom clip-start editing is not exposed in this version. Real public feed/Story submission and its acknowledgement have not been exercised during development; missing confirmation is uncertain and never automatically retried.
 
 ## ManyChat
 
@@ -216,6 +216,7 @@ data/
   media.json        Uploaded image manifest
   runs.json         Persisted run snapshots and recovery state
   manychat-rotation.json  Next comment-reply rotation position
+  instagram-music.json  Account-scoped native song selections
   uploads/          Normalized images
   logs/<run-id>/    Step screenshots, JSONL actions, and error HTML
   browser-profiles/ Separate persistent Chrome/Edge/Chromium profiles
@@ -238,6 +239,9 @@ npm run test:telegram
 npm run test:connections
 npm run test:destinations
 npm run test:publications
+npm run test:x-submit
+npm run test:instagram-ui
+npm run test:instagram-publications
 npm run dev
 ```
 
@@ -252,6 +256,28 @@ WhatsApp authenticated TEST verification on the same date, after a worker restar
 Read-only verification of user LIVE run `99b484e9-6a54-437f-90d7-1b8c4aedd435` on 17 October 2026 confirmed its LinkedIn receipt, both YouTube post permalinks with matching captions, and the matching WhatsApp channel update with native Sent acknowledgement. No new post, Send or Go live action was invoked during this repair. The confirmation regression suite reproduces hidden LinkedIn success headings, shortened links, native delivery markers, optimistic draft IDs, delayed view counts, wrong authors, old IDs, ambiguous posts and unavailable diagnostic screenshots.
 
 Authenticated Telegram verification on 18 October 2026: all eight services, including WhatsApp and Telegram, passed a single all-service login check. Telegram-only app run **53dfb095-a502-4bb5-b5b9-e1a085a79a9d** completed TEST with two existing preserved images in a deliberately reversed destination order, a multiline Unicode caption and a URL. Its status is **dry_run**, **submitting: false**, with channel-header, album and ready checkpoints in Activity. Separate authenticated adapter rehearsals verified text-only and two-photo cleanup. Existing public message 5017 confirmed the native **Copy Message Link** format through a read-only action. No Telegram Send, public post or ManyChat Go live was invoked against a real service. Public Telegram send acknowledgement remains covered by intercepted local fixtures.
+
+Authenticated integration verification on **19 October 2026**: the actual Android music picker searched the signed-in account library and issued the selected track. A complete native feed TEST transferred and hash-verified two owned DO NOT PUBLISH images, granted limited access through Android's picker, preserved carousel order, set the exact song/caption, verified final previews, and discarded the rehearsal. A separate complete shared-post Story TEST verified the exact owned-profile post URL, applied the framed repost layout and selected song, placed the Application Form sticker below it, verified Instagram-only audience and unchanged native preview, and discarded the Story. Both returned **dry_run** with a test guard that rejects any submission intent. No feed Share, Story Share, public post or DM Send was executed. Instagram places newly added link stickers behind a repost card on this build; the worker temporarily parks the card, moves the link into free space, restores the reviewed card position, then verifies spacing. Actual LIVE receipts remain untested against Instagram.
+
+## Instagram shared-post Stories
+
+Enable **Share feed post to Story** inside Instagram's Story tab. The Story shares the actual feed post through Instagram's Share > Add to story flow. It does not render and upload a standalone replacement image. Feed and Story have separate Activity outcomes; retrying a failed Story does not repost a successful feed upload.
+
+Choose or enter the link URL and its button text (1-20 characters). Imported captions suggest application links. An optional section is supported:
+
+```text
+=====INSTAGRAM_STORY=====
+Application Form
+https://example.com/apply
+```
+
+Importing a file without that section disables the optional Story and clears its previous URL. To share an already-published post, deselect the feed destination and enter its exact Instagram post URL under Placement & existing post. New-feed runs wait for a confirmed new permalink; they never guess the latest post in LIVE. TEST can rehearse on an existing owned post because it never creates a public feed post.
+
+Drag the framed card and link in the mobile mockup, use arrow keys (Shift for larger steps), then reset placement if needed. These are layout instructions, not an exact rendering of Instagram's editor. Native GPU gestures and layouts vary: the worker measures the result and stops before sharing if it cannot reproduce the reviewed bounds, size, or spacing. Native pinch resizing remains unreliable on this emulator, so Compose preserves native card/sticker sizes. The default card size and continuous-touch movement were observed. Inspect the actual native TEST screenshots, available in Activity and linked from matching Story drafts. The Story applies the chosen song using Music Only, adds the verified link label/URL, and disables Facebook cross-posting for that Story with Turn Off Once. Account-wide Facebook sharing settings are not changed.
+
+The worker uses only its named emulator and checks the account each time. Uploaded copies are hash-verified in isolated albums and use Android's limited photo permission flow. Unknown screens, user drafts, changed previews and cancelled/timed-out work stop before publication. Failed native preparation may leave its unsent draft open for inspection; close it before continuing. Do not edit or navigate the emulator while the worker is preparing a run or choosing music.
+
+`npm run test:instagram-ui` exercises the Story editor, caption link import, touch/keyboard positioning, native-song dialog, separate review, and dark/mobile layouts against local fixtures. Unit/HTTP tests cover exact-post dependencies, account-scoped music, frozen options and Story-only retry. These automated fixtures never open social websites.
 
 ## Attribution
 

@@ -13,8 +13,8 @@ import { publicationUrl } from './automation/publication.js';
 
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'];
 export class Queue extends EventEmitter {
-  constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline } = {}) {
-    super(); this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.channelDeadline = deadline ?? 240000;
+  constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline, instagramWorker } = {}) {
+    super(); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.channelDeadline = deadline ?? 240000;
     this.runs = []; this.login = { running: false, items: {} }; this.persistChain = Promise.resolve(); this.processing = false;
   }
   get active() { return this.runs.find(run => busyStates.includes(run.status)); }
@@ -36,7 +36,7 @@ export class Queue extends EventEmitter {
     await this.persist();
   }
   state() {
-    return { runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
+    return { runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
   }
   persist() {
     const snapshot = structuredClone(this.runs);
@@ -45,14 +45,15 @@ export class Queue extends EventEmitter {
   }
   async change() { await this.persist(); this.emit('change', this.state()); }
   async start({ draft, config, mode = 'TEST', confirmation, media, retryOf = null, sourceInstagramPublication }) {
-    if (this.active || this.login.running || this.processing || this.browser.manualProcess) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
+    if (this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
     if (mode !== 'TEST' && mode !== 'LIVE') throw new Error('Invalid run mode.');
     if (mode === 'LIVE' && confirmation !== 'POST') throw new Error('Type POST to authorize this live run.');
     const run = {
       id: randomUUID(), createdAt: new Date().toISOString(), mode, confirmedLive: mode === 'LIVE' && confirmation === 'POST',
       status: 'running', config: structuredClone(config), captions: structuredClone(draft.captions), media: structuredClone(media), retryOf,
-      mediaByPlatform: Object.fromEntries(draft.selected.map(id => [id, mediaFor(draft, media, id).map(m => m.id)])),
-      items: [...draft.selected.filter(id => id !== 'manychat'), ...draft.selected.filter(id => id === 'manychat')].map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
+      instagram: structuredClone(draft.instagram||{}),
+      mediaByPlatform: Object.fromEntries(draft.selected.map(id => [id, id==='instagramStory'?[]:mediaFor(draft, media, id).map(m => m.id)])),
+      items: [...draft.selected.filter(id => !['instagramStory','manychat'].includes(id)), ...draft.selected.filter(id => id === 'instagramStory'), ...draft.selected.filter(id => id === 'manychat')].map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
     };
     if (draft.selected.includes('manychat')) run.manychat = { ...validateManychatDraft(draft.manychat, draft.captions?.manychat), replies: replyBatch(config.platforms.manychat.replyMessages, this.replyRotation.offset) };
     if (mode === 'LIVE' && run.manychat && !run.manychat.postUrl && !draft.selected.includes('instagram') && !sourceInstagramPublication?.candidates?.length) throw new Error('ManyChat: select Instagram in this run, or paste the exact Instagram post URL in Compose.');
@@ -118,6 +119,11 @@ export class Queue extends EventEmitter {
     await this.change();
   }
   async snapshot(run, item, page, label, errorHtml = false, target = page) {
+    if(target?.nativeImage){
+      const dir=path.join(this.dataDir,'logs',run.id);await fs.mkdir(dir,{recursive:true});
+      const filename=item.id+'-'+Date.now()+'-'+label+'.png';
+      await fs.writeFile(path.join(dir,filename),target.nativeImage,{mode:0o600});item.screenshots.push({label,url:'/artifacts/'+run.id+'/'+filename});await this.change();return;
+    }
     if (item.id === 'whatsapp') {
       // Never persist personal chat lists, full WhatsApp DOM, QR codes, or an
       // unknown recipient. Successful captures are limited to our own composer.
@@ -173,6 +179,11 @@ export class Queue extends EventEmitter {
     if (this.processing) return;
     this.processing = true;
     try {
+      const nativeItem=run.items.find(item=>item.status==='queued'&&(item.id==='instagramStory'||item.id==='instagram'&&run.instagram?.music?.enabled));
+      if(nativeItem&&this.instagramWorker&&run.status!=='stopping'){
+        await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
+        try{await this.instagramWorker.checkAccount(run.config);}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=error.message;run.status='attention';await this.change();return;}}
+      }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
         if (!channelItem || run.status === 'stopping') continue;
@@ -199,23 +210,25 @@ export class Queue extends EventEmitter {
         item.status = 'running'; item.startedAt = new Date().toISOString(); delete item.finishedAt;
         await this.change();
         let page, timer;
+        const controller=new AbortController();
         try {
           const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
-          page = await this.browser.page(item.id);
-          const deadline = ['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
+          page = await this.browser.page(item.id==='instagramStory'?'instagram':item.id);
+          const native=item.id==='instagramStory'||item.id==='instagram'&&run.instagram?.music?.enabled;
+          const deadline = native?Math.max(this.deadline,300000):['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
           const timeout = new Promise((_, reject) => {
-            timer = setTimeout(() => { reject(new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`)); page.close().catch(() => {}); }, deadline);
+            timer = setTimeout(() => { controller.abort(); reject(new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`)); page.close().catch(() => {}); }, deadline);
           });
           const result = await Promise.race([this.runner({
             page, id: item.id, config: run.config, caption: run.captions[item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
-            mode: run.mode, confirmedLive: run.confirmedLive,
+            mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
             manychat: run.manychat, instagramCaption: run.captions.instagram,
-            instagramPublication: run.items.find(i => i.id === 'instagram' && i.status === 'posted')?.publication || run.sourceInstagramPublication,
-            captureInstagramPost: run.items.some(i => i.id === 'manychat') && !run.manychat?.postUrl,
+            instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
+            captureInstagramPost: run.items.some(i=>i.id==='instagramStory') || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
             step: message => this.log(run, item, message), snapshot: (label, target = page) => this.snapshot(run, item, page, label, false, target),
             recordPreparation: async details => { item.preparation = details; await this.change(); },
-            markSubmitting: async () => { item.submitting = true; await this.change(); }
+            markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping')throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
           }), timeout]);
           clearTimeout(timer);
           if (result?.manual) {
@@ -267,7 +280,7 @@ export class Queue extends EventEmitter {
     }
   }
   async checkLogins(config, selected, saveDetected = async () => {}) {
-    if (this.active || this.login.running || this.processing || this.browser.manualProcess) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');
+    if (this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');
     this.login = { running: true, items: { ...this.login.items } }; this.emit('change', this.state());
     try {
       for (const id of selected) {

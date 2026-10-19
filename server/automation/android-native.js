@@ -1,0 +1,128 @@
+// Copyright (c) 2026 Mrinal. All rights reserved.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
+import { InterventionError } from './utils.js';
+const exec = promisify(execFile);
+export const ANDROID_SERIAL = 'emulator-5556';
+export const ANDROID_AVD = 'GOC_Instagram_Music_Test';
+export const ANDROID_URL = 'http://127.0.0.1:4731';
+const decode = value => value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, key) => key[0] === '#' ? String.fromCodePoint(parseInt(key.slice(key[1]?.toLowerCase() === 'x' ? 2 : 1), key[1]?.toLowerCase() === 'x' ? 16 : 10)) : ({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[key]));
+export function nativeNodes(xml) {
+  return [...xml.matchAll(/<([\w.$]+)\s+([^>]*?)(?:\/>|>)/g)].map(match => ({
+    tag: match[1], ...Object.fromEntries([...match[2].matchAll(/([\w-]+)="([^"]*)"/g)].map(a => [a[1], decode(a[2])]))
+  })).filter(n => n['resource-id'] || n.class);
+}
+export const nativeId = name => 'com.instagram.android:id/' + name;
+export function nativeBounds(node) {
+  const m = node?.bounds?.match(/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/);
+  if (!m) throw new Error('Native control bounds were not available.');
+  return { x:+m[1], y:+m[2], width:+m[3]-m[1], height:+m[4]-m[2] };
+}
+export const xpathLiteral = value => !value.includes('"') ? '"' + value + '"' : !value.includes("'") ? "'" + value + "'" : 'concat(' + value.split('"').map(part => '"' + part + '"').join(", '\"', ") + ')';
+export class AndroidSession {
+  constructor({signal}={}) {
+    this.signal=signal;
+    if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) throw new InterventionError('Instagram music and Stories require the configured Windows Android worker.');
+    this.root = path.join(process.env.LOCALAPPDATA, 'GoClassesSocialStudio', 'android-worker');
+    this.adbPath = path.join(this.root, 'sdk', 'platform-tools', 'adb.exe');
+  }
+  async adb(args, timeout=20000) {
+    const result = await exec(this.adbPath, ['-s', ANDROID_SERIAL, ...args], { windowsHide:true, timeout, maxBuffer:4*1024*1024 });
+    return result.stdout.trim();
+  }
+  async open({ start = false } = {}) {
+    if (start) await exec(process.execPath, [path.resolve('scripts/android-worker.mjs'), 'start'], { windowsHide:true, timeout:150000, maxBuffer:1024*1024 });
+    const name = (await this.adb(['emu','avd','name'])).split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&x!=='OK').join('');
+    if (name !== ANDROID_AVD || await this.adb(['shell','getprop','sys.boot_completed']) !== '1') throw new InterventionError('Start the dedicated Instagram Android emulator and finish signing in.');
+    const packages = await this.adb(['shell','pm','list','packages']);
+    const installedServer = packages.split(/\s+/).includes('package:io.appium.uiautomator2.server') && packages.includes('package:io.appium.uiautomator2.server.test');
+    const deviceServer = installedServer ? await this.adb(['shell','dumpsys','package','io.appium.uiautomator2.server']) : '';
+    const serverPackage = JSON.parse(await fs.readFile(path.join(this.root,'automation','node_modules','appium-uiautomator2-driver','node_modules','appium-uiautomator2-server','package.json'),'utf8'));
+    const reusableServer = deviceServer.match(/versionName=([^\s]+)/)?.[1] === serverPackage.version;
+    const response = await fetch(ANDROID_URL+'/session', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({capabilities:{alwaysMatch:{
+      platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':ANDROID_SERIAL,'appium:deviceName':ANDROID_AVD,
+      'appium:appPackage':'com.instagram.android','appium:autoLaunch':false,'appium:noReset':true,'appium:fullReset':false,
+      'appium:skipUnlock':true,'appium:skipDeviceInitialization':packages.includes('package:io.appium.settings'),
+      'appium:skipServerInstallation':reusableServer,'appium:adbExecTimeout':60000,'appium:skipLogcatCapture':true,'appium:printPageSourceOnFindFailure':false,'appium:newCommandTimeout':900
+    }}}), signal:AbortSignal.timeout(90000) });
+    const result=await response.json();
+    if(!response.ok || !result.value?.sessionId) throw new InterventionError('The dedicated Android driver could not connect. Run android:start and try again.');
+    this.id=result.value.sessionId;
+    await this.request('/appium/settings','POST',{settings:{waitForIdleTimeout:500,waitForSelectorTimeout:500,enableMultiWindows:false,enableTopmostWindowFromActivePackage:false}});
+    return this;
+  }
+  async request(endpoint, method='GET', body) {
+    if (!this.id) throw new Error('No Android inspection session.');
+    if(this.signal?.aborted && method!=='DELETE')throw new InterventionError('Android operation stopped. Its unsent draft was preserved.');
+    const response=await fetch(ANDROID_URL+'/session/'+this.id+endpoint,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:this.signal?AbortSignal.any([this.signal,AbortSignal.timeout(45000)]):AbortSignal.timeout(45000)});
+    const out=await response.json();
+    if(!response.ok || out.value?.error) throw new Error('Android: '+(out.value?.message || out.value?.error || response.status));
+    return out.value;
+  }
+  async close() {
+    if (!this.id) return;
+    this.signal=null;
+    try { await this.request('','DELETE'); } finally { this.id=null; }
+  }
+  async screen() {
+    const nodes=nativeNodes(await this.request('/source'));
+    if(nodes.some(n=>n.password==='true' && n.displayed==='true')) throw new InterventionError('Finish Instagram sign-in yourself in the emulator. Passwords and codes are never read or filled.');
+    return nodes;
+  }
+  async until(predicate, message='Instagram is still loading.', timeout=45000) {
+    const end=Date.now()+timeout;
+    while(Date.now()<end) { let nodes;try{nodes=await this.screen();}catch(e){if(!/Unable to find the active topmost window associated with (?:com\.instagram\.android|com\.google\.android\.permissioncontroller|com\.google\.android\.providers\.media\.module) package/.test(e.message))throw e;await delay(300);continue;} const value=await predicate(nodes); if(value)return value; await delay(250); }
+    throw new InterventionError(message);
+  }
+  async find(using,value) {
+    // Appium prefixes unqualified IDs; native Compose widgets also use plain IDs.
+    if(using==='id' && !value.includes(':')) { using='xpath'; value='//*[@resource-id='+xpathLiteral(value)+']'; }
+    let nodes=await this.request('/elements','POST',{using,value});
+    const end=Date.now()+4000;
+    while(!nodes.length&&Date.now()<end){await delay(250);nodes=await this.request('/elements','POST',{using,value});}
+    if(nodes.length!==1)throw new InterventionError('Instagram changed its interface or the requested control is ambiguous. Nothing was shared.');
+    return nodes[0]['element-6066-11e4-a52e-4f735466cecf'];
+  }
+  async click(using,value) {
+    if(/(?:^|[/:_])(?:share|publish|send)(?:[/:_]|$)/i.test(value)) throw new Error('Final Android publication control is blocked during preparation.');
+    const id=await this.find(using,value);
+    const labels=await Promise.all(['text','content-desc'].map(attr=>this.request('/element/'+id+'/attribute/'+attr)));
+    if(labels.some(label=>/^(share|post|send|publish|go live|your story|your stories|close friends)$/i.test(label||'')))throw new Error('Final Android publication control is blocked during preparation.');
+    await this.request('/element/'+id+'/click','POST',{});
+  }
+  async clickId(name) { return this.click('id',nativeId(name)); }
+  async text(using,value,text) {
+    const id=await this.find(using,value);
+    if(await this.request('/element/'+id+'/attribute/password')==='true')throw new Error('Password fields are never filled.');
+    await this.request('/element/'+id+'/clear','POST',{});
+    await this.request('/element/'+id+'/value','POST',{text,value:[...text]});
+  }
+  async screenshot() { return Buffer.from(await this.request('/screenshot'),'base64'); }
+  async activate() { await this.request('/appium/device/activate_app','POST',{appId:'com.instagram.android'}); }
+  async account(expected) {
+    await this.activate();
+    // Public post/share navigation can be dismissed, but never an unsent editor.
+    for(let i=0;i<3;i++){
+      const current=(await this.screen()).filter(n=>n.displayed==='true');
+      if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view'))){
+        if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
+        await this.request('/back','POST',{});await delay(400);continue;
+      }
+      if(current.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|music_browser_container|music_editor_controls_container|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Close the unsent Instagram Android draft before continuing.');
+      if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view')||n['resource-id']===nativeId('row_feed_button_share'))&&!current.some(n=>n['resource-id']===nativeId('profile_header_create_button'))){await this.request('/back','POST',{});await delay(400);continue;}
+      break;
+    }
+    const nodes=await this.until(nodes=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_tab')) && nodes,'Finish Instagram sign-in or close its unsent Android draft before preparing a post.');
+    if(nodes.some(n=>n.displayed==='true'&&/new_post_title|caption_input_text_view|music_editor_controls_container/.test(n['resource-id']||'')))throw new InterventionError('Instagram has an unsent Android draft. Close it yourself before preparing another post.');
+    await this.clickId('profile_tab');
+    await this.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('action_bar_title') && n.text===expected),'The Android Instagram account does not match @'+expected+'.');
+    this.accountHandle=expected;
+  }
+  async gesture(actions) { return this.request('/actions','POST',{actions:[{type:'pointer',id:'studio-finger',parameters:{pointerType:'touch'},actions}]}); }
+  async drag(from,to) {
+    await this.gesture([{type:'pointerMove',duration:0,x:Math.round(from.x),y:Math.round(from.y)},{type:'pointerDown',button:0},{type:'pause',duration:350},{type:'pointerMove',duration:700,x:Math.round(to.x),y:Math.round(to.y)},{type:'pointerUp',button:0}]);
+  }
+}
