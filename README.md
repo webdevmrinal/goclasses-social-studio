@@ -66,20 +66,29 @@ The interface uses locally served [Web Awesome](https://webawesome.com/docs/) co
 
 ## Experimental Instagram music test (Windows)
 
-The dedicated Android worker is a feasibility test for choosing music while keeping Instagram photo and carousel posts. The current web publishing flow is unchanged. Android publishing and a Compose music picker are not enabled; the native music interface must be inspected with the signed-in account first.
+The dedicated Android worker has passed a non-publishing rehearsal with Instagram's native music library and a two-photo carousel. Android publishing and the Compose music picker are still experimental and are **not connected to the posting queue**. The existing web publishing flow is unchanged.
 
 On the configured test computer, double-click **start-android-test.cmd** or run `npm run android:start`. The emulator, SDK and Appium tools live under `%LOCALAPPDATA%\GoClassesSocialStudio\android-worker`, separately from the app's browser profiles. Google Play and Instagram sign-in happen inside that emulator; keep passwords and login codes there. Install Instagram from [its official Play Store listing](https://play.google.com/store/apps/details?id=com.instagram.android).
 
-- `npm run android:status` checks only the configured test device and owned local driver.
+- `npm run android:status` reports the configured device, keyboard, CPU, graphics, Quick Boot and owned local driver.
+- `npm run android:start` reuses the running emulator or starts it with the tuned settings. It enables hardware keyboard input and keeps the on-screen keyboard available. Click the emulator's text field before typing with the PC keyboard.
 - `npm run android:doctor` checks the Android driver prerequisites.
 - `npm run android:play-store` opens Instagram's store page on the verified test emulator.
-- `npm run android:stop` stops only the named emulator and the verified owned Appium process. Android user data is preserved.
+- `npm run android:stop` gracefully stops only the named emulator and the verified owned Appium process. Android user data and logins are preserved.
+- To explicitly start from powered off, close any draft, run `npm run android:stop`, then `npm run android:cold-start`. It preserves Android data and login, and refuses to restart an already-running device.
 
-The test device uses 2 GB RAM, two CPU cores and a 720 × 1560 display. On the configured Windows worker, hardware acceleration, Android 15 boot, a native UiAutomator2 hierarchy/screenshot, reusable startup and owned shutdown were verified without an Instagram action. Driver diagnostics report zero required fixes.
+The test device uses **2 GB RAM, four CPU cores, host GPU rendering and a 720 × 1560 display**. Android animations run at 0.5×. RAM stays at 2 GB because the configured PC has limited free memory; allocating more can increase Windows paging. Hardware keyboard support is enabled in the dedicated AVD configuration, with a backup before the launcher changes it. Snapshot startup stalled on this WHPX worker both with and without Vulkan, so the launcher deliberately uses cold boots with snapshot load/save disabled. Cold boots completed in about **30–31 seconds**; the final launcher and driver were ready in **35.4 seconds**, retaining the account login. Host GPU rendering remains enabled through OpenGL; Vulkan is disabled. [Google documents keyboard settings](https://developer.android.com/studio/run/managing-avds), [snapshot troubleshooting](https://developer.android.com/studio/run/emulator-snapshots), and the [Vulkan workaround](https://developer.android.com/studio/run/emulator-troubleshooting#unable-to-create-a-snapshot). Actual responsiveness depends on available host resources.
 
-The launcher uses the exact AVD name **GOC_Instagram_Music_Test**, serial **emulator-5556**, and loopback-only Appium address **127.0.0.1:4731**. It refuses occupied ports belonging to an unverified service and never selects another connected phone. It does not reset apps or contain Instagram Share/Post actions. Mrinal attribution is retained.
+The launcher uses the exact AVD name **GOC_Instagram_Music_Test**, serial **emulator-5556**, and loopback-only Appium address **127.0.0.1:4731**. It refuses occupied ports belonging to an unverified service and never selects another connected phone. It does not reset apps or contain Instagram Share/Post actions. Mrinal attribution is retained. [Appium's Android driver](https://github.com/appium/appium-uiautomator2-driver#requirements) provides the native inspection tooling.
 
-[Appium's Android driver](https://github.com/appium/appium-uiautomator2-driver#requirements) supports native apps on real devices and emulators. [Google documents Play Store-enabled virtual devices](https://developer.android.com/studio/run/managing-avds). This establishes the tooling path; Instagram login, accessible music results, song/clip verification and safe carousel preparation still require a non-publishing signed-in test.
+Authenticated rehearsal on **19 October 2026**, Instagram **451.0.0.53.80**, Android 15:
+
+- Verified **@goclasses_cse**, then selected two locally generated images marked **MRINAL ANDROID TEST — DO NOT PUBLISH**, with photo access limited to those images.
+- Opened **Create → Post → Select multiple → Next → Audio**, activated Search, and verified typed text and real account-specific library results. Selecting a result first opens its audio preview; its separate **Select track** control applies it.
+- Chose **altitude (higher purpose)** by **Uppermost** for the rehearsal. Reopened the music editor and confirmed the exact title and artist. Changing the native duration picker from 30 to **29 seconds** persisted after reopening. Directly setting the number-picker text did not persist, so it must not be treated as a successful duration change.
+- Reached **New post** review with both photos, the exact multiline test caption, song title and artist present together. The rehearsal helper refused final **Share/Post** controls; **Share** was never clicked. Backed out, used **Start over** to discard only this rehearsal draft, and returned to the same account with its post count unchanged at **1,998**.
+
+Native text entry and Android's hardware keyboard device were verified. Physical Windows keyboard forwarding still needs the operator's check. Exact clip-start positioning, repeatable media-identity verification, queue integration, native publication confirmation and recovery remain required before enabling Android LIVE posting. The rehearsal demonstrates native music selection; it does not yet add a music control to Compose.
 
 ## ManyChat
 
