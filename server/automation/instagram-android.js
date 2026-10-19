@@ -3,8 +3,8 @@ import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
-import {addStoryLink,instagramOnlyStoryAudience,storyAudienceEvidence,discardStory} from './native-story.js';
-import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
+import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,discardStory} from './native-story.js';
+import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {instagramBaseline,instagramPublication,instagramCaptionMatches} from './instagram-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
@@ -30,7 +30,7 @@ export class InstagramAndroidWorker {
   }
   async close(){
     clearTimeout(this.timer);
-    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;this.progressState=null;}
+    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;this.progressState=null;this.handoff=null;}
   }
   async closePicker(){if(!this.picker)return;if(this.picker.album){await discardPost(this.s,'');await removeAlbum(this.s,this.picker.album);}else if(this.picker.owned)await discardPost(this.s,'');}
   expirePicker(){clearTimeout(this.timer);this.timer=setTimeout(()=>{if(this.operation)this.expirePicker();else this.cancelPicker().catch(()=>{});},5*60*1000);this.timer.unref();}
@@ -106,8 +106,7 @@ export class InstagramAndroidWorker {
   }
   async cancelPicker(){if(this.opening)throw new Error('Wait for the Instagram library to open, then close it.');if(this.operation)throw new Error('Wait for the current music search to finish.');this.progress('Closing the music picker...','closing');try{await this.closePicker();}finally{await this.close();}}
   async applyStoryMusic(s,music){
-    await s.click('id','music_button');
-    await s.until(n=>n.some(x=>x['resource-id']===nativeId('row_search_edit_text')),'Story music did not open.');
+    await openStoryMusicLibrary(s);
     await searchMusic(s,music.query);
     const match=await revealMusicResult(s,music);
     if(!match)throw new InterventionError('The reviewed song is not available for this Story. Nothing was shared.');
@@ -122,12 +121,36 @@ export class InstagramAndroidWorker {
     await s.until(n=>n.some(x=>x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x['resource-id']===nativeId('music_editor_done_button')&&x.displayed==='true'),'Story music did not return to the editor.');
     return {key:music.key,title:music.title,artist:music.artist,segmentStart:segment,style:'Music Only'};
   }
+  async openStory(ctx,url){
+    if(!this.handoff)return this.open(ctx.config,ctx.signal);
+    const held=this.handoff;
+    if(!this.s||held.runId!==ctx.runId||held.postUrl!==url||held.account!==ctx.config.platforms.instagram.handle){
+      await this.close();throw new InterventionError('The confirmed Instagram feed handoff changed. Retry only the Story from its exact post URL.');
+    }
+    this.handoff=null;this.s.signal=ctx.signal;
+    return this.s;
+  }
+  retainForStory(ctx,status,publication){
+    const postUrl=instagramPostUrl(publication?.postUrl);
+    if(status!=='posted'||!ctx.continueInstagramStory||!ctx.runId||!postUrl||ctx.signal?.aborted)return false;
+    this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle};return true;
+  }
   async checkAccount(config){try{await this.open(config);}finally{await this.close();}}
   async run(ctx){
     const options=instagramOptions(ctx.instagram),music=options.music.enabled?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
-    await ctx.step('Checking the dedicated Android Instagram account...');
-    const s=await this.open(ctx.config,ctx.signal);
-    let submitted=false,album,owned=false;
+    let url;
+    if(ctx.id==='instagramStory'){
+      let source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl;
+      if(!source&&ctx.mode==='TEST')source=(await instagramBaseline(ctx.page.context(),ctx.config.platforms.instagram.handle))[0];
+      url=instagramPostUrl(source);
+      if(!url)throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
+      // The retained session comes only from this run's confirmed native feed.
+      // Standalone Story retries still verify ownership through the exact permalink.
+      if(!this.handoff){await ctx.step('Verifying the exact feed post for the Android Story...');await this.verifyPost(ctx.page,url,ctx.config.platforms.instagram.handle);}
+    }
+    await ctx.step(this.handoff?'Continuing from the confirmed Android feed post...':'Checking the dedicated Android Instagram account...');
+    const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.open(ctx.config,ctx.signal);
+    let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
       const nodes=await s.screen();
       if(nodes.some(n=>/direct_external_share_container_view|direct_share_sheet_grid_view_pog|thread_list_recycler_view/.test(n['resource-id']||'')))return;
@@ -138,11 +161,6 @@ export class InstagramAndroidWorker {
     };
     try{
       if(ctx.id==='instagramStory'){
-        let source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl;
-        if(!source&&ctx.mode==='TEST')source=(await instagramBaseline(ctx.page.context(),ctx.config.platforms.instagram.handle))[0];
-        const url=instagramPostUrl(source);
-        if(!url)throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
-        await this.verifyPost(ctx.page,url,ctx.config.platforms.instagram.handle);
         await ctx.step('Opening the exact feed post as a Story...');
         await openRepost(s,url);owned=true;
         await ctx.step('Applying the reviewed shared-post card layout...');
@@ -153,8 +171,8 @@ export class InstagramAndroidWorker {
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
         }
-        const evidence=await instagramOnlyStoryAudience(s);
-        await ctx.recordPreparation({kind:'instagramStory',testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story});
+        const evidence=await prepareStoryAudience(s);
+        await ctx.recordPreparation({kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story});
         await snapshot('story-preview');
         const status=await finishPost({...ctx,snapshot,
           preflight:async()=>{ctx.signal?.throwIfAborted();if(JSON.stringify(await storyAudienceEvidence(s))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');},
@@ -189,6 +207,7 @@ export class InstagramAndroidWorker {
       });
       if(status==='dry_run')await discardPost(s,ctx.caption);
       if(status==='posted'||status==='dry_run'){await removeAlbum(s,album);album=null;}
+      retained=this.retainForStory(ctx,status,publication);
       return {status,...(publication?{publication}:{})};
     }catch(e){
       if(!submitted&&owned&&!ctx.signal?.aborted){
@@ -196,7 +215,7 @@ export class InstagramAndroidWorker {
         await snapshot('android-needs-review').catch(()=>{});
       }
       throw e;
-    }finally{await this.close();}
+    }finally{if(!retained)await this.close();}
   }
   async verifyPost(page,url,handle,caption){
     const owned=await instagramBaseline(page.context(),handle);

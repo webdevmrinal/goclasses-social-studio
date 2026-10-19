@@ -49,9 +49,14 @@ try{
   await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/music-expanded-desktop.png'});await page.setViewportSize({width:390,height:844});await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.equal(await page.locator('.ig-player-art i').first().evaluate(e=>getComputedStyle(e).animationName),'none');await page.screenshot({path:'test-results/music-expanded-dark-mobile.png'});await page.setViewportSize({width:1440,height:1000});await page.emulateMedia({colorScheme:'light',reducedMotion:'reduce'});
   await page.locator('[data-music-key]').first().click();await page.locator('#modal').waitFor({state:'hidden'});
   assert.match(await page.locator('[data-ig-panel="story"] .ig-music').innerText(),/Fixture song/);
-  await page.locator('[data-ig-field="story.linkEnabled"]').uncheck();assert.equal(await page.locator('[data-story-item="link"]').count(),0);assert.equal(await page.locator('[data-ig-field="story.url"]').count(),0);
+  await page.locator('[data-ig-field="story.linkEnabled"]').uncheck();assert.equal(await page.locator('[data-story-item="link"]').count(),0);assert.equal(await page.locator('[data-ig-field="story.url"]').count(),0);await page.locator('[data-story-align]').click();assert.equal(await page.locator('[data-story-item="card"]').evaluate(e=>parseFloat(e.style.top)),50);
   await page.locator('[data-ig-field="story.linkEnabled"]').check();
   const card=page.locator('[data-story-item="card"]'),link=page.locator('[data-story-item="link"]');
+  const canvas=await page.locator('[data-story-canvas]').boundingBox(),cb=await card.boundingBox();
+  await page.mouse.move(cb.x+cb.width/2,cb.y+cb.height/2);await page.mouse.down();await page.mouse.move(canvas.x+canvas.width*.513,cb.y+cb.height/2);
+  assert.equal(await card.evaluate(e=>parseFloat(e.style.left)),50);assert(await page.locator('[data-story-guide="x"]').isVisible());await page.mouse.up();
+  await page.locator('[data-story-align]').click();assert.equal(await card.evaluate(e=>parseFloat(e.style.left)),50);assert.equal(await link.evaluate(e=>parseFloat(e.style.left)),50);
+  const cardBox=await card.boundingBox(),linkBox=await link.boundingBox();assert(cardBox.y+cardBox.height<linkBox.y);
   const start=await card.evaluate(e=>parseFloat(e.style.top));await card.focus();await card.press('ArrowUp');assert.equal(await card.evaluate(e=>parseFloat(e.style.top)),start-1);
   const b=await link.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2,b.y+b.height/2-20);await page.mouse.up();
   await page.locator('[data-ig-field="story.label"]').fill('Apply now');assert.equal(await link.locator('b').innerText(),'APPLY NOW');
@@ -60,6 +65,7 @@ try{
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'test-results/instagram-story-dark-mobile.png',fullPage:true});
   await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();
   assert.equal(await page.locator('[data-preview-destination="instagramStory"]').count(),1);
+  assert.match(await page.locator('[data-preview-destination="instagramStory"] .preview-caption').innerText(),/Instagram \+ Facebook/);
   assert.match(await page.locator('[data-preview-destination="instagramStory"] .preview-meta').innerText(),/Included/);
   await page.getByRole('button',{name:'Keep editing'}).click();await page.locator('[data-ig-tab="story"]').click();
   await page.locator('[data-ig-field="story.enabled"]').uncheck();await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();

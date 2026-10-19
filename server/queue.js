@@ -30,6 +30,8 @@ export class Queue extends EventEmitter {
         if (item.status === 'running' || item.status === 'awaiting_manual') {
           item.status = item.submitting ? 'uncertain' : 'failed';
           item.message = item.submitting ? 'Worker restarted after publication may have begun. Verify on the platform before resolving this result.' : 'Worker restarted. Safe to retry this failed preparation.';
+        } else if(item.status==='attention'&&item.startedAt&&!item.submitting){
+          item.status='failed';item.message+=' Worker restarted after this preparation stopped. Retry only this failed destination.';
         } else if (item.status === 'queued' || item.status === 'attention') { item.status = 'skipped'; item.message = 'Worker restarted. Start a new reviewed run for this destination.'; }
       }
     }
@@ -48,12 +50,15 @@ export class Queue extends EventEmitter {
     if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
     if (mode !== 'TEST' && mode !== 'LIVE') throw new Error('Invalid run mode.');
     if (mode === 'LIVE' && confirmation !== 'POST') throw new Error('Type POST to authorize this live run.');
+    const ordered=draft.selected.filter(id=>!['instagramStory','manychat'].includes(id)).flatMap(id=>id==='instagram'&&draft.selected.includes('instagramStory')?[id,'instagramStory']:[id]);
+    if(draft.selected.includes('instagramStory')&&!draft.selected.includes('instagram'))ordered.push('instagramStory');
+    if(draft.selected.includes('manychat'))ordered.push('manychat');
     const run = {
       id: randomUUID(), createdAt: new Date().toISOString(), mode, confirmedLive: mode === 'LIVE' && confirmation === 'POST',
       status: 'running', config: structuredClone(config), captions: structuredClone(draft.captions), media: structuredClone(media), retryOf,
       instagram: structuredClone(draft.instagram||{}),
       mediaByPlatform: Object.fromEntries(draft.selected.map(id => [id, id==='instagramStory'?[]:mediaFor(draft, media, id).map(m => m.id)])),
-      items: [...draft.selected.filter(id => !['instagramStory','manychat'].includes(id)), ...draft.selected.filter(id => id === 'instagramStory'), ...draft.selected.filter(id => id === 'manychat')].map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
+      items: ordered.map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
     };
     if (draft.selected.includes('manychat')) run.manychat = { ...validateManychatDraft(draft.manychat, draft.captions?.manychat), replies: replyBatch(config.platforms.manychat.replyMessages, this.replyRotation.offset) };
     if (mode === 'LIVE' && run.manychat && !run.manychat.postUrl && !draft.selected.includes('instagram') && !sourceInstagramPublication?.candidates?.length) throw new Error('ManyChat: select Instagram in this run, or paste the exact Instagram post URL in Compose.');
@@ -221,7 +226,7 @@ export class Queue extends EventEmitter {
             timer = setTimeout(() => { controller.abort(); reject(new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`)); page.close().catch(() => {}); }, deadline);
           });
           const result = await Promise.race([this.runner({
-            page, id: item.id, config: run.config, caption: run.captions[item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
+            page, id: item.id, runId:run.id, continueInstagramStory:item.id==='instagram'&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
             mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
@@ -274,6 +279,8 @@ export class Queue extends EventEmitter {
         await this.change();
       }
     } finally {
+      // A pause, stop or failure at the destination boundary must not retain a native session.
+      if(this.instagramWorker?.handoff)await this.instagramWorker.close().catch(error=>this.emit('workerError',error));
       this.processing = false; this.emit('change', this.state());
       const pending = this.pendingKick; this.pendingKick = null;
       if (pending && this.active === pending && ['running', 'stopping'].includes(pending.status)) this.process(pending).catch(error => this.emit('workerError', error));

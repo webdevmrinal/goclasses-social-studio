@@ -51,3 +51,33 @@ export function importStory(captions) {
   const raw=captions.instagramStory||'',link=storyLinks({instagramStory:raw})[0];
   return {enabled:Boolean(raw.trim()),linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
 }
+
+// Positions stay normalized so mouse, touch and keyboard edits share the same review.
+const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
+export function snapStoryPosition(layout,key,x,y,{hasLink=true,cardHeight=.53,linkHeight=.07,thresholdX=.025,thresholdY=.016}={}){
+  const item=layout[key];if(!item||!['card','link'].includes(key))throw new Error('Unknown Story item.');
+  const other=key==='card'?'link':'card',minX=item.width/2+.02,maxX=1-item.width/2-.02,minY=key==='card'?.26:.69,maxY=key==='card'?.62:.88;
+  x=clamp(x,minX,maxX);y=clamp(y,minY,maxY);
+  const xs=[{position:.5,guide:.5}],ys=key==='card'?[.5]:[DEFAULT_STORY_LAYOUT.link.y];
+  if(hasLink){
+    const peer=layout[other];xs.push({position:peer.x,guide:peer.x},{position:peer.x-peer.width/2+item.width/2,guide:peer.x-peer.width/2},{position:peer.x+peer.width/2-item.width/2,guide:peer.x+peer.width/2});
+    ys.push(key==='card'?layout.link.y-(cardHeight+linkHeight)/2-.05:layout.card.y+(cardHeight+linkHeight)/2+.05);
+  }
+  const near=(value,targets,threshold,min,max)=>targets.filter(t=>Number.isFinite(t)&&t>=min&&t<=max&&Math.abs(t-value)<=threshold).sort((a,b)=>Math.abs(a-value)-Math.abs(b-value))[0];
+  const sx=xs.filter(t=>t.position>=minX&&t.position<=maxX&&Math.abs(t.position-x)<=thresholdX).sort((a,b)=>Math.abs(a.position-x)-Math.abs(b.position-x))[0],sy=near(y,ys,thresholdY,minY,maxY);
+  return {x:sx?.position??x,y:sy??y,guides:{x:sx?.guide??null,y:sy??null}};
+}
+export function alignStoryItems(layout,{hasLink=true,cardHeight=.53,linkHeight=.07}={}){
+  const result=storyLayout(layout),height=clamp(cardHeight,.1,.85),sticker=clamp(linkHeight,.03,.18),gap=.05;
+  const minCard=Math.max(.26,.12+height/2),maxCard=Math.min(.62,.9-height/2);
+  if(minCard>maxCard)throw new Error('The post card is too tall for the Story safe area. Check its native preview.');
+  result.card.x=.5;
+  if(!hasLink){result.card.y=clamp(.5,minCard,maxCard);return result;}
+  result.link.x=.5;
+  const top=.12+(.78-height-gap-sticker)/2;
+  result.link.y=clamp(top+height+gap+sticker/2,.69,Math.min(.88,.9-sticker/2));
+  const upper=Math.min(maxCard,result.link.y-sticker/2-gap-height/2);
+  if(upper<minCard)throw new Error('The post card and link need more space. Check their native sizes before sharing.');
+  result.card.y=clamp(result.link.y-sticker/2-gap-height/2,minCard,upper);
+  return storyLayout(result);
+}

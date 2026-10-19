@@ -1,7 +1,7 @@
 // Social Studio — Created by Mrinal. Copyright (c) 2026 Mrinal.
 import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, captionLength } from '/shared/platforms.js';
 import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
-import { DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory } from '/shared/instagram.js';
+import { DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, musicControl, storyEditor, storyMockup } from './instagram.js';
 import { mediaFor, mediaIdsFor } from '/shared/media.js';
 import { destinationReadiness, setupIssues } from '/shared/readiness.js';
@@ -302,7 +302,7 @@ function previewPage() {
   return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
     const images = platformMedia(p.id), caption = draft.captions[p.id] || '';
     const valid = ready[p.id].ready;
-    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagramStory'?escape(draft.instagram.story.label+' ? '+draft.instagram.story.url):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
+    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagramStory'?'Instagram + Facebook'+(draft.instagram.story.linkEnabled!==false?' &middot; '+escape(draft.instagram.story.label)+' &middot; '+escape(draft.instagram.story.url):''):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
   }).join('')}</div>${!draft.selected.length ? '<div class="panel empty-state"><h2>No destinations selected</h2><p>Choose destinations in Compose to see your previews.</p></div>' : ''}${footer()}`;
 }
 const statusLabels = { queued: 'Queued', running: 'In progress', dry_run: 'Test complete', posted: 'Published', failed: 'Failed', uncertain: 'Verify outcome', attention: 'Needs attention', awaiting_manual: 'Your turn', needs_setup: 'Choose flow', skipped: 'Skipped' };
@@ -324,7 +324,7 @@ function runMessage(item) {
 }
 function runDetails(run, item) {
   const message = item.message && runMessage(item) !== item.message ? `<p>${escape(item.message)}</p>` : '';
-  const preparation = item.preparation?.kind==='instagramStory'?`<p><a href="${escape(item.preparation.postUrl)}" target="_blank" rel="noopener noreferrer">Shared feed post</a> &middot; ${escape(item.preparation.music?.title||'No music')}${item.preparation.testExistingPost?' &middot; TEST used an existing post':''}</p>`:item.preparation?.kind==='instagramMusic'?`<p>${escape(item.preparation.music.title)} &middot; ${escape(item.preparation.music.artist)}</p>`:item.id === 'manychat' ? preparedAutomation(item) : item.preparation?.channelName ? `<p>${escape(item.preparation.channelName)} · ${item.preparation.imageCount || 0} images</p>` : '';
+  const preparation = item.preparation?.kind==='instagramStory'?`<p><a href="${escape(item.preparation.postUrl)}" target="_blank" rel="noopener noreferrer">Shared feed post</a> &middot; ${escape(item.preparation.music?.title||'No music')}${item.preparation.audience?.includes('facebook')?' &middot; Instagram + Facebook':''}${item.preparation.testExistingPost?' &middot; TEST used an existing post':''}</p>`:item.preparation?.kind==='instagramMusic'?`<p>${escape(item.preparation.music.title)} &middot; ${escape(item.preparation.music.artist)}</p>`:item.id === 'manychat' ? preparedAutomation(item) : item.preparation?.channelName ? `<p>${escape(item.preparation.channelName)} · ${item.preparation.imageCount || 0} images</p>` : '';
   const links = (item.screenshots || []).map(shot => `<a href="${escape(shot.url)}" target="_blank" rel="noopener noreferrer">${escape(shot.label.replaceAll('-', ' '))} ${icon('external')}</a>`).join('');
   return message || preparation || links ? disclosure('run-' + run.id + '-' + item.id, 'Details', message + preparation + `<div class="run-links">${links}</div>`, false, 'run-evidence') : '';
 }
@@ -508,6 +508,7 @@ document.addEventListener('click', async e => {
   const button = e.target.closest('button'); if (!button || button.disabled) return;
   try {
     if(button.dataset.igTab){instagramTab=button.dataset.igTab;shell();return;}
+    if(button.hasAttribute('data-story-align')){autoAlignStory();return;}
     if(button.hasAttribute('data-story-reset')){draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);saveDraft();shell();return;}
     if(button.hasAttribute('data-story-suggestion')){const link=storyLinks(draft.captions)[Number(button.dataset.storySuggestion)];if(link){Object.assign(draft.instagram.story,{url:link.url,label:link.label});saveDraft();shell();}return;}
     if(button.hasAttribute('data-ig-music')){await musicDialog();return;}
@@ -790,26 +791,46 @@ function updateStoryItem(key){
   const item=draft.instagram.story.layout[key],el=document.querySelector('[data-story-item="'+key+'"]');
   if(el){el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
 }
-function moveStoryItem(key,x,y){
-  const item=draft.instagram.story.layout[key];item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,x));item.y=Math.max(key==='card'?.26:.69,Math.min(key==='card'?.62:.88,y));updateStoryItem(key);
+function storyMeasurements(){
+  const canvas=document.querySelector('[data-story-canvas]'),height=canvas?.getBoundingClientRect().height||1;
+  return {hasLink:draft.instagram.story.linkEnabled!==false,cardHeight:(canvas?.querySelector('[data-story-item="card"]')?.getBoundingClientRect().height||height*.53)/height,linkHeight:(canvas?.querySelector('[data-story-item="link"]')?.getBoundingClientRect().height||height*.07)/height};
+}
+let storyGuideTimer;
+function storyGuides(guides={}){
+  clearTimeout(storyGuideTimer);
+  for(const axis of ['x','y']){const line=document.querySelector('[data-story-guide="'+axis+'"]');if(!line)continue;line.hidden=guides[axis]==null;if(!line.hidden)line.style[axis==='x'?'left':'top']=guides[axis]*100+'%';}
+}
+function settleStoryGuides(){storyGuideTimer=setTimeout(()=>storyGuides(),450);}
+function moveStoryItem(key,x,y,{magnetic=false}={}){
+  const item=draft.instagram.story.layout[key],next=snapStoryPosition(draft.instagram.story.layout,key,x,y,{...storyMeasurements(),...(!magnetic?{thresholdX:0,thresholdY:0}:{})});
+  item.x=next.x;item.y=next.y;updateStoryItem(key);
+  if(magnetic)storyGuides(next.guides);
+}
+function autoAlignStory(){
+  if(workerBusy())return;
+  draft.instagram.story.layout=alignStoryItems(draft.instagram.story.layout,storyMeasurements());
+  const canvas=document.querySelector('[data-story-canvas]');canvas?.classList.add('is-aligning');
+  for(const key of ['card','link'])updateStoryItem(key);
+  setTimeout(()=>canvas?.classList.remove('is-aligning'),250);
+  storyGuides({x:.5});settleStoryGuides();saveDraft();
+  const status=document.querySelector('[data-story-alignment]');if(status)status.textContent=draft.instagram.story.linkEnabled===false?'Post centered':'Post and link aligned';
 }
 function bindStoryGestures(){
   for(const canvas of document.querySelectorAll('[data-ig-canvas]')){
     const layout=JSON.parse(canvas.dataset.igLayout);if(canvas.dataset.igPhoto)canvas.style.setProperty('--story-image','url("'+canvas.dataset.igPhoto+'")');
     for(const key of ['card','link']){const el=canvas.querySelector('[data-ig-item="'+key+'"]'),item=layout[key];if(!el)continue;el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
   }
-
   for(const el of document.querySelectorAll('[data-story-item]')){
     el.onpointerdown=e=>{
-      if(e.button!==0)return;e.preventDefault();el.setPointerCapture(e.pointerId);
+      if(e.button!==0||workerBusy())return;e.preventDefault();el.setPointerCapture(e.pointerId);
       const key=el.dataset.storyItem,rect=el.closest('[data-story-canvas]').getBoundingClientRect(),start={...draft.instagram.story.layout[key]},origin={x:e.clientX,y:e.clientY};
-      el.onpointermove=move=>moveStoryItem(key,start.x+(move.clientX-origin.x)/rect.width,start.y+(move.clientY-origin.y)/rect.height);
-      el.onpointerup=el.onpointercancel=up=>{el.releasePointerCapture(up.pointerId);el.onpointermove=el.onpointerup=el.onpointercancel=null;saveDraft();};
+      el.onpointermove=move=>moveStoryItem(key,start.x+(move.clientX-origin.x)/rect.width,start.y+(move.clientY-origin.y)/rect.height,{magnetic:true});
+      el.onpointerup=el.onpointercancel=up=>{if(el.hasPointerCapture(up.pointerId))el.releasePointerCapture(up.pointerId);el.onpointermove=el.onpointerup=el.onpointercancel=null;settleStoryGuides();saveDraft();};
     };
     el.onkeydown=e=>{
-      if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();
+      if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)||workerBusy())return;e.preventDefault();
       const key=el.dataset.storyItem,item=draft.instagram.story.layout[key],step=e.shiftKey?.04:.01;
-      moveStoryItem(key,item.x+(e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0),item.y+(e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0));saveDraft();
+      moveStoryItem(key,item.x+(e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0),item.y+(e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0));storyGuides();saveDraft();
     };
   }
 }

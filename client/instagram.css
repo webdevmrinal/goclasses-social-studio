@@ -21,3 +21,8 @@
 @keyframes ig-music-spin{to{transform:rotate(360deg)}}@keyframes ig-music-travel{from{transform:translateX(-110%)}to{transform:translateX(390%)}}@keyframes ig-music-level{from{transform:scaleY(.35)}to{transform:scaleY(1.2)}}@keyframes ig-music-shimmer{from{background-position:100% 0}to{background-position:-100% 0}}@keyframes ig-music-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:680px){.ig-music-dialog{padding:20px;max-height:calc(100dvh - 24px)}.ig-music-dialog .ig-music-results{max-height:34dvh}.ig-music-player{gap:8px;padding:10px}.ig-music-player .button{padding:8px}.ig-emulator-sync{padding:12px;gap:9px}.ig-song{gap:9px;padding:12px 4px}}
 @media(prefers-reduced-motion:reduce){.ig-song-new,.ig-sync-orb,.ig-sync-line:after,.ig-equalizer i,.ig-player-art i,.ig-song-skeleton i,.ig-song-skeleton span,.ig-song-skeleton b{animation:none!important}.ig-song{transition:none}.ig-music-dialog .ig-music-results{scroll-behavior:auto}}
+
+/* Mrinal: magnetic Story placement without changing native item sizes. */
+.ig-alignment-tools{display:flex;justify-content:center;margin:-4px 0 20px}.ig-align-guide{position:absolute;pointer-events:none;z-index:5;background:#54d8ff;box-shadow:0 0 0 1px #001c3333,0 0 8px #54d8ff66}.ig-align-guide[hidden]{display:none}.ig-align-guide-x{top:10%;bottom:10%;width:1px}.ig-align-guide-y{left:4%;right:4%;height:1px}.ig-story-canvas.is-aligning [data-story-item]{transition:left .2s ease,top .2s ease}@media(prefers-reduced-motion:reduce){.ig-story-canvas.is-aligning [data-story-item]{transition:none}}
+
+.ig-alignment-tools [data-story-alignment]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}

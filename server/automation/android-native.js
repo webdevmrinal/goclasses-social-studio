@@ -22,6 +22,17 @@ export function nativeBounds(node) {
   return { x:+m[1], y:+m[2], width:+m[3]-m[1], height:+m[4]-m[2] };
 }
 export const xpathLiteral = value => !value.includes('"') ? '"' + value + '"' : !value.includes("'") ? "'" + value + "'" : 'concat(' + value.split('"').map(part => '"' + part + '"').join(", '\"', ") + ')';
+// Retry only an explicit pre-session instrumentation failure. A lost/ambiguous
+// response may have created a session, so it must never be retried automatically.
+export async function connectAndroidDriver(create,reset){
+  for(let attempt=0;attempt<2;attempt++){
+    const {ok,result}=await create();
+    if(ok&&result.value?.sessionId)return result.value.sessionId;
+    const message=result.value?.message||'';
+    if(attempt===0&&!result.value?.sessionId&&/instrumentation process cannot be initialized within \d+ms timeout/i.test(message)){await reset();continue;}
+    throw new InterventionError('The dedicated Android driver could not connect. Run android:start and try again.');
+  }
+}
 export class AndroidSession {
   constructor({signal}={}) {
     this.signal=signal;
@@ -45,15 +56,19 @@ export class AndroidSession {
     const deviceServer = installedServer ? await this.adb(['shell','dumpsys','package','io.appium.uiautomator2.server']) : '';
     const serverPackage = JSON.parse(await fs.readFile(path.join(this.root,'automation','node_modules','appium-uiautomator2-driver','node_modules','appium-uiautomator2-server','package.json'),'utf8'));
     const reusableServer = deviceServer.match(/versionName=([^\s]+)/)?.[1] === serverPackage.version;
+    this.id=await connectAndroidDriver(async()=>{
     const response = await fetch(ANDROID_URL+'/session', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({capabilities:{alwaysMatch:{
       platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':ANDROID_SERIAL,'appium:deviceName':ANDROID_AVD,
       'appium:appPackage':'com.instagram.android','appium:autoLaunch':false,'appium:noReset':true,'appium:fullReset':false,
       'appium:skipUnlock':true,'appium:skipDeviceInitialization':packages.includes('package:io.appium.settings'),
-      'appium:skipServerInstallation':reusableServer,'appium:adbExecTimeout':60000,'appium:skipLogcatCapture':true,'appium:printPageSourceOnFindFailure':false,'appium:newCommandTimeout':900
-    }}}), signal:AbortSignal.timeout(90000) });
-    const result=await response.json();
-    if(!response.ok || !result.value?.sessionId) throw new InterventionError('The dedicated Android driver could not connect. Run android:start and try again.');
-    this.id=result.value.sessionId;
+      'appium:skipServerInstallation':reusableServer,'appium:uiautomator2ServerLaunchTimeout':60000,'appium:adbExecTimeout':60000,'appium:skipLogcatCapture':true,'appium:printPageSourceOnFindFailure':false,'appium:newCommandTimeout':900
+    }}}), signal:AbortSignal.timeout(120000) });
+    return {ok:response.ok,result:await response.json()};
+    },async()=>{
+      // Reset only our automation instrumentation, preserving Instagram data,
+      // its signed-in account and every unsent editor. No publication is retried.
+      for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
+    });
     await this.request('/appium/settings','POST',{settings:{waitForIdleTimeout:500,waitForSelectorTimeout:500,enableMultiWindows:false,enableTopmostWindowFromActivePackage:false}});
     return this;
   }
@@ -104,7 +119,11 @@ export class AndroidSession {
     await this.request('/element/'+id+'/value','POST',{text,value:[...text]});
   }
   async screenshot() { return Buffer.from(await this.request('/screenshot'),'base64'); }
-  async activate() { await this.request('/appium/device/activate_app','POST',{appId:'com.instagram.android'}); }
+  async activate() {
+    await this.request('/appium/device/activate_app','POST',{appId:'com.instagram.android'});
+    // Activation can return while a low-memory emulator still shows its launcher.
+    await this.until(nodes=>nodes.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Instagram did not finish opening on Android. Open it in the emulator and try again.',90000);
+  }
   async account(expected) {
     await this.activate();
     // Public post/share navigation can be dismissed, but never an unsent editor.
@@ -114,12 +133,17 @@ export class AndroidSession {
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
         await this.request('/back','POST',{});await delay(400);continue;
       }
-      if(current.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Close the unsent Instagram Android draft before continuing.');
-      if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view')||n['resource-id']===nativeId('row_feed_button_share'))&&!current.some(n=>n['resource-id']===nativeId('profile_header_create_button'))){await this.request('/back','POST',{});await delay(400);continue;}
+      if(current.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Close the unsent Instagram Android draft before continuing.');
+      if(current.some(n=>n['resource-id']===nativeId('row_feed_button_share'))&&!current.some(n=>n['resource-id']===nativeId('profile_tab'))){
+        // A confirmed/public post viewer has no tab bar. Navigate to our own profile,
+        // only after the unsent-editor checks above; never back out of a draft.
+        await this.request('/execute/sync','POST',{script:'mobile: deepLink',args:[{url:'https://www.instagram.com/'+encodeURIComponent(expected)+'/',package:'com.instagram.android'}]});
+        await delay(400);continue;
+      }
       break;
     }
     const nodes=await this.until(nodes=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_tab')) && nodes,'Finish Instagram sign-in or close its unsent Android draft before preparing a post.');
-    if(nodes.some(n=>n.displayed==='true'&&/new_post_title|caption_input_text_view|music_editor_controls_container/.test(n['resource-id']||'')))throw new InterventionError('Instagram has an unsent Android draft. Close it yourself before preparing another post.');
+    if(nodes.some(n=>n.displayed==='true'&&/new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|caption_input_text_view|music_editor_controls_container/.test(n['resource-id']||'')))throw new InterventionError('Instagram has an unsent Android draft. Close it yourself before preparing another post.');
     await this.clickId('profile_tab');
     await this.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('action_bar_title') && n.text===expected),'The Android Instagram account does not match @'+expected+'.');
     this.accountHandle=expected;

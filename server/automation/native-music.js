@@ -68,6 +68,22 @@ export async function setMusicPlayback(s,track,playing){
   await s.until(nodes=>musicPlayback(nodes,track)===playing,'Instagram did not confirm the playback change.');
   return {key:track.key,title:track.title,artist:track.artist,paused:!playing};
 }
+export async function openStoryMusicLibrary(s){
+  let nodes=await s.screen();
+  if(present(nodes,'row_search_edit_text'))return;
+  if(!present(nodes,'music_editor_done_button')){
+    if(!present(nodes,'story_share_controls_action_bar')||!nodes.some(n=>n.displayed==='true'&&n['resource-id']==='music_button'))throw new InterventionError('The owned Story music controls changed. Nothing was shared.');
+    await s.click('id','music_button');
+    nodes=await s.until(nodes=>(present(nodes,'row_search_edit_text')||present(nodes,'music_editor_done_button'))&&nodes,'Story music did not open.');
+  }
+  // Reposts can inherit feed audio: Music opens its clip editor, not the library.
+  // Use the observed return control, then reselect and verify the exact real ID.
+  if(present(nodes,'music_editor_done_button')){
+    if(!nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('album_art_button')&&n['content-desc']==='Return to music search'))throw new InterventionError('The inherited Story music cannot be changed safely. Nothing was shared.');
+    await s.clickId('album_art_button');
+  }
+  await s.until(nodes=>present(nodes,'row_search_edit_text'),'Story music library did not open.');
+}
 export async function openMusicLibrary(s) {
   await s.until(nodes=>present(nodes,'media_thumbnail_tray_button'),'The Instagram photo editor is still loading.');
   await s.click('xpath','//android.widget.TextView[@text="Audio"]/parent::*');

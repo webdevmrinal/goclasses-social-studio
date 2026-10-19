@@ -54,30 +54,22 @@ export async function addStoryLink(s,{url,label,layout}) {
   if(Math.abs((moved.x+moved.width/2)-destination.x)>canvas.width*.07||Math.abs((moved.y+moved.height/2)-destination.y)>canvas.height*.055)throw new InterventionError('The Story link sticker did not move below the image.');
   return {canvas,sticker:moved,url,label};
 }
-export async function instagramOnlyStoryAudience(s) {
+export async function prepareStoryAudience(s) {
+  // The observed blue arrow opens audience review. It does not publish.
   await s.click('accessibility id','Share to');
-  let nodes=await s.until(nodes=>has(nodes,'share_story_button')&&nodes,'Instagram Story sharing options are still loading.');
-  if(nodes.some(n=>n.text==='And Facebook Story')){
-    await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('sharing_preferences_label'))+' and @text="And Facebook Story"]');
-    await s.until(nodes=>nodes.some(n=>n.text==='Turn Off Once'),'Instagram did not offer a per-Story Facebook opt-out.');
-    // Per-Story only. Never modify the account's global cross-posting setting.
-    await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('igds_alert_dialog_primary_button'))+' and @text="Turn Off Once"]');
-    nodes=await s.until(nodes=>has(nodes,'share_story_button')&&nodes,'Instagram-only Story options did not return.');
-  }
-  if(nodes.some(n=>n.text==='And Facebook Story'))throw new InterventionError('Facebook Story sharing is still enabled. Nothing was shared.');
-  const radio='//*[@resource-id='+xpathLiteral(nativeId('row_add_to_story_container'))+']//*[@resource-id='+xpathLiteral(nativeId('recipient_picker_radio_button'))+' and @checked="true"]';
-  await s.find('xpath',radio);
+  await s.until(nodes=>has(nodes,'share_story_button'),'Instagram Story sharing options are still loading.');
   return storyAudienceEvidence(s);
 }
 export async function storyAudienceEvidence(s) {
   const nodes=await s.screen();
-  if(!has(nodes,'share_story_button')||nodes.some(n=>n.text==='And Facebook Story'))throw new InterventionError('The Instagram-only Story audience changed.');
+  const facebook=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('sharing_preferences_label')&&n.text==='And Facebook Story');
+  if(!has(nodes,'share_story_button')||facebook.length!==1)throw new InterventionError('Enable Facebook Story sharing in Instagram sharing options, then retry only this Story. Nothing was shared.');
   await s.find('xpath','//*[@resource-id='+xpathLiteral(nativeId('row_add_to_story_container'))+']//*[@resource-id='+xpathLiteral(nativeId('recipient_picker_radio_button'))+' and @checked="true"]');
   if(nodes.filter(n=>n['resource-id']===nativeId('recipient_picker_radio_button')&&n.checked==='true').length!==1)throw new InterventionError('The Story audience is ambiguous. Nothing was shared.');
   const canvas=nodes.find(n=>n['resource-id']===nativeId('camera_photo_texture_view'));
   if(!canvas)throw new InterventionError('The Story image preview disappeared.');
   const b=nativeBounds(canvas),image=await sharp(await s.screenshot()).extract({left:b.x,top:b.y,width:b.width,height:b.height}).raw().toBuffer();
-  return {bounds:canvas.bounds,hash:digest(image)};
+  return {destinations:['instagram','facebook'],bounds:canvas.bounds,hash:digest(image)};
 }
 export async function discardStory(s) {
   // Called only for this worker's unchanged rehearsal. Unwind its native
@@ -91,6 +83,9 @@ export async function discardStory(s) {
       await s.request('/back','POST',{});
     }else if(has(nodes,'music_editor_cancel_button')){
       await s.clickId('music_editor_cancel_button');
+    }else if(has(nodes,'music_editor_done_button')){
+      // Inherited feed music uses a clip editor without a Cancel resource.
+      await s.request('/back','POST',{});
     }else if(has(nodes,'link_sticker_list_cancel_button')){
       await s.clickId('link_sticker_list_cancel_button');
     }else if(has(nodes,'share_story_button')){
@@ -105,7 +100,10 @@ export async function discardStory(s) {
     }else if(has(nodes,'gallery_title_text')||has(nodes,'row_feed_button_share')){
       await s.request('/back','POST',{});
     }else{
-      throw new InterventionError('The native screen changed. Close the owned rehearsal before continuing; unknown drafts were preserved.');
+      // Back/Discard can briefly expose a blank transition on slow emulators.
+      // Wait for a recognized surface; never click or dismiss an unknown one.
+      await s.until(next=>['music_browser_container','music_editor_cancel_button','music_editor_done_button','link_sticker_list_cancel_button','share_story_button','direct_external_share_container_view','gallery_title_text','row_feed_button_share'].some(id=>has(next,id))||has(next,'story_share_controls_action_bar')&&has(next,'cancel_button')||has(next,'profile_header_create_button')&&has(next,'profile_tab')||next.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('igds_alert_dialog_primary_button')&&n.text==='Discard'),'The native screen changed. Close the owned rehearsal before continuing; unknown drafts were preserved.',10000);
+      continue;
     }
     await new Promise(resolve=>setTimeout(resolve,450));
   }
