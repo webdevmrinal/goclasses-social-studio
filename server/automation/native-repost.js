@@ -59,7 +59,7 @@ export async function pinchItem(s,center,width,ratio) {
   ]}));
   await s.request('/actions','POST',{actions});
 }
-export async function placeRepost(s,layout,{framed=false}={}) {
+export async function placeRepost(s,layout,{framed=false,hasLink=true}={}) {
   const c=await storyCanvas(s);
   if(!framed){await tapCanvas(s,c.x+c.width*.45,c.y+c.height*.5);await new Promise(r=>setTimeout(r,500));}
   const boundsOptions=framed?{maxY:layout.link.y-.05}:{};
@@ -77,7 +77,7 @@ export async function placeRepost(s,layout,{framed=false}={}) {
     await new Promise(r=>setTimeout(r,450));after=await whiteCard(s,c,boundsOptions);
   }
   if(Math.abs((after.y+after.height/2)-desired.y)>c.height*.035||Math.abs((after.x+after.width/2)-desired.x)>c.width*.035||Math.abs(after.width-c.width*layout.card.width)>c.width*.045)throw new InterventionError('Instagram did not apply the reviewed post-card position. Nothing was shared; check the native Story preview.');
-  if(after.y<c.y+c.height*.08||after.y+after.height>c.y+c.height*(layout.link.y-.065))throw new InterventionError('The post card overlaps the link or Story safe area. Move or resize it in Compose.');
+  if(after.y<c.y+c.height*.08||after.y+after.height>c.y+c.height*(hasLink?layout.link.y-.065:.9))throw new InterventionError('The post card overlaps the link or Story safe area. Move or resize it in Compose.');
   return {canvas:c,card:after};
 }
 

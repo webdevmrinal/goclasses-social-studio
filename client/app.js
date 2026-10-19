@@ -45,6 +45,7 @@ const paths = {
 };
 const icon = (name, cls = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" class="${cls}">${lucidePaths[name] || paths[name] || paths.info}</svg>`;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+history.scrollRestoration='manual';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const blankCaptions = () => Object.fromEntries(PLATFORMS.map(p => [p.id, '']));
@@ -59,7 +60,7 @@ draft.manychat.linksMode ||= draft.manychat.links.length ? 'manual' : 'auto';
 draft.selected = Array.isArray(draft.selected) ? draft.selected.filter(id => DESTINATIONS.some(p => p.id === id)) : [];
 draft.mediaIds = Array.isArray(draft.mediaIds) ? draft.mediaIds : [];
 draft.mediaByPlatform = draft.mediaByPlatform && typeof draft.mediaByPlatform === 'object' && !Array.isArray(draft.mediaByPlatform) ? draft.mediaByPlatform : {};
-draft.instagram={music:{enabled:false,...draft.instagram?.music},story:{enabled:false,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
+draft.instagram={music:{enabled:false,...draft.instagram?.music},story:{enabled:false,linkEnabled:true,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
 draft.instagram.story.enabled=draft.instagram.story.enabled===true;draft.instagram.music.enabled=draft.instagram.music.enabled===true;
 try{draft.instagram.story.layout=storyLayout(draft.instagram.story.layout);}catch{draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);}
 draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
@@ -71,6 +72,7 @@ function applyTheme() { document.documentElement.dataset.theme = theme === 'syst
 applyTheme(); systemTheme.addEventListener('change', applyTheme);
 let state = { config: null, media: [], runs: [], login: { running: false, items: {} }, protected: false };
 let view = 'settings';
+let musicPickerOpen=false,androidProgressDialog=null,androidProgressKey='',androidProgressDismissed='';
 let captionTab = 'instagram';
 let mode = 'TEST'; // Never restore LIVE mode from storage or server state.
 let connected = false;
@@ -146,11 +148,11 @@ function shell() {
       <nav class="navigation" aria-label="Main navigation">${Object.entries(titles).map(([id, title]) => `<button class="nav-item ${view === id ? 'active' : ''}" data-view="${id}" ${view === id ? 'aria-current="page"' : ''} title="${title}">${icon(id === 'preview' ? 'eye' : id === 'settings' ? 'settings' : id)}<span>${title}</span></button>`).join('')}</nav>
       <div class="sidebar-bottom"><div class="credit"><div class="avatar">M</div><div><p>Created by</p><strong>Mrinal</strong></div></div></div>
     </aside>
-    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
+    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
     <main id="main" class="main" tabindex="-1">${page()}</main></div>
     ${actionbar()}
   </div>`;
-  bindPage(); renderReadiness();
+  bindPage(); renderReadiness(); renderAndroidProgress();
   centerCaptionTab();
 }
 function centerCaptionTab() {
@@ -176,7 +178,7 @@ function composePage() {
     <div class="destination-grid">${PLATFORMS.map(p => `<button class="destination ${draft.selected.includes(p.id) ? 'selected' : ''}" data-destination="${p.id}" aria-pressed="${draft.selected.includes(p.id)}" title="${p.name}: ${p.detail}">${platformIcon(p)}<span class="check">${icon('check')}</span><span class="destination-name">${escape(p.name.replace(' · GATE ', ' · '))}</span><span class="destination-status" data-destination-status="${p.id}"></span></button>`).join('')}</div></section>
 
     <div class="composer-grid"><section class="panel media-panel" aria-label="Media upload"><div class="panel-label">Images <small>${media.length ? `${media.length} image${media.length === 1 ? '' : 's'}` : 'Up to 10 images'}</small></div>
-      <label class="dropzone ${heroImage ? 'has-preview' : ''}" id="dropzone" tabindex="0" role="button" aria-label="Upload images"><input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden ${uploading ? 'disabled' : ''}>${heroImage ? `<img id="uploaded-preview" class="uploaded-preview" src="${escape(heroImage.url)}" alt="Preview: ${escape(heroImage.name)}"><span class="media-preview-caption">${mediaPreviewIndex + 1} of ${media.length} · ${uploading ? 'Uploading…' : 'Add images'}</span>${heroImage.pending ? '<span class="uploading-badge" role="status">Uploading · preview ready</span>' : ''}` : `<span class="upload-art">${icon('image')}</span><strong>Drop or choose images</strong><p>JPG, PNG, WEBP · 20 MB max</p>`}</label>
+      <label class="dropzone ${heroImage ? 'has-preview' : ''}" id="dropzone" tabindex="0" role="button" aria-label="Upload images"><input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden ${uploading ? 'disabled' : ''}>${heroImage ? `<img id="uploaded-preview" class="uploaded-preview" src="${escape(heroImage.url)}" alt="Preview: ${escape(heroImage.name)}"><span class="media-preview-caption">${mediaPreviewIndex + 1} of ${media.length} · ${uploading ? 'Uploading…' : 'Add images'}</span>${metadataChip(heroImage)}${heroImage.pending ? '<span class="uploading-badge" role="status">Uploading · preview ready</span>' : ''}` : `<span class="upload-art">${icon('image')}</span><strong>Drop or choose images</strong><p>JPG, PNG, WEBP · 20 MB max</p>`}</label>
       <div class="asset-list" tabindex="0" aria-label="Scrollable shared image library">${media.map(assetRow).join('')}</div>
       ${lastMediaOrder ? '<button class="button small" data-undo-media>Undo image change</button>' : ''}
       ${media.length ? `<div class="media-footer"><small>${media.length > 1 ? 'Drag to reorder' : ''}</small><button class="text-button" data-metadata-help>About metadata</button></div>` : ''}</section>
@@ -184,13 +186,19 @@ function composePage() {
     ${PLATFORMS.map(p => captionEditor(p)).join('')}</section></div>
     ${footer()}`;
 }
+function metadataChip(m){
+  const ai=Boolean(m.metadata?.aiMarkers?.length),origin=ai||m.metadata?.credentials;
+  const label=m.pending?'Scanning':m.verification?'Clean':ai?'AI metadata':origin?'Origin metadata':'Clean metadata';
+  const detail=m.pending?'Scanning embedded metadata':origin?'Embedded origin markers found. Click the metadata report for details.':'No embedded origin markers found. Platform AI labels cannot be predicted.';
+  return `<span class="metadata-chip ${origin?'origin':m.pending?'pending':'clean'}" title="${detail}">${icon(origin?'info':'check')} ${label}</span>`;
+}
 function assetRow(m, i) {
   const busy = uploading || Boolean(cleaningMedia), origin = m.metadata?.credentials || m.metadata?.aiMarkers?.length;
   return `<div class="asset ${i === mediaPreviewIndex ? 'previewing' : ''}" data-asset-id="${escape(m.id)}">
     ${!m.pending ? `<button type="button" class="asset-grip" data-drag-media="${m.id}" aria-label="Reorder ${escape(m.name)}" title="Drag to reorder; use arrow keys to move" ${busy ? 'disabled' : ''}>${icon('grip')}</button>` : ''}
     <button class="asset-preview-button" data-media-preview="${i}" aria-label="Preview ${escape(m.name)}" aria-pressed="${i === mediaPreviewIndex}"><img src="${escape(m.url)}" alt=""></button>
-    <div class="asset-meta"><div class="asset-name" title="${escape(m.name)}"><span class="asset-number">${i + 1}.</span> ${escape(m.name)}</div><small>${m.pending ? `Uploading · ${bytes(m.size)}` : `${m.width} × ${m.height} · ${bytes(m.size)} · ${(m.format || m.filename?.split('.').at(-1) || '').toUpperCase()}`}</small>
-    ${!m.pending ? `<div class="asset-tools"><button type="button" class="text-button" data-metadata="${m.id}" title="${m.verification ? 'Metadata removed; decoded pixels and dimensions verified' : 'View embedded metadata report'}">${m.verification ? 'Cleaned' : origin ? 'Origin metadata' : 'Metadata'}</button>${disclosure('asset-' + m.id, 'Options', `${!m.verification ? `<button type="button" class="text-button" data-clean-media="${m.id}" ${busy ? 'disabled' : ''}>${cleaningMedia === m.id ? 'Verifying…' : 'Remove metadata'}</button>` : `<button type="button" class="text-button" data-restore-media="${m.id}" ${busy ? 'disabled' : ''}>Use original</button>`}<a href="${escape(m.url)}" download="${escape(m.name.replace(/\.[^.]+$/, '') + '.' + (m.format === 'jpeg' ? 'jpg' : m.format || m.filename.split('.').at(-1)))}">Download</a>`, false, 'asset-options')}</div>${!m.preservedOriginal ? '<small class="legacy-media" title="Earlier optimized copy. Reupload the original for lossless preservation.">Optimized copy</small>' : ''}` : ''}</div>
+    <div class="asset-meta">${metadataChip(m)}<div class="asset-name" title="${escape(m.name)}"><span class="asset-number">${i + 1}.</span> ${escape(m.name)}</div><small>${m.pending ? `Uploading · ${bytes(m.size)}` : `${m.width} × ${m.height} · ${bytes(m.size)} · ${(m.format || m.filename?.split('.').at(-1) || '').toUpperCase()}`}</small>
+    ${!m.pending ? `<div class="asset-tools"><button type="button" class="text-button" data-metadata="${m.id}" title="${m.verification ? 'Metadata removed; decoded pixels and dimensions verified' : 'View embedded metadata report'}">${m.verification ? 'Cleaned' : origin ? 'Origin metadata' : 'Metadata'}</button>${origin?`<button type="button" class="text-button clean-action" data-clean-media="${m.id}" ${busy?'disabled':''}>${cleaningMedia===m.id?'Verifying...':'Clean metadata'}</button>`:''}${disclosure('asset-' + m.id, 'Options', `${!m.verification ? origin ? '' : `<button type="button" class="text-button" data-clean-media="${m.id}" ${busy ? 'disabled' : ''}>${cleaningMedia === m.id ? 'Verifying…' : 'Remove metadata'}</button>` : `<button type="button" class="text-button" data-restore-media="${m.id}" ${busy ? 'disabled' : ''}>Use original</button>`}<a href="${escape(m.url)}" download="${escape(m.name.replace(/\.[^.]+$/, '') + '.' + (m.format === 'jpeg' ? 'jpg' : m.format || m.filename.split('.').at(-1)))}">Download</a>`, false, 'asset-options')}</div>${!m.preservedOriginal ? '<small class="legacy-media" title="Earlier optimized copy. Reupload the original for lossless preservation.">Optimized copy</small>' : ''}` : ''}</div>
     ${!m.pending ? `<div class="asset-order-buttons"><button type="button" data-move="${m.id}" data-direction="-1" aria-label="Move image ${i + 1} earlier" ${busy || i === 0 ? 'disabled' : ''}>${icon('up')}</button><button type="button" data-move="${m.id}" data-direction="1" aria-label="Move image ${i + 1} later" ${busy || i === draft.mediaIds.length - 1 ? 'disabled' : ''}>${icon('down')}</button></div><button class="button subtle round" data-remove="${m.id}" aria-label="Remove ${escape(m.name)}" ${busy ? 'disabled' : ''}>${icon('close')}</button>` : ''}</div>`;
 }
 function changeMediaOrder(ids, message, replacements = {}) {
@@ -220,7 +228,7 @@ function accountLabel(p) {
 function mediaCarousel(p, images, scope = 'editor') {
   const key = scope + p.id, index = Math.min(platformPreviewIndex[key] || 0, Math.max(0, images.length - 1)); platformPreviewIndex[key] = index;
   if (!images.length) return `<div class="preview-placeholder text-only-placeholder">${icon(p.textOnly ? 'message' : 'images')}${p.textOnly ? 'Text only' : 'No images'}</div>`;
-  return `<div class="preview-image destination-image"><img id="${scope}-image-${p.id}" src="${escape(images[index].url)}" alt="${escape(images[index].name)}"><span class="image-count" id="image-count-${p.id}">${index + 1} / ${images.length}</span>${images.length > 1 ? `<div class="preview-nav"><button data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-step="-1" aria-label="Previous image">${icon('left')}</button><button data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-step="1" aria-label="Next image">${icon('right')}</button></div>` : ''}</div><div class="carousel-strip" tabindex="0" aria-label="${escape(p.name)} selected image scroller">${images.map((m, i) => `<button class="carousel-thumb ${index === i ? 'active' : ''}" data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-index="${i}" aria-label="Show selected image ${i + 1}: ${escape(m.name)}" aria-pressed="${index === i}"><img src="${escape(m.url)}" alt=""><span>${i + 1}</span></button>`).join('')}</div>`;
+  return `<div class="preview-image destination-image"><img id="${scope}-image-${p.id}" src="${escape(images[index].url)}" alt="${escape(images[index].name)}">${metadataChip(images[index])}<span class="image-count" id="image-count-${p.id}">${index + 1} / ${images.length}</span>${images.length > 1 ? `<div class="preview-nav"><button data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-step="-1" aria-label="Previous image">${icon('left')}</button><button data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-step="1" aria-label="Next image">${icon('right')}</button></div>` : ''}</div><div class="carousel-strip" tabindex="0" aria-label="${escape(p.name)} selected image scroller">${images.map((m, i) => `<button class="carousel-thumb ${index === i ? 'active' : ''}" data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-index="${i}" aria-label="Show selected image ${i + 1}: ${escape(m.name)}" aria-pressed="${index === i}"><img src="${escape(m.url)}" alt=""><span>${i + 1}</span></button>`).join('')}</div>`;
 }
 function destinationMediaEditor(p) {
   if (p.id === 'manychat' || !selectedMedia().length) return '';
@@ -315,7 +323,7 @@ function runMessage(item) {
 }
 function runDetails(run, item) {
   const message = item.message && runMessage(item) !== item.message ? `<p>${escape(item.message)}</p>` : '';
-  const preparation = item.preparation?.kind==='instagramStory'?`<p><a href="${escape(item.preparation.postUrl)}" target="_blank" rel="noopener noreferrer">Shared feed post</a> ? ${escape(item.preparation.music.title)}${item.preparation.testExistingPost?' &middot; TEST used an existing post':''}</p>`:item.preparation?.kind==='instagramMusic'?`<p>${escape(item.preparation.music.title)} ? ${escape(item.preparation.music.artist)}</p>`:item.id === 'manychat' ? preparedAutomation(item) : item.preparation?.channelName ? `<p>${escape(item.preparation.channelName)} · ${item.preparation.imageCount || 0} images</p>` : '';
+  const preparation = item.preparation?.kind==='instagramStory'?`<p><a href="${escape(item.preparation.postUrl)}" target="_blank" rel="noopener noreferrer">Shared feed post</a> &middot; ${escape(item.preparation.music?.title||'No music')}${item.preparation.testExistingPost?' &middot; TEST used an existing post':''}</p>`:item.preparation?.kind==='instagramMusic'?`<p>${escape(item.preparation.music.title)} &middot; ${escape(item.preparation.music.artist)}</p>`:item.id === 'manychat' ? preparedAutomation(item) : item.preparation?.channelName ? `<p>${escape(item.preparation.channelName)} · ${item.preparation.imageCount || 0} images</p>` : '';
   const links = (item.screenshots || []).map(shot => `<a href="${escape(shot.url)}" target="_blank" rel="noopener noreferrer">${escape(shot.label.replaceAll('-', ' '))} ${icon('external')}</a>`).join('');
   return message || preparation || links ? disclosure('run-' + run.id + '-' + item.id, 'Details', message + preparation + `<div class="run-links">${links}</div>`, false, 'run-evidence') : '';
 }
@@ -462,7 +470,7 @@ async function startRun(confirmation) {
   try {
     await api('/api/runs', { method: 'POST', body: { draft: reviewDraft, mode, confirmation } });
     mode = 'TEST'; // Live authorization is one run only.
-    view = 'activity'; await refresh(); shell();
+    await refresh(); navigate('activity');
     toast('Run started. You can follow every step here.');
   } finally { sending = false; }
 }
@@ -473,7 +481,7 @@ async function checkLogins(selected = PLATFORMS.map(p => p.id)) {
   navigate('settings'); toast('Checking connections in the worker browser. Any account needing sign-in will appear below.');
 }
 function exportText() {
-  const text = DESTINATIONS.map(p => `=====${p.delimiter}=====\n${p.id==='instagramStory'&&draft.instagram.story.enabled?draft.instagram.story.label+'\n'+draft.instagram.story.url:draft.captions[p.id] || ''}`).join('\n\n');
+  const text = DESTINATIONS.map(p => `=====${p.delimiter}=====\n${p.id==='instagramStory'&&draft.instagram.story.enabled?(draft.instagram.story.linkEnabled!==false?draft.instagram.story.label+'\n'+draft.instagram.story.url:'Share feed post'):draft.captions[p.id] || ''}`).join('\n\n');
   download('social-studio-captions.txt', text, 'text/plain;charset=utf-8');
 }
 function download(name, text, type) {
@@ -602,6 +610,7 @@ document.addEventListener('click', async e => {
       const images = selectedMedia(); const id = button.dataset.previewPlatform; const img = document.querySelector(`#preview-image-${id}`); const i = (Number(img.dataset.index || 0) + Number(button.dataset.imageStep) + images.length) % images.length;
       img.src = images[i].url; img.alt = images[i].name; img.dataset.index = i; document.querySelector(`#image-count-${id}`).textContent = `${i + 1} / ${images.length}`; return;
     }
+    if(button.dataset.action==='updates'){await updatesDialog();return;}
     if (button.dataset.action === 'import') importDialog();
     if (button.dataset.action === 'export') exportText();
     if (button.dataset.action === 'preview') await preview();
@@ -613,6 +622,7 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('input', e => {
   if(e.target.dataset.igField){const [section,key]=e.target.dataset.igField.split('.');draft.instagram[section][key]=e.target.type==='checkbox'?e.target.checked:e.target.value;
+    if(key==='linkEnabled'||section==='music'&&key==='enabled'){saveDraft();shell();return;}
     if(section==='story'&&key==='enabled'){draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(e.target.checked)draft.selected.push('instagramStory');saveDraft();shell();return;}
     const label=document.querySelector('[data-story-label]');if(label&&key==='label')label.textContent=e.target.value||'Application Form';saveDraft();return;}
   if(e.target.dataset.storySize){const key=e.target.dataset.storySize,item=draft.instagram.story.layout[key];item.width=Number(e.target.value)/100;item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,item.x));updateStoryItem(key);saveDraft();return;}
@@ -657,12 +667,20 @@ document.addEventListener('keydown', e => {
 document.addEventListener('toggle', event => { if (event.target.matches?.('details[data-run-id]')) runExpansion.set(event.target.dataset.runId, event.target.open); }, true);
 function renderActivity() {
   const el = document.querySelector('#activity-runs');
-  if (el) el.innerHTML = renderRuns();
+  if(!el)return;
+  const y=window.scrollY,x=window.scrollX;
+  const anchor=[...el.children].find(card=>card.getBoundingClientRect().bottom>0),id=anchor?.dataset.runId,top=anchor?.getBoundingClientRect().top;
+  const html=renderRuns();if(el.dataset.rendered===html)return;el.dataset.rendered=html;el.innerHTML=html;
+  const next=id?el.querySelector('[data-run-id="'+id+'"]'):null;
+  window.scrollTo({left:x,top:next?y+next.getBoundingClientRect().top-top:y,behavior:'instant'});
 }
 function applyStatus(data) {
   const changedConnections = JSON.stringify(state.login.items) !== JSON.stringify(data.login.items);
+  const changedBusy=state.workerBusy!==data.workerBusy;
   const changedRuns = JSON.stringify(state.runs) !== JSON.stringify(data.runs);
-  state.runs = data.runs; state.login = data.login; state.workerBusy = data.workerBusy; state.manychatNextReplies = data.manychatNextReplies;
+  state.runs = data.runs; state.login = data.login; state.workerBusy = data.workerBusy; state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
+  const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
+  if(musicPickerOpen&&data.androidProgress?.picker){const label=document.querySelector('#music-state');if(label)label.textContent=data.androidProgress.message;}
   if (data.config) {
     state.config = data.config;
     document.querySelectorAll('#settings-form input[name], #settings-form textarea[name]').forEach(input => {
@@ -670,7 +688,8 @@ function applyStatus(data) {
       const [id, key] = input.name.split('.'); input.value = state.config.platforms[id]?.[key] ?? '';
     });
   }
-  if (view === 'activity') renderActivity();
+  if (view === 'activity'&&(changedRuns||changedBusy)) renderActivity();
+  renderAndroidProgress();
   if (view === 'settings') {
     for (const p of PLATFORMS) { const el = document.querySelector(`#login-status-${p.id}`); if (el) el.innerHTML = loginStatus(p.id); }
     const busy = workerBusy();
@@ -680,7 +699,7 @@ function applyStatus(data) {
     const next = document.querySelector('[data-action="continue-compose"]'); if (next) next.disabled = busy || !verifiedDestinations().length;
     const count = document.querySelector('#verified-count'); if (count) count.textContent = `${verifiedDestinations().length} of ${PLATFORMS.length} connected`;
   }
-  if (view === 'compose' || view === 'preview') { const bar = document.querySelector('.actionbar'); if (bar) { const container = document.createElement('div'); container.innerHTML = actionbar(); bar.replaceWith(container.firstElementChild); } }
+  if ((view === 'compose' || view === 'preview')&&(changedRuns||changedBusy||changedConnections)) { const bar = document.querySelector('.actionbar'); if (bar) { const container = document.createElement('div'); container.innerHTML = actionbar(); bar.replaceWith(container.firstElementChild); } }
   if (changedConnections || changedRuns) { readinessVersion++; remoteReadiness = null; reviewValid = false; renderReadiness(); }
 }
 function setConnected(value) {
@@ -696,7 +715,7 @@ function connect() {
   events.onerror = () => setConnected(false);
   events.addEventListener('expired', showLogin);
   // Polling also works through proxies that do not support event streams (e.g. quick tunnels).
-  pollTimer = setInterval(() => refresh().catch(() => setConnected(false)), 5000);
+  pollTimer = setInterval(() => {if(events?.readyState!==EventSource.OPEN)refresh().catch(() => setConnected(false));}, 5000);
 }
 async function load() {
   const data = await api('/api/bootstrap'); state = data;
@@ -707,7 +726,7 @@ async function load() {
   shell(); connect();
 }
 function showLogin() {
-  events?.close(); clearInterval(pollTimer); connected = false; mode = 'TEST'; if (modal.open) modal.close();
+  events?.close(); clearInterval(pollTimer); androidProgressDialog?.close();document.querySelector('#android-progress-pill')?.remove();connected = false; mode = 'TEST'; if (modal.open) modal.close();
   app.innerHTML = `<div class="signin"><div><form class="panel signin-card" id="signin-form"><div class="brand"><div class="brand-mark">G</div><div><div class="brand-title">Social Studio</div><div class="brand-caption">GO CLASSES</div></div></div><h1>A little more connected.</h1><p>Sign in to your company publishing workspace.<br>Your next great post starts here.</p><label class="field"><span>Workspace password</span><input name="password" type="password" autocomplete="current-password" required autofocus></label><div id="signin-error" class="dialog-error" role="alert"></div><button class="button primary" type="submit">Enter workspace ${icon('arrow')}</button></form><div class="signin-credit">Designed &amp; developed by Mrinal · © 2026</div></div></div>`;
   document.querySelector('#signin-form').onsubmit = async e => {
     e.preventDefault(); const button = e.target.querySelector('button'); button.disabled = true;
@@ -724,16 +743,16 @@ try {
   document.querySelector('#reload-app').onclick = () => location.reload();
 }
 
-let musicPickerOpen=false;
 async function musicDialog(){
   if(workerBusy())return toast('Finish the current operation first.',true);
+  const images=platformMedia('instagram');if(!images.length)return toast('Upload and select Instagram images first.',true);
   musicPickerOpen=true;let pickerOwned=false,pickerOpening=true;
-  showDialog('Instagram music','<p id="music-state" role="status">Opening your Instagram library...</p><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results"></div>','<button class="button" data-music-close>Cancel</button>');
+  showDialog('Instagram music','<p id="music-state" role="status">Opening your images in Instagram. This can take a few minutes on a slow PC...</p><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results"></div>','<button class="button" data-music-close>Cancel</button>');
   const close=async()=>{if(pickerOpening){document.querySelector('#music-state').textContent='Wait for the Instagram library to open.';return;}if(!pickerOwned){musicPickerOpen=false;modal.close();await refresh();shell();return;}try{await api('/api/instagram/music/close',{method:'POST',body:{}});musicPickerOpen=false;modal.close();await refresh();shell();}catch(e){document.querySelector('#music-state').textContent=e.message;}};
   modal.querySelector('[data-music-close]').onclick=close;
   modal.oncancel=e=>{if(musicPickerOpen){e.preventDefault();close();}};
   const results=data=>{
-    document.querySelector('#music-state').textContent=data.results.length?'Select a song':document.querySelector('#music-query').value.trim()?'No songs found':'Search by song or artist';
+    document.querySelector('#music-state').textContent=data.results.length?(document.querySelector('#music-query').value.trim()?'Select a song':'Recommended for your images'):document.querySelector('#music-query').value.trim()?'No songs found':'Search by song or artist';
     document.querySelector('#music-results').innerHTML=data.results.map(track=>'<div class="ig-song"><button type="button" class="ig-song-listen" data-music-preview="'+escape(track.key)+'" aria-label="Listen to '+escape(track.title)+' on the worker PC" title="Listen on the worker PC">'+icon('play')+'</button><button type="button" class="ig-song-select" data-music-key="'+escape(track.key)+'"><span><strong>'+escape(track.title)+'</strong><small>'+escape(track.artist)+'</small></span><small>'+escape(track.length)+'</small></button></div>').join('');
     for(const button of modal.querySelectorAll('[data-music-preview]'))button.onclick=async()=>{
       modal.querySelectorAll('button,input').forEach(el=>el.disabled=true);
@@ -747,8 +766,8 @@ async function musicDialog(){
     };
   };
   try{
-    const opened=await api('/api/instagram/music/open',{method:'POST',body:{postUrl:draft.instagram.story.sourcePostUrl||undefined}});pickerOwned=true;pickerOpening=false;results(opened);
-    modal.querySelector('#music-search-form button').disabled=false;
+    const opened=await api('/api/instagram/music/open',{method:'POST',body:{mediaIds:images.map(image=>image.id)}});pickerOwned=true;pickerOpening=false;results(opened);
+    modal.querySelector('#music-search-form button').disabled=false;document.querySelector('#music-query').focus({preventScroll:true});
     modal.querySelector('#music-search-form').onsubmit=async e=>{
       e.preventDefault();const form=e.target,button=form.querySelector('button');button.disabled=true;document.querySelector('#music-state').textContent='Searching Instagram...';
       try{results(await api('/api/instagram/music/search',{method:'POST',body:{query:document.querySelector('#music-query').value}}));}catch(e){document.querySelector('#music-state').textContent=e.message;}finally{button.disabled=false;}
@@ -765,7 +784,7 @@ function moveStoryItem(key,x,y){
 function bindStoryGestures(){
   for(const canvas of document.querySelectorAll('[data-ig-canvas]')){
     const layout=JSON.parse(canvas.dataset.igLayout);if(canvas.dataset.igPhoto)canvas.style.setProperty('--story-image','url("'+canvas.dataset.igPhoto+'")');
-    for(const key of ['card','link']){const el=canvas.querySelector('[data-ig-item="'+key+'"]'),item=layout[key];el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
+    for(const key of ['card','link']){const el=canvas.querySelector('[data-ig-item="'+key+'"]'),item=layout[key];if(!el)continue;el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
   }
 
   for(const el of document.querySelectorAll('[data-story-item]')){
@@ -786,4 +805,40 @@ function bindStoryGestures(){
 function latestStoryPreview(){
   const run=state.runs.find(run=>JSON.stringify(run.instagram?.story)===JSON.stringify(draft.instagram.story)&&run.instagram?.music?.selection?.id===draft.instagram.music.selection?.id&&run.items.some(item=>item.id==='instagramStory'&&item.screenshots?.length));
   const item=run?.items.find(item=>item.id==='instagramStory');return item?.screenshots.find(s=>s.label==='story-preview')?.url||item?.screenshots.at(-1)?.url;
+}
+
+function renderAndroidProgress(){
+  const run=activeRun(),item=run?.items.find(item=>(item.id==='instagramStory'||item.id==='instagram'&&run.instagram?.music?.enabled)&&(item.status==='running'||item.status==='queued'&&/dedicated Android/.test(item.message||'')));
+  let pill=document.querySelector('#android-progress-pill');
+  if(!item){androidProgressDialog?.close();pill?.remove();return;}
+  const key=run.id+':'+item.id;
+  if(!androidProgressDialog){
+    androidProgressDialog=document.createElement('dialog');androidProgressDialog.id='android-progress';androidProgressDialog.className='android-progress-dialog';androidProgressDialog.setAttribute('aria-labelledby','android-progress-title');document.body.append(androidProgressDialog);
+    androidProgressDialog.innerHTML='<div class="android-progress-heading"><span class="android-spinner" aria-hidden="true"></span><h2 id="android-progress-title">Instagram on Android</h2></div><p id="android-step" role="status"></p><p class="android-progress-note">The emulator may take a few minutes. You can keep using the workspace.</p><div class="android-progress-meta"><span id="android-run-mode"></span><span id="android-elapsed"></span></div><div class="android-progress-actions"><button class="button" id="android-progress-hide">Keep in background</button><button class="button subtle" data-control="stop">Stop safely</button></div>';
+    const hide=()=>{androidProgressDismissed=androidProgressKey;androidProgressDialog.close();};androidProgressDialog.querySelector('#android-progress-hide').onclick=hide;androidProgressDialog.oncancel=e=>{e.preventDefault();hide();};
+    setInterval(()=>{const clock=androidProgressDialog.querySelector('#android-elapsed');if(clock?.dataset.startedAt)clock.textContent=elapsed(clock.dataset.startedAt);},1000);
+  }
+  androidProgressKey=key;
+  androidProgressDialog.querySelector('#android-step').textContent=item.message||'Connecting to the dedicated emulator...';
+  androidProgressDialog.querySelector('#android-run-mode').textContent=run.mode==='TEST'?'TEST - stops before sharing':'LIVE - publication authorized';
+  const clock=androidProgressDialog.querySelector('#android-elapsed');clock.dataset.startedAt=item.startedAt||run.createdAt;clock.textContent=elapsed(clock.dataset.startedAt);
+  if(!pill){pill=document.createElement('button');pill.id='android-progress-pill';pill.className='button android-progress-pill';pill.innerHTML='<span class="android-spinner" aria-hidden="true"></span> Instagram progress';pill.onclick=()=>{androidProgressDismissed='';androidProgressDialog.showModal();};document.body.append(pill);}
+  if(androidProgressDismissed!==key&&!modal.open&&!androidProgressDialog.open)androidProgressDialog.showModal();
+}
+
+async function updatesDialog(){
+  let update=await api('/api/updates');
+  const draw=()=>{
+    showDialog('App updates','<p id="update-message" role="status">'+escape(update.message||'Check for the latest version')+'</p>'+(update.notes?'<pre class="update-notes">'+escape(update.notes)+'</pre>':'')+'<small class="text-muted">Created by Mrinal'+(update.revision?' &middot; '+escape(update.revision.slice(0,8)):'')+'</small><p id="update-error" role="alert"></p>',(update.supported?'<button class="button" id="check-app-updates">Check for updates</button>':'')+(update.available?'<button class="button primary" id="apply-app-update" '+(workerBusy()?'disabled':'')+'>Update now</button>':'')+'<button class="button subtle" data-dialog-close>Close</button>');
+    const check=document.querySelector('#check-app-updates');if(check)check.onclick=async()=>{check.disabled=true;document.querySelector('#update-message').textContent='Checking GitHub...';try{update=await api('/api/updates/check',{method:'POST',body:{}});draw();}catch(e){document.querySelector('#update-error').textContent=e.message;check.disabled=false;}};
+    const apply=document.querySelector('#apply-app-update');if(apply)apply.onclick=async()=>{
+      try{localStorage.setItem('mrinal.social-studio.draft',JSON.stringify(draft));await api('/api/updates/apply',{method:'POST',body:{}});modal.querySelectorAll('button').forEach(button=>button.disabled=true);document.querySelector('#update-message').textContent='Preparing update. Your drafts and social logins will be kept.';
+        const expected=update.target;
+        const timer=setInterval(async()=>{
+          try{const session=await api('/api/session');if(session.revision===expected){clearInterval(timer);location.reload();return;}if(!session.authenticated){clearInterval(timer);showLogin();return;}const next=await api('/api/updates');if(next.phase==='error'){clearInterval(timer);update=next;draw();}else{const label=document.querySelector('#update-message');if(label)label.textContent=next.message;}}
+          catch{const label=document.querySelector('#update-message');if(label)label.textContent='Restarting Social Studio...';}
+        },2000);
+      }catch(e){document.querySelector('#update-error').textContent=e.message;apply.disabled=false;}
+    };
+  };draw();
 }

@@ -31,17 +31,17 @@ export function instagramOptions(value={}) {
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid Instagram options.');
   const music=value.music||{},story=value.story||{};
   if(typeof music!=='object'||typeof story!=='object'||Array.isArray(music)||Array.isArray(story))throw new Error('Invalid Instagram options.');
-  if(music.enabled!==undefined&&typeof music.enabled!=='boolean'||story.enabled!==undefined&&typeof story.enabled!=='boolean')throw new Error('Invalid Instagram option switch.');
+  if(music.enabled!==undefined&&typeof music.enabled!=='boolean'||story.enabled!==undefined&&typeof story.enabled!=='boolean'||story.linkEnabled!==undefined&&typeof story.linkEnabled!=='boolean')throw new Error('Invalid Instagram option switch.');
   const selection=music.selection;
-  if((music.enabled||story.enabled)&&(!selection||typeof selection.id!=='string'||!/^[a-f0-9-]{36}$/.test(selection.id)))throw new Error('Instagram: choose a song from the Android music picker.');
+  if((music.enabled)&&(!selection||typeof selection.id!=='string'||!/^[a-f0-9-]{36}$/.test(selection.id)))throw new Error('Instagram: choose a song from the Android music picker.');
   const source=typeof story.sourcePostUrl==='string'?story.sourcePostUrl.trim():'';
   if(source&&!instagramPostUrl(source))throw new Error('Instagram Story: use an exact Instagram post URL.');
-  return {music:{enabled:music.enabled===true,...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
+  return {music:{enabled:music.enabled===true,...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
 }
 export function storyErrors(story={},selected=[]) {
   const errors=[];
-  if(!storyUrl(story.url))errors.push('Instagram Story: choose or enter an HTTP(S) link.');
-  if(typeof story.label!=='string'||!story.label.trim()||[...story.label.trim()].length>20)errors.push('Instagram Story: use a button label of 1-20 characters.');
+  if(story.linkEnabled!==false&&!storyUrl(story.url))errors.push('Instagram Story: choose or enter an HTTP(S) link.');
+  if(story.linkEnabled!==false&&(typeof story.label!=='string'||!story.label.trim()||[...story.label.trim()].length>20))errors.push('Instagram Story: use a button label of 1-20 characters.');
   if(!selected.includes('instagram')&&!instagramPostUrl(story.sourcePostUrl))errors.push('Instagram Story: include the feed post or enter its exact published URL.');
   if(selected.includes('instagram')&&story.sourcePostUrl)errors.push('Instagram Story: clear the existing post URL to share the new feed post.');
   try{storyLayout(story.layout);}catch(e){errors.push(e.message);}
@@ -49,5 +49,5 @@ export function storyErrors(story={},selected=[]) {
 }
 export function importStory(captions) {
   const raw=captions.instagramStory||'',link=storyLinks({instagramStory:raw})[0];
-  return {enabled:Boolean(raw.trim()),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
+  return {enabled:Boolean(raw.trim()),linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
 }

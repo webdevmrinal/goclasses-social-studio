@@ -18,7 +18,7 @@ const server=app.listen(0,'127.0.0.1');await once(server,'listening');const orig
 const browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
 await page.route('**/api/instagram/music/**',route=>{
-  const endpoint=route.request().url().split('/').at(-1);
+  const endpoint=route.request().url().split('/').at(-1);if(endpoint==='open')assert.equal(route.request().postDataJSON().mediaIds.length,1);
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(endpoint==='select'?{selection}:endpoint==='close'?{ok:true}:{results:[selection]})});
 });
 try{
@@ -33,9 +33,12 @@ try{
   assert.equal(await page.locator('[data-ig-field="story.label"]').inputValue(),'Application Form');
   assert.equal(await page.locator('[data-ig-field="story.url"]').inputValue(),'https://www.goclasses.in/apply');
   assert.equal(await page.locator('[data-ig-panel="feed"]').isVisible(),false);
+  await page.locator('[data-ig-panel="story"] [data-ig-field="music.enabled"]').check();
   await page.locator('[data-ig-panel="story"] [data-ig-music]').click();
   await page.locator('[data-music-preview]').click();await page.getByText('Playing on the worker PC',{exact:true}).waitFor();await page.locator('[data-music-key]').click();await page.locator('#modal').waitFor({state:'hidden'});
   assert.match(await page.locator('[data-ig-panel="story"] .ig-music').innerText(),/Fixture song/);
+  await page.locator('[data-ig-field="story.linkEnabled"]').uncheck();assert.equal(await page.locator('[data-story-item="link"]').count(),0);assert.equal(await page.locator('[data-ig-field="story.url"]').count(),0);
+  await page.locator('[data-ig-field="story.linkEnabled"]').check();
   const card=page.locator('[data-story-item="card"]'),link=page.locator('[data-story-item="link"]');
   const start=await card.evaluate(e=>parseFloat(e.style.top));await card.focus();await card.press('ArrowUp');assert.equal(await card.evaluate(e=>parseFloat(e.style.top)),start-1);
   const b=await link.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2,b.y+b.height/2-20);await page.mouse.up();

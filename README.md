@@ -4,17 +4,27 @@ Created by **Mrinal**. A responsive, Apple-inspired workspace for preparing and 
 
 ## Start on Windows or macOS
 
-Install [Node.js 22 LTS or newer](https://nodejs.org/) first, then open a terminal in this folder:
+Install [Node.js 22 or newer](https://nodejs.org/) and [Git](https://git-scm.com/downloads) once. On each teammate's Windows PC or Mac, clone this public repository:
 
 ```sh
-npm install
-npm run setup
+git clone https://github.com/webdevmrinal/goclasses-social-studio.git
+cd goclasses-social-studio
 npm start
 ```
 
-Open **http://localhost:3000**. After the first setup, just run `npm start`, or use `start-windows.cmd` / `bash start-macos.command`. To make the Mac launcher double-clickable, first run `chmod +x start-macos.command`. The server serves the interface directly: no separate build, frontend process, account tokens, or paid API is needed.
+After cloning, **`npm start` is the only launch command**. It installs locked dependencies and the automation browser when needed, then opens the worker at **http://localhost:3000**. Keep the terminal open. `start-windows.cmd` and `bash start-macos.command` use the same launcher. Each copy has its own social logins, connections and local drafts; teammates sign in on their own computer.
 
-The interface works on desktop, tablet, and mobile browsers. Browser automation runs on the **Windows or Mac worker computer**, which needs to stay awake with its desktop available. A phone controls that worker; it does not install Node.js or run Chromium itself.
+The interface works on desktop, tablet and mobile browsers. Browser automation runs on the computer hosting that copy, which must stay awake. **Android music and shared-post Stories currently need the configured Windows emulator. Mac copies use browser feed posting with Add music off.** A Mac Android worker has not been set up or tested in this project.
+
+### Updates from Mrinal
+
+The launcher checks this copy's `origin` branch at startup and every ten minutes. You can also click **Updates / Check for updates**. When a newer revision is available, click **Update now**. Finish or stop current runs and close the music picker first.
+
+The new code is checked out separately, dependencies are installed, and JavaScript/import checks run before the current app closes. The launcher restarts into the new version only when preparation succeeds, and restores the previous version if the new server fails to start. Social profiles, uploads, run history and `.env` stay in the original copy; browser drafts stay in local storage. Shared-workspace users may need to sign in again after the server restarts. Your original Git checkout is not reset or overwritten, and local code changes block installation. Saved versions live in the ignored `.studio` directory.
+
+To publish a fix from Mrinal's development checkout, commit it and push `main` to **https://github.com/webdevmrinal/goclasses-social-studio**. Teammates do not need to run `git pull`. The app never installs updates automatically. If you launch with `npm run dev`, restart once with `npm start` to use the updater.
+
+This checkout uses `origin` and its current branch by default. `UPDATE_BRANCH=main` in `.env` can pin the update branch. A ZIP download without Git history cannot check for updates; clone the repository for this workflow. Mrinal's visible authorship and LICENSE remain in every version. Because the repository is public, its source can be viewed and copied.
 
 ## First use
 
@@ -66,7 +76,7 @@ The interface uses locally served [Web Awesome](https://webawesome.com/docs/) co
 
 ## Experimental Instagram music test (Windows)
 
-Instagram now has **Feed / Story** sub-tabs in Compose. Choose a song from the signed-in Android account's actual music library. Feed music uses the dedicated Windows Android worker; feed posts without music retain the web flow. This native integration remains experimental: run TEST and inspect the native preview before authorizing LIVE with POST.
+Instagram has **Feed / Story** sub-tabs in Compose. **Add music** is off by default. Upload and select the Instagram images, turn it on, then choose a song from recommendations in the signed-in Android account's actual photo editor. This uses the current upload rather than an older published post. Search and listening are available in the same picker; listening plays on the worker PC. Closing the picker discards only its owned photo draft and removes its verified temporary copies. Feed music uses the dedicated Windows Android worker; feed posts without music retain the web flow. This native integration remains experimental: run TEST and inspect the native preview before authorizing LIVE with POST.
 
 On the configured test computer, double-click **start-android-test.cmd** or run `npm run android:start`. The emulator, SDK and Appium tools live under `%LOCALAPPDATA%\GoClassesSocialStudio\android-worker`, separately from the app's browser profiles. Google Play and Instagram sign-in happen inside that emulator; keep passwords and login codes there. Install Instagram from [its official Play Store listing](https://play.google.com/store/apps/details?id=com.instagram.android).
 
@@ -88,7 +98,7 @@ Authenticated rehearsal on **19 October 2026**, Instagram **451.0.0.53.80**, And
 - Chose **altitude (higher purpose)** by **Uppermost** for the rehearsal. Reopened the music editor and confirmed the exact title and artist. Changing the native duration picker from 30 to **29 seconds** persisted after reopening. Directly setting the number-picker text did not persist, so it must not be treated as a successful duration change.
 - Reached **New post** review with both photos, the exact multiline test caption, song title and artist present together. The rehearsal helper refused final **Share/Post** controls; **Share** was never clicked. Backed out, used **Start over** to discard only this rehearsal draft, and returned to the same account with its post count unchanged at **1,998**.
 
-Native text entry and Android's hardware keyboard device were verified. Mrinal confirmed physical PC keyboard typing in Instagram Search after the final emulator restart. The Compose picker is now connected to the run queue. Song IDs are issued by this worker and tied to the configured Instagram account. The worker reopens the same native search result, checks title and artist, selects a 30-second feed clip, reads its native suggested segment, and verifies caption and image previews again before the single publication boundary. Custom clip-start editing is not exposed in this version. Real public feed/Story submission and its acknowledgement have not been exercised during development; missing confirmation is uncertain and never automatically retried.
+Native text entry and Android's hardware keyboard device were verified. Mrinal confirmed physical PC keyboard typing in Instagram Search after the final emulator restart. The Compose picker is now connected to the run queue. Song IDs are issued by this worker and tied to the configured Instagram account. The worker reopens the same native search result, checks title and artist, selects a 30-second feed clip, reads its native suggested segment, and verifies caption and image previews again before the single publication boundary. Music and the Story application link have independent switches. Turn off **Add a link** for a Story without a sticker. Story sharing still uses Android even when music is off; feed-only posting without music uses the faster browser path. Android runs show their current step and elapsed time in a dismissible progress dialog. Reopen it from the progress pill. Background ADB/Appium consoles are hidden, and a ready emulator skips repeated launcher and tuning calls. Custom clip-start editing is not exposed in this version. Real public feed/Story submission and its acknowledgement have not been exercised during development; missing confirmation is uncertain and never automatically retried.
 
 ## ManyChat
 
@@ -147,7 +157,7 @@ The app refuses shared binding or a configured public origin without a password 
 
 ## Editing each destination
 
-The workspace keeps secondary controls collapsed: account fields and manual sign-in are under **Settings**, per-platform selections and order are under **Edit images**, and per-file metadata cleaning, restore and download are under **Options**. Click a file’s metadata status for its full report. Run screenshots and full diagnostics are under **Details**. Posting errors, excluded destinations, retry actions and LIVE confirmation remain visible. Mrinal’s attribution stays in the sidebar and mobile header.
+The workspace keeps secondary controls collapsed: account fields and manual sign-in are under **Settings**, per-platform selections and order are under **Edit images**, and per-file restore and download are under **Options**. Images show a visible **AI metadata / Origin metadata / Clean** chip, and detected origin metadata gets a direct **Clean metadata** action. Click a file’s metadata status for its full report. Run screenshots and full diagnostics are under **Details**. Posting errors, excluded destinations, retry actions and LIVE confirmation remain visible. Mrinal’s attribution stays in the sidebar and mobile header.
 
 Upload up to ten originals to the shared library, then open each platform tab on the right. The tab shows exactly its own images, their numbered order, its caption and any blocking issues. Click thumbnails to choose images, use the order arrows to rearrange just that platform, and scroll the thumbnail strip or use the carousel arrows to inspect every image. **Clear** creates an empty selection; **Use all** restores the library order when it fits the platform limit. Selecting an image on WhatsApp replaces its prior image. X supports up to four. The image library scrolls independently when it is long. Metadata cleaning, restoring originals and Undo preserve destination assignments.
 
@@ -156,7 +166,7 @@ The appearance button in the top bar cycles **System → Dark → Light → Syst
 ## Queue behavior
 
 - Destinations run sequentially. Only one run or login check can use the shared browser at a time.
-- Activity shows compact expandable run cards with mode, time, caption summary, preparation/publication count and attention count. Expand a card for destination details, screenshots and retry controls. Expansion survives live status updates.
+- Activity shows compact expandable run cards with mode, time, caption summary, preparation/publication count and attention count. Expand a card for destination details, screenshots and retry controls. Expansion and the visible scroll position survive live status updates; starting a run opens Activity at the top.
 - **Pause** takes effect after the current destination; **Resume** continues the remaining queue.
 - **Stop** lets the current destination finish and marks the remaining queue Skipped. It cannot undo a publication already in progress.
 - **Restart failed** retries all failed destinations. Each failed row also has **Retry [destination]** for an individual rerun. Both preserve the saved caption and exact image selection/order, default to TEST, and require a new `POST` confirmation for LIVE. Successful items and unresolved outcomes cannot be selected for retry.
@@ -282,3 +292,6 @@ The worker uses only its named emulator and checks the account each time. Upload
 ## Attribution
 
 **Designed and developed by Mrinal.** The interface, sign-in screen, page metadata, exported reports, package author, source notices and LICENSE retain this credit. Internal company use and modification are permitted subject to preserving attribution; see [LICENSE](LICENSE). Attribution records authorship; software cannot technically prevent someone from removing a credit or making a false claim. Keep the original source and dated version history as additional evidence of authorship.
+
+
+Polish verification on **19 October 2026**: the uploaded-image music picker opened an isolated owned test image, loaded real Instagram recommendations, previewed and chose a track, then discarded its editor, removed its temporary copy and verified the configured profile again. A separate shared-post Story TEST with music and link both disabled reached Instagram-only audience review and returned `dry_run`. Neither rehearsal invoked a final Share action. The launcher was tested with a local Git origin through installation, restart and failed-start rollback while preserving user data. The UI fixtures verify metadata chips/direct cleaning, optional switches, scroll preservation, progress dismiss/reopen and individual retries. macOS hardware testing is still outstanding; native Android features remain Windows-only.

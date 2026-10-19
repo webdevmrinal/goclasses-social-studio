@@ -2,7 +2,7 @@
   "name": "goc-social-studio",
   "version": "1.0.0",
   "private": true,
-  "description": "GO Classes Social Studio — created by Mrinal",
+  "description": "GO Classes Social Studio \u00e2\u20ac\u201d created by Mrinal",
   "author": "Mrinal",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env server/index.js",
+    "start": "node studio.mjs",
     "dev": "node --watch --env-file-if-exists=.env server/index.js",
     "setup": "playwright install chromium",
     "test": "node --test tests/*.test.js",
@@ -26,7 +26,7 @@
     "test:destinations": "node tests/destinations-ui.js",
     "test:publications": "node tests/publication-smoke.js",
     "icons:build": "node scripts/build-icons.mjs",
-    "check": "node --check server/index.js && node --check client/app.js",
+    "check": "node --check server/index.js && node --check client/app.js && node --check studio.mjs && node --check scripts/studio-runner.mjs && node --check scripts/updates.mjs",
     "test:telegram": "node tests/telegram-smoke.js",
     "test:connections": "node tests/connections-ui.js",
     "android:status": "node scripts/android-worker.mjs status",
@@ -34,7 +34,9 @@
     "android:cold-start": "node scripts/android-worker.mjs cold-start",
     "android:stop": "node scripts/android-worker.mjs stop",
     "android:doctor": "node scripts/android-worker.mjs doctor",
-    "android:play-store": "node scripts/android-worker.mjs play-store"
+    "android:play-store": "node scripts/android-worker.mjs play-store",
+    "test:polish-ui": "node tests/polish-ui.js",
+    "test:updates": "node --test tests/updates.test.js && node tests/launcher-smoke.mjs"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

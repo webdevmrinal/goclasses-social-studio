@@ -90,16 +90,18 @@ export async function verifyNativeCaption(s,caption,music) {
   if(music&&(nodes.find(n=>n['resource-id']===nativeId('music_track_title'))?.text!==music.title||nodes.find(n=>n['resource-id']===nativeId('music_track_subtitle'))?.text!==music.artist))throw new InterventionError('The reviewed Instagram music changed.');
 }
 export async function discardPost(s,caption) {
-  for(let i=0;i<8;i++){
-    const nodes=await s.screen();
-    if(present(nodes,'profile_tab'))return;
+  for(let i=0;i<14;i++){
+    const nodes=(await s.screen()).filter(node=>node.displayed==='true');
     const editor=nodes.find(n=>n['resource-id']===nativeId('caption_input_text_view'));
     if(editor&&editor.text!==caption)throw new InterventionError('The Android draft was changed by someone. It was preserved.');
     if(nodes.some(n=>n.text==='Start over?'&&n['resource-id']===nativeId('action_sheet_header_text_view'))){
       await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('action_sheet_row_text_view'))+' and @text="Start over"]');continue;
     }
-    if(present(nodes,'new_post_title')&&present(nodes,'action_bar_cancel')){await s.clickId('action_bar_cancel');continue;}
-    if(present(nodes,'row_search_edit_text')||present(nodes,'bottom_sheet_done_button')||present(nodes,'media_thumbnail_tray_button')||editor){await s.request('/back','POST',{});continue;}
+    // Instagram retains the profile tab behind its music sheet. Close owned
+    // editors first; a visible background profile tab is not proof of cleanup.
+    if(nodes.some(n=>/music_browser_container|music_search_clips_landing_page_container|audio_browser_track_/.test(n['resource-id']||''))||present(nodes,'bottom_sheet_done_button')||present(nodes,'media_thumbnail_tray_button')||editor){await s.request('/back','POST',{});await new Promise(r=>setTimeout(r,300));continue;}
+    if(present(nodes,'new_post_title')&&present(nodes,'action_bar_cancel')){await s.clickId('action_bar_cancel');await new Promise(r=>setTimeout(r,300));continue;}
+    if(present(nodes,'profile_tab'))return;
     throw new InterventionError('The Android screen changed. Its draft was preserved for review.');
   }
   throw new InterventionError('Close the owned Android draft before starting another run.');

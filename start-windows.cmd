@@ -7,15 +7,8 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-if not exist node_modules (
-  echo Installing Social Studio...
-  call npm install
-  if errorlevel 1 goto failed
-  call npm run setup
-  if errorlevel 1 goto failed
-)
 echo Open http://localhost:3000 after the server starts.
-call npm start
+node studio.mjs
 if errorlevel 1 goto failed
 exit /b 0
 :failed

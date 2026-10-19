@@ -30,20 +30,27 @@ export class InstagramAndroidWorker {
   }
   async close(){
     clearTimeout(this.timer);
-    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;}
+    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;this.progressState=null;}
   }
-  async closePicker(){if(this.picker)await discardStory(this.s);}
+  async closePicker(){if(!this.picker)return;if(this.picker.album){await discardPost(this.s,'');await removeAlbum(this.s,this.picker.album);}else if(this.picker.owned)await discardPost(this.s,'');}
   expirePicker(){clearTimeout(this.timer);this.timer=setTimeout(()=>{if(this.operation)this.expirePicker();else this.cancelPicker().catch(()=>{});},5*60*1000);this.timer.unref();}
-  async startPicker(config,postUrl){
-    this.opening=true;
+  progress(message){this.progressState={picker:true,message,at:new Date().toISOString()};this.onProgress?.();}
+  async startPicker(config,files){
+    if(!Array.isArray(files)||!files.length)throw new Error('Upload the Instagram images before choosing a song.');
+    this.opening=true;this.progress('Connecting to Android and checking the account...');
     try{await this.open(config);}catch(e){this.opening=false;throw e;}
     try{
-      this.picker={account:config.platforms.instagram.handle,query:'',results:[]};
-      await openRepost(this.s,postUrl);
-      await this.s.click('id','music_button');
-      await this.s.until(n=>n.some(x=>x['resource-id']===nativeId('row_search_edit_text')),'Instagram music is unavailable.');
-      this.picker.results=musicResults(await this.s.screen());
-      this.expirePicker();
+      this.picker={account:config.platforms.instagram.handle,query:'',results:[],owned:false};
+      this.progress('Copying and verifying your uploaded images...');
+      this.picker.album=await pushAlbum(this.s,files);this.s.uploadAlbum=this.picker.album;
+      this.progress('Opening your images in Instagram...');
+      await openGallery(this.s,this.picker.album.folder);this.picker.owned=true;
+      await selectAlbumPhotos(this.s,this.picker.album);
+      this.progress('Loading Instagram music recommendations for this post...');
+      await openMusicLibrary(this.s);
+      let previous='',stable=0;
+      this.picker.results=await this.s.until(nodes=>{const rows=musicResults(nodes),stamp=JSON.stringify(rows);stable=stamp===previous?stable+1:0;previous=stamp;return rows.length&&stable>=1?rows:false;},'Instagram recommendations did not load. Close the picker and try again.');
+      this.progress('Recommendations ready');this.expirePicker();
       return {results:this.picker.results};
     }catch(e){await this.closePicker().catch(()=>{});await this.close();throw e;}finally{this.opening=false;}
   }
@@ -97,7 +104,7 @@ export class InstagramAndroidWorker {
   }
   async checkAccount(config){try{await this.open(config);}finally{await this.close();}}
   async run(ctx){
-    const options=instagramOptions(ctx.instagram),music=this.selection(options.music.selection,ctx.config.platforms.instagram.handle);
+    const options=instagramOptions(ctx.instagram),music=options.music.enabled?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
     await ctx.step('Checking the dedicated Android Instagram account...');
     const s=await this.open(ctx.config,ctx.signal);
     let submitted=false,album,owned=false;
@@ -119,12 +126,13 @@ export class InstagramAndroidWorker {
         await ctx.step('Opening the exact feed post as a Story...');
         await openRepost(s,url);owned=true;
         await ctx.step('Applying the reviewed shared-post card layout...');
-        await placeRepost(s,options.story.layout);
-        await ctx.step('Adding the selected Story music and link...');
-        const audio=await this.applyStoryMusic(s,music);
-        const stash=await stashRepost(s);
-        await addStoryLink(s,options.story);
-        await restoreRepost(s,stash,options.story.layout);
+        await placeRepost(s,options.story.layout,{hasLink:options.story.linkEnabled});
+        let audio=null;
+        if(music){await ctx.step('Adding the selected Story music...');audio=await this.applyStoryMusic(s,music);}
+        if(options.story.linkEnabled){
+          await ctx.step('Placing the reviewed Story link...');
+          const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
+        }
         const evidence=await instagramOnlyStoryAudience(s);
         await ctx.recordPreparation({kind:'instagramStory',testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story});
         await snapshot('story-preview');

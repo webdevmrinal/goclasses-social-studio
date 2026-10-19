@@ -4,7 +4,7 @@ import { validateManychatDraft } from './manychat.js';
 import { mediaFor } from './media.js';
 import { instagramPostUrl } from './manychat.js';
 import { DEFAULT_STORY_LAYOUT } from './instagram.js';
-const instagramKey=(value,id)=>{const song=value?.music?.selection,track=song?.key||song?.id||'';if(id==='instagram')return JSON.stringify({enabled:value?.music?.enabled===true,track:value?.music?.enabled?track:''});const story=value?.story||{};return JSON.stringify({track,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.url?.trim()||'',label:story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});};
+const instagramKey=(value,id)=>{const song=value?.music?.selection,track=song?.key||song?.id||'';if(id==='instagram')return JSON.stringify({enabled:value?.music?.enabled===true,track:value?.music?.enabled?track:''});const story=value?.story||{};return JSON.stringify({track:value?.music?.enabled?track:'',musicEnabled:value?.music?.enabled===true,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});};
 export function setupIssues(config, id) {
   if(id==='instagramStory')id='instagram';
   const p = config?.platforms?.[id] || {};

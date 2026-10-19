@@ -96,7 +96,7 @@ async function launch(file, args, { visible = false, log } = {}) {
   let fd;
   try {
     if (log) fd = openSync(log, 'a');
-    const child = spawn(file, args, { env, cwd: automation, detached: true, windowsHide: !visible, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd] });
+    const child = spawn(file, args, { env, cwd: automation, detached: true, windowsHide: true, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd] });
     await once(child, 'spawn');
     child.unref();
     return child.pid;
@@ -182,7 +182,7 @@ async function start({ cold = false } = {}) {
     if (!await portAvailable(4731)) throw new Error('Port 4731 belongs to an unverified or unready service. It was left unchanged.');
     console.log('Starting the Android driver on loopback only...');
     runtime.appiumPid = await launch(process.execPath, [
-      appium, '--address', '127.0.0.1', '--port', '4731',
+      '--require', path.resolve('scripts/android-console.cjs'), appium, '--address', '127.0.0.1', '--port', '4731',
       '--use-drivers', 'uiautomator2', '--log-level', 'warn',
       '--log-no-colors', '--log', path.join(root, 'logs', 'appium.log')
     ]);

@@ -19,10 +19,10 @@ import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata
 import { mediaFor, selectionErrors } from '../shared/media.js';
 import { InstagramAndroidWorker } from './automation/instagram-android.js';
 import { instagramOptions } from '../shared/instagram.js';
-import { instagramBaseline } from './automation/instagram-reference.js';
 import { destinationReadiness } from '../shared/readiness.js';
+import { UpdateBridge } from './updates.js';
 
-export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {} } = {}) {
+export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, updateBridge = new UpdateBridge() } = {}) {
   await fs.mkdir(path.join(dataDir, 'uploads'), { recursive: true });
   await fs.mkdir(path.join(dataDir, 'incoming'), { recursive: true });
   const app = express();
@@ -36,7 +36,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     next();
   });
   app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); }, security.checkOrigin);
-  app.get('/api/session', (req, res) => res.json({ authenticated: security.authenticated(req), protected: security.enabled, author: 'Mrinal' }));
+  app.get('/api/session', (req, res) => res.json({ authenticated: security.authenticated(req), protected: security.enabled, author: 'Mrinal', revision:process.env.STUDIO_REVISION||'' }));
   app.post('/api/login', rateLimit({ windowMs: 15 * 60 * 1000, limit: 15, standardHeaders: 'draft-8', legacyHeaders: false }), security.login);
   app.use('/api', security.requireAuth);
   app.post('/api/logout', security.logout);
@@ -53,9 +53,20 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const queue = new Queue(browser, { dataDir, instagramWorker, ...queueOptions });
   queue.settings = config;
   await queue.init();
+  queue.updateState=updateBridge.state;
+  updateBridge.on('change',state=>{queue.updateState=state;queue.maintenance=['installing','restarting'].includes(state.phase);queue.emit('change',queue.state());});
+  app.use('/api',(req,res,next)=>queue.maintenance&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/updates')?res.status(409).json({error:'An app update is being prepared. Wait for it to finish.'}):next());
+  app.get('/api/updates',(req,res)=>res.json(updateBridge.state));
+  app.post('/api/updates/check',async(req,res)=>res.json(await updateBridge.request('check')));
+  app.post('/api/updates/apply',async(req,res)=>{
+    if(queue.active||queue.processing||queue.login.running||browser.manualProcess||instagramWorker.busy||queue.instagramWorker?.busy||queue.maintenance)return res.status(409).json({error:'Finish or stop the current run, login check or music picker before updating.'});
+    if(!updateBridge.state.available)return res.status(400).json({error:'Check for an available update first.'});
+    queue.maintenance=true;try{await updateBridge.request('apply');res.status(202).json({ok:true});}catch(error){queue.maintenance=false;throw error;}
+  });
+  instagramWorker.onProgress=()=>queue.emit('change',queue.state());
   queue.on('workerError', error => console.error('Worker error:', error));
   const xLength = text => twitterText.parseTweet(text).weightedLength;
-  app.get('/api/bootstrap', (req, res) => res.json({ config, media, ...queue.state(), author: 'Mrinal', protected: security.enabled }));
+  app.get('/api/bootstrap', (req, res) => res.json({ config, media, ...queue.state(), author: 'Mrinal', protected: security.enabled,revision:process.env.STUDIO_REVISION||'',capabilities:{instagramAndroid:process.platform==='win32'} }));
   app.get('/api/status', (req, res) => res.json(queue.state()));
   app.get('/api/events', (req, res) => {
     res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -131,7 +142,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const errors = validateDraft(draft, selectedMedia, xLength);
     if(draft.selected.some(id=>['instagram','instagramStory'].includes(id))){
       const options=instagramOptions({...draft.instagram,story:{...draft.instagram?.story,enabled:draft.selected.includes('instagramStory')}});
-      if(options.music.enabled||draft.selected.includes('instagramStory'))options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
+      if(process.platform!=='win32'&&(options.music.enabled||draft.selected.includes('instagramStory')))throw new Error('Android music and Story sharing need the configured Windows worker. Turn off music for fast browser feed posting on this Mac.');
+      if(options.music.enabled)options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
       draft.instagram=options;
     }
     if (draft.selected?.includes('manychat')) validateManychatDraft(draft.manychat, draft.captions?.manychat);
@@ -145,7 +157,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const selectedMedia = libraryFor(req.body);
     const destinations=destinationReadiness(req.body,selectedMedia,config,queue.login.items,xLength,queue.runs);
     for(const id of ['instagram','instagramStory']){
-      if(id==='instagram'?!req.body.instagram?.music?.enabled:!req.body.selected?.includes(id))continue;
+      if(process.platform!=='win32'&&(id==='instagramStory'&&req.body.selected?.includes(id)||id==='instagram'&&req.body.instagram?.music?.enabled)){destinations[id].ready=false;destinations[id].errors.push('Android music and Story sharing require the configured Windows worker.');}
+      if(!req.body.instagram?.music?.enabled||!req.body.selected?.includes(id))continue;
       try{instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
       catch(error){destinations[id].ready=false;destinations[id].errors.push(error.message);}
     }
@@ -183,12 +196,14 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const run = await queue.start({ draft: retryDraft, config, mode: req.body.mode || 'TEST', confirmation: req.body.confirmation, media: original.media, retryOf: original.id, sourceInstagramPublication });
     res.status(201).json({ id: run.id });
   });
-  const requireIdle=()=>{if(queue.active||queue.processing||queue.login.running||browser.manualProcess)throw new Error('Finish the current run or login check first.');};
+  const requireIdle=()=>{if(queue.maintenance||queue.active||queue.processing||queue.login.running||browser.manualProcess)throw new Error('Finish the current run or login check first.');};
   app.post('/api/instagram/music/open',async(req,res)=>{
     requireIdle();if(instagramWorker.busy)throw new Error('Close the existing music picker first.');
-    const page=await browser.page('instagram');
-    const url=req.body.postUrl||(await instagramBaseline(page.context(),config.platforms.instagram.handle))[0];
-    const result=await instagramWorker.startPicker(config,url);queue.emit('change',queue.state());res.json(result);
+    const images=libraryFor({mediaIds:req.body.mediaIds});
+    if(!images.length)throw new Error('Upload and select the Instagram images before choosing music.');
+    await verifyMediaIntegrity(images,dataDir);requireIdle();if(instagramWorker.busy)throw new Error('Close the existing music picker first.');
+    try{const result=await instagramWorker.startPicker(config,images.map(image=>path.join(dataDir,'uploads',image.filename)));res.json(result);}
+    finally{queue.emit('change',queue.state());}
   });
   app.post('/api/instagram/music/search',async(req,res)=>{requireIdle();res.json(await instagramWorker.query(req.body.query));});
   app.post('/api/instagram/music/preview',async(req,res)=>{requireIdle();res.json(await instagramWorker.preview(req.body.key));});
@@ -249,4 +264,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exit(0);
   };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
+  process.on('message',message=>{if(message.type==='studio-shutdown'&&!queue.active&&!queue.processing&&!queue.login.running&&!browser.manualProcess&&!queue.instagramWorker?.busy)shutdown();});
 }

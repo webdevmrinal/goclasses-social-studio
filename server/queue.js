@@ -36,7 +36,7 @@ export class Queue extends EventEmitter {
     await this.persist();
   }
   state() {
-    return { runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
+    return { update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
   }
   persist() {
     const snapshot = structuredClone(this.runs);
@@ -45,7 +45,7 @@ export class Queue extends EventEmitter {
   }
   async change() { await this.persist(); this.emit('change', this.state()); }
   async start({ draft, config, mode = 'TEST', confirmation, media, retryOf = null, sourceInstagramPublication }) {
-    if (this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
+    if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
     if (mode !== 'TEST' && mode !== 'LIVE') throw new Error('Invalid run mode.');
     if (mode === 'LIVE' && confirmation !== 'POST') throw new Error('Type POST to authorize this live run.');
     const run = {
@@ -280,7 +280,7 @@ export class Queue extends EventEmitter {
     }
   }
   async checkLogins(config, selected, saveDetected = async () => {}) {
-    if (this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');
+    if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');
     this.login = { running: true, items: { ...this.login.items } }; this.emit('change', this.state());
     try {
       for (const id of selected) {

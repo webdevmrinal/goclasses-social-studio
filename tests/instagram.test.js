@@ -13,12 +13,12 @@ import {defaults} from '../server/config.js';
 import {createApp} from '../server/index.js';
 import {InstagramAndroidWorker} from '../server/automation/instagram-android.js';
 import {AndroidSession,nativeId,nativeNodes,xpathLiteral} from '../server/automation/android-native.js';
-import {musicResults} from '../server/automation/native-music.js';
+import {musicResults,discardPost} from '../server/automation/native-music.js';
 const selection={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',key:'1072827201597383',title:'altitude (higher purpose)',artist:'Uppermost',query:'Uppermost altitude',account:'goclasses_cse',durationSeconds:30};
 const options=()=>({music:{enabled:true,selection},story:{enabled:true,url:'https://www.goclasses.in/apply',label:'Application Form',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)}});
 const browser={page:async()=>({isClosed:()=>true,close:async()=>{}})};
 const waitFor=async(fn)=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,10));}assert.fail('Queue did not settle');};
-test('repost Story requires a song, exact source dependency, valid link and bounded layout',()=>{
+test('repost Story validates enabled music/link options, exact source dependency and bounded layout',()=>{
   const value=options();assert.equal(instagramOptions(value).story.label,'Application Form');
   assert.deepEqual(storyErrors(value.story,['instagram','instagramStory']),[]);
   assert(storyErrors(value.story,['instagramStory']).some(e=>e.includes('exact published URL')));
@@ -28,9 +28,10 @@ test('repost Story requires a song, exact source dependency, valid link and boun
   value.story.url='javascript:alert(1)';value.story.label='x'.repeat(21);value.story.layout.link.y=1;
   assert.equal(storyErrors(value.story,['instagramStory']).length,3);
   assert.throws(()=>instagramOptions({music:{enabled:true,selection:{id:'fake'}}}),/choose a song/);
+  const optional=instagramOptions({music:{enabled:false},story:{enabled:true,linkEnabled:false}});assert.equal(optional.music.selection,undefined);assert.deepEqual(storyErrors(optional.story,['instagram','instagramStory']),[]);
 });
 test('a blocked optional Story does not block a feed-only review',()=>{
-  const value=options();delete value.music.selection;value.music.enabled=false;
+  const value=options();delete value.music.selection;value.music.enabled=false;value.story.url='';
   const draft={selected:['instagram'],captions:{instagram:'Hello'},instagram:value,mediaIds:['image']};
   assert.deepEqual(validateDraft(draft,[{id:'image'}]),[]);
   assert(destinationReadiness({...draft,selected:['instagram','instagramStory']},[{id:'image'}],{platforms:{instagram:{handle:'goclasses_cse'}}}).instagramStory.errors.length);
@@ -74,7 +75,7 @@ test('HTTP Story-only retries reuse the source post and cannot republish the suc
   const post=(url,body)=>fetch(origin+url,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(body)});
   try{
     const instagram=options();instagram.music.enabled=false;instagram.story.sourcePostUrl='https://www.instagram.com/p/EXACT123/';
-    const bad=await post('/api/runs',{draft:{selected:['instagramStory'],captions:{},mediaIds:[],instagram:{...instagram,music:{selection:{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}}}},mode:'TEST'});
+    const bad=await post('/api/runs',{draft:{selected:['instagramStory'],captions:{},mediaIds:[],instagram:{...instagram,music:{enabled:true,selection:{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}}}},mode:'TEST'});
     assert.equal(bad.status,400);assert.match((await bad.json()).error,/Choose the Instagram song again/);
     queue.runs=[{id:'original',status:'completed_with_errors',mode:'LIVE',captions:{instagram:'Already published'},media:[],mediaByPlatform:{instagram:[],instagramStory:[]},instagram,items:[{id:'instagram',status:'posted',publication:{postUrl:instagram.story.sourcePostUrl}},{id:'instagramStory',status:'failed'}]}];
     const response=await post('/api/runs/original/retry',{platform:'instagramStory',mode:'TEST'});assert.equal(response.status,201);
@@ -124,4 +125,12 @@ test('native account checks ignore hidden views and preserve visible user drafts
   fixture=make([node('story_share_controls_action_bar'),node('direct_external_share_container_view',{displayed:'false'})]);await assert.rejects(fixture.s.account(selection.account),/Close the unsent/);assert.deepEqual(fixture.calls,[]);
   fixture=make([node('direct_external_share_container_view'),node('row_search_edit_text',{class:'android.widget.EditText',text:'Search...'})]);await fixture.s.account(selection.account);assert.deepEqual(fixture.calls,['back','profile_tab']);
   fixture=make([node('music_browser_container')]);await assert.rejects(fixture.s.account(selection.account),/Close the unsent/);assert.deepEqual(fixture.calls,[]);
+});
+
+test('owned music cleanup dismisses retained editors before accepting a background profile tab',async()=>{
+ const node=(id,text='')=>({'resource-id':nativeId(id),displayed:'true',text});
+ const frames=[[node('profile_tab'),node('music_search_clips_landing_page_container')],[node('profile_tab'),node('media_thumbnail_tray_button')],[node('action_sheet_header_text_view','Start over?')],[node('profile_tab'),node('new_post_title'),node('action_bar_cancel')],[node('profile_tab')]];
+ let i=0;const calls=[],session={screen:async()=>frames[i],request:async path=>{calls.push(path);i++;},click:async()=>{i++;},clickId:async id=>{calls.push(id);i++;}};
+ await discardPost(session,'');assert.equal(i,4);assert.deepEqual(calls,['/back','/back','action_bar_cancel']);
+ await assert.rejects(discardPost({screen:async()=>[node('profile_tab'),node('caption_input_text_view','Human text')]},''),/changed by someone/);
 });
