@@ -88,7 +88,7 @@ Authenticated rehearsal on **19 October 2026**, Instagram **451.0.0.53.80**, And
 - Chose **altitude (higher purpose)** by **Uppermost** for the rehearsal. Reopened the music editor and confirmed the exact title and artist. Changing the native duration picker from 30 to **29 seconds** persisted after reopening. Directly setting the number-picker text did not persist, so it must not be treated as a successful duration change.
 - Reached **New post** review with both photos, the exact multiline test caption, song title and artist present together. The rehearsal helper refused final **Share/Post** controls; **Share** was never clicked. Backed out, used **Start over** to discard only this rehearsal draft, and returned to the same account with its post count unchanged at **1,998**.
 
-Native text entry and Android's hardware keyboard device were verified. Physical Windows keyboard forwarding still needs the operator's check. Exact clip-start positioning, repeatable media-identity verification, queue integration, native publication confirmation and recovery remain required before enabling Android LIVE posting. The rehearsal demonstrates native music selection; it does not yet add a music control to Compose.
+Native text entry and Android's hardware keyboard device were verified. Mrinal confirmed physical PC keyboard typing in Instagram Search after the final emulator restart. Exact clip-start positioning, repeatable media-identity verification, queue integration, native publication confirmation and recovery remain required before enabling Android LIVE posting. The rehearsal demonstrates native music selection; it does not yet add a music control to Compose.
 
 ## ManyChat
 
