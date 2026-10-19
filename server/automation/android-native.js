@@ -33,6 +33,27 @@ export async function connectAndroidDriver(create,reset){
     throw new InterventionError('The dedicated Android driver could not connect. Run android:start and try again.');
   }
 }
+const PHOTO_PROVIDER='com.google.android.providers.media.module';
+export function isPhotoAccessPicker(nodes){
+  const visible=nodes.filter(n=>n.displayed==='true'&&n.package===PHOTO_PROVIDER);
+  return visible.some(n=>n['resource-id']===PHOTO_PROVIDER+':id/privacy_text'&&n.text==='Select photos and videos you allow this app to access')&&visible.some(n=>n['resource-id']===PHOTO_PROVIDER+':id/button_add');
+}
+export function instagramOwnsPhotoPicker(activities){
+  const task=activities.match(/topDisplayFocusedRootTask=Task\{[^\r\n]*?#(\d+)\b[^\r\n]*?A=\d+:com\.instagram\.android\}/)?.[1];
+  const picker=activities.match(/topResumedActivity=ActivityRecord\{[^\r\n]*?com\.google\.android\.providers\.media\.module\/com\.android\.providers\.media\.photopicker\.PhotoPickerUserSelectActivity t(\d+)\}/)?.[1];
+  return Boolean(task&&picker===task);
+}
+export async function cancelInstagramPhotoAccess(s){
+  const nodes=await s.screen();if(!isPhotoAccessPicker(nodes))return false;
+  if(!instagramOwnsPhotoPicker(await s.adb(['shell','dumpsys','activity','activities'])))throw new InterventionError('The photo-access dialog could not be verified as belonging to Instagram. Close it in the emulator, then retry. Its selections were preserved.');
+  const cancel=nodes.filter(n=>n.displayed==='true'&&n.package===PHOTO_PROVIDER&&n.tag==='android.widget.ImageButton'&&n['content-desc']==='Cancel');
+  if(cancel.length!==1)throw new InterventionError('Close the Android photo-access dialog, then retry. No photo permissions were changed.');
+  // Cancel pending edits only. Never press Allow on a stale dialog, broaden
+  // permission, change its selected photos or dismiss the underlying post.
+  await s.click('xpath','//android.widget.ImageButton[@package="'+PHOTO_PROVIDER+'" and @content-desc="Cancel"]');
+  await s.until(next=>!isPhotoAccessPicker(next)&&next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Android photo access is still closing. Close that dialog in the emulator and retry.',15000);
+  return true;
+}
 export class AndroidSession {
   constructor({signal}={}) {
     this.signal=signal;
@@ -122,7 +143,10 @@ export class AndroidSession {
   async activate() {
     await this.request('/appium/device/activate_app','POST',{appId:'com.instagram.android'});
     // Activation can return while a low-memory emulator still shows its launcher.
-    await this.until(nodes=>nodes.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Instagram did not finish opening on Android. Open it in the emulator and try again.',90000);
+    await this.until(async nodes=>{
+      if(isPhotoAccessPicker(nodes)){await cancelInstagramPhotoAccess(this);return false;}
+      return nodes.some(n=>n.displayed==='true'&&n.package==='com.instagram.android');
+    },'Instagram did not finish opening on Android. Open it in the emulator and try again.',90000);
   }
   async account(expected) {
     await this.activate();
@@ -133,6 +157,7 @@ export class AndroidSession {
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
         await this.request('/back','POST',{});await delay(400);continue;
       }
+      if(current.some(n=>n['resource-id']===nativeId('new_post_title')||n['resource-id']===nativeId('gallery_folder_menu_tv')))throw new InterventionError('Instagram has an unfinished New post screen. Close it in the emulator, then retry. Your draft was preserved.');
       if(current.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Close the unsent Instagram Android draft before continuing.');
       if(current.some(n=>n['resource-id']===nativeId('row_feed_button_share'))&&!current.some(n=>n['resource-id']===nativeId('profile_tab'))){
         // A confirmed/public post viewer has no tab bar. Navigate to our own profile,

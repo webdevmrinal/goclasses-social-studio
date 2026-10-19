@@ -26,3 +26,5 @@
 .ig-alignment-tools{display:flex;justify-content:center;margin:-4px 0 20px}.ig-align-guide{position:absolute;pointer-events:none;z-index:5;background:#54d8ff;box-shadow:0 0 0 1px #001c3333,0 0 8px #54d8ff66}.ig-align-guide[hidden]{display:none}.ig-align-guide-x{top:10%;bottom:10%;width:1px}.ig-align-guide-y{left:4%;right:4%;height:1px}.ig-story-canvas.is-aligning [data-story-item]{transition:left .2s ease,top .2s ease}@media(prefers-reduced-motion:reduce){.ig-story-canvas.is-aligning [data-story-item]{transition:none}}
 
 .ig-alignment-tools [data-story-alignment]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+
+.ig-music-dialog #music-retry[hidden]{display:none}

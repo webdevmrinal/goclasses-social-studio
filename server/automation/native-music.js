@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
-import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
+import {nativeId,nativeBounds,xpathLiteral,isPhotoAccessPicker,cancelInstagramPhotoAccess} from './android-native.js';
 import {InterventionError} from './utils.js';
 const present=(nodes,name)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(name));
 export function musicResults(nodes) {
@@ -162,6 +162,7 @@ export async function verifyNativeCaption(s,caption,music) {
 export async function discardPost(s,caption) {
   for(let i=0;i<14;i++){
     const nodes=(await s.screen()).filter(node=>node.displayed==='true');
+    if(isPhotoAccessPicker(nodes)){await cancelInstagramPhotoAccess(s);continue;}
     const editor=nodes.find(n=>n['resource-id']===nativeId('caption_input_text_view'));
     if(editor&&editor.text!==caption)throw new InterventionError('The Android draft was changed by someone. It was preserved.');
     if(nodes.some(n=>n.text==='Start over?'&&n['resource-id']===nativeId('action_sheet_header_text_view'))){

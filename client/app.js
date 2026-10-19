@@ -750,15 +750,15 @@ async function musicDialog(){
   const images=platformMedia('instagram');if(!images.length)return toast('Upload and select Instagram images first.',true);
   musicPickerOpen=true;let pickerOwned=false,pickerOpening=true,busy=true,phase='opening',songs=[],playback=null,hasMore=true,started=Date.now(),progressStamp='';
   const skeletons=()=>Array.from({length:5},()=>'<div class="ig-song-skeleton" aria-hidden="true"><i></i><span></span><b></b></div>').join('');
-  showDialog('Instagram music','<div class="ig-emulator-sync is-busy" id="music-sync" aria-busy="true"><span class="ig-sync-orb" aria-hidden="true"></span><div><p id="music-state" role="status" aria-live="polite">Opening your images in Instagram...</p><small id="music-sync-hint">Connecting to the emulator</small></div><small id="music-elapsed"></small><span class="ig-sync-line" aria-hidden="true"></span></div><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required disabled><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results" aria-label="Instagram music results" aria-busy="true">'+skeletons()+'</div><div class="ig-music-pagination"><small id="music-count"></small><button class="button small" id="music-more" disabled>Load more</button></div><div id="music-player" class="ig-music-player" hidden></div>','<button class="button" data-music-close disabled>Cancel</button>');
+  showDialog('Instagram music','<div class="ig-emulator-sync is-busy" id="music-sync" aria-busy="true"><span class="ig-sync-orb" aria-hidden="true"></span><div><p id="music-state" role="status" aria-live="polite">Opening your images in Instagram...</p><small id="music-sync-hint">Connecting to the emulator</small></div><small id="music-elapsed"></small><span class="ig-sync-line" aria-hidden="true"></span></div><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required disabled><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results" aria-label="Instagram music results" aria-busy="true">'+skeletons()+'</div><div class="ig-music-pagination"><small id="music-count"></small><button class="button small" id="music-more" disabled>Load more</button></div><div id="music-player" class="ig-music-player" hidden></div>','<button class="button" id="music-retry" hidden>Try again</button><button class="button" data-music-close disabled>Cancel</button>');
   modal.classList.add('ig-music-dialog');
   const el=id=>modal.querySelector('#'+id),label=message=>{el('music-state').textContent=message;};
   const elapsedTimer=setInterval(()=>{if(!musicPickerOpen)return;const clock=el('music-elapsed');if(!clock){clearInterval(elapsedTimer);return;}const seconds=Math.floor((Date.now()-started)/1000);clock.textContent=busy?Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0'):'';},1000);
   const sync=(next,message)=>{
     phase=next;if(message)label(message);el('music-sync').dataset.phase=phase;el('music-sync').classList.toggle('is-busy',busy);el('music-sync').classList.toggle('is-playing',!busy&&Boolean(playback&&!playback.paused));el('music-sync').setAttribute('aria-busy',String(busy));
-    el('music-sync-hint').textContent=busy?'Communicating with the emulator':playback?'Audio plays on the worker PC':'Choose a track, or load more from Instagram';
+    el('music-sync-hint').textContent=phase==='error'?'Check the emulator, then try again. Nothing was shared.':busy?'Communicating with the emulator':playback?'Audio plays on the worker PC':'Choose a track, or load more from Instagram';
   };
-  const controls=()=>{modal.querySelectorAll('button,input').forEach(control=>control.disabled=busy);el('music-more').disabled=busy||!hasMore;el('music-more').textContent=busy&&phase==='loading'?'Loading...':hasMore?'Load more':'End of results';el('music-results').setAttribute('aria-busy',String(busy));};
+  const controls=()=>{modal.querySelectorAll('button,input').forEach(control=>control.disabled=busy);el('music-query').disabled=busy||!pickerOwned;el('music-search-form button').disabled=busy||!pickerOwned;el('music-retry').hidden=pickerOwned||phase!=='error';el('music-more').disabled=busy||!pickerOwned||!hasMore;el('music-more').textContent=busy&&phase==='loading'?'Loading...':hasMore?'Load more':'End of results';el('music-results').setAttribute('aria-busy',String(busy));};
   const finish=async()=>{clearInterval(elapsedTimer);musicPickerUi=null;musicPickerOpen=false;modal.classList.remove('ig-music-dialog');modal.close();await refresh();shell();};
   const operation=async(next,message,action)=>{
     if(busy)return;busy=true;started=Date.now();sync(next,message);controls();
@@ -783,9 +783,14 @@ async function musicDialog(){
   const controller={progress(data){if(data.at===progressStamp)return;progressStamp=data.at;sync(data.phase||phase,data.message);}};musicPickerUi=controller;
   el('music-more').onclick=()=>operation('loading','Loading more songs from Instagram...',async()=>{const count=songs.length;render(await api('/api/instagram/music/more',{method:'POST',body:{}}));sync('ready',songs.length>count?'More songs loaded':hasMore?'Browse more songs':'All available songs loaded');});
   el('music-search-form').onsubmit=e=>{e.preventDefault();operation('searching','Searching Instagram...',async()=>{render(await api('/api/instagram/music/search',{method:'POST',body:{query:el('music-query').value}}));el('music-results').scrollTop=0;sync('ready',songs.length?'Search ready':'No songs found');});};
-  try{render(await api('/api/instagram/music/open',{method:'POST',body:{mediaIds:images.map(image=>image.id)}}));pickerOwned=true;sync('ready','Recommended for your images');}
-  catch(error){el('music-results').innerHTML='';sync('error',error.message);}
-  finally{pickerOpening=false;busy=false;sync(phase);controls();el('music-query').disabled=!pickerOwned;el('music-search-form button').disabled=!pickerOwned;el('music-more').disabled=!pickerOwned||!hasMore;if(pickerOwned)el('music-query').focus({preventScroll:true});}
+  const connect=async()=>{
+    pickerOpening=true;busy=true;started=Date.now();sync('opening','Opening your images in Instagram...');controls();el('music-results').innerHTML=skeletons();
+    try{const data=await api('/api/instagram/music/open',{method:'POST',body:{mediaIds:images.map(image=>image.id)}});pickerOwned=true;render(data);sync('ready','Recommended for your images');}
+    catch(error){el('music-results').innerHTML='';sync('error',error.message);}
+    finally{pickerOpening=false;busy=false;sync(phase);controls();if(pickerOwned)el('music-query').focus({preventScroll:true});}
+  };
+  el('music-retry').onclick=()=>{if(!busy&&!pickerOwned)connect();};
+  await connect();
 }
 function updateStoryItem(key){
   const item=draft.instagram.story.layout[key],el=document.querySelector('[data-story-item="'+key+'"]');

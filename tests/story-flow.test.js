@@ -43,7 +43,7 @@ test('native handoff requires the same run, account and confirmed post, and neve
 });
 test('Android activation waits past the launcher and account navigation preserves editors',async()=>{
  const s=Object.create(AndroidSession.prototype),calls=[];
- s.request=async endpoint=>{calls.push(endpoint);};s.until=async(predicate,message,timeout)=>{assert.equal(timeout,90000);assert.equal(predicate([{displayed:'true',package:'com.google.android.apps.nexuslauncher'}]),false);assert(predicate([{displayed:'true',package:'com.instagram.android'}]));};
+ s.request=async endpoint=>{calls.push(endpoint);};s.until=async(predicate,message,timeout)=>{assert.equal(timeout,90000);assert.equal(await predicate([{displayed:'true',package:'com.google.android.apps.nexuslauncher'}]),false);assert(await predicate([{displayed:'true',package:'com.instagram.android'}]));};
  await s.activate();assert.deepEqual(calls,['/appium/device/activate_app']);
  const n=(id,text='')=>({'resource-id':nativeId(id),displayed:'true',text});let viewer=true;
  s.activate=async()=>{};s.screen=async()=>viewer?[n('row_feed_button_share')]:[n('profile_tab'),n('profile_header_create_button'),n('action_bar_title','ours')];s.request=async(endpoint,method,body)=>{assert.equal(endpoint,'/execute/sync');assert.equal(body.args[0].url,'https://www.instagram.com/ours/');viewer=false;};s.clickId=async id=>{assert.equal(id,'profile_tab');};s.until=async predicate=>predicate(await s.screen());

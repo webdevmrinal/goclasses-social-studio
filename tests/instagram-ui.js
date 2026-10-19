@@ -17,10 +17,11 @@ const {app,queue}=await createApp({dataDir,browser:{page:async()=>{throw Error('
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');const origin='http://127.0.0.1:'+server.address().port;
 const browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-const tracks=Array.from({length:18},(_,i)=>({...selection,key:String(123+i),title:i?'Fixture song '+i:selection.title}));let loaded=9,playback=null;
+const tracks=Array.from({length:18},(_,i)=>({...selection,key:String(123+i),title:i?'Fixture song '+i:selection.title}));let loaded=9,playback=null,openCalls=0;
 await page.route('**/api/instagram/music/**',async route=>{
   const endpoint=route.request().url().split('/').at(-1),body=route.request().postDataJSON();if(endpoint==='open')assert.equal(body.mediaIds.length,1);
   await new Promise(resolve=>setTimeout(resolve,endpoint==='open'?900:180));
+  if(endpoint==='open'&&++openCalls===1)return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Instagram has an unfinished New post screen. Close it in the emulator, then retry. Your draft was preserved.'})});
   if(endpoint==='more')loaded=18;
   if(endpoint==='preview'){const track=tracks.find(track=>track.key===body.key);playback={key:track.key,title:track.title,artist:track.artist,paused:false};}
   if(endpoint==='pause')playback={...playback,paused:true};
@@ -41,7 +42,8 @@ try{
   await page.locator('[data-ig-panel="story"] [data-ig-field="music.enabled"]').check();
   await page.locator('[data-ig-panel="story"] [data-ig-music]').click();
   await page.locator('#music-sync.is-busy').waitFor();assert.equal(await page.locator('.ig-song-skeleton').count(),5);assert(await page.locator('#music-query').isDisabled());
-  await page.locator('#music-count').filter({hasText:'9 tracks'}).waitFor();assert.equal(await page.locator('[data-music-preview]').count(),9);
+  await page.locator('#music-retry').waitFor({state:'visible'});assert(await page.locator('#music-query').isDisabled());assert.match(await page.locator('#music-sync-hint').innerText(),/Nothing was shared/);await page.locator('#music-retry').click();
+  await page.locator('#music-count').filter({hasText:'9 tracks'}).waitFor();assert.equal(openCalls,2);assert.equal(await page.locator('[data-music-preview]').count(),9);
   await page.locator('#music-more').click();await page.locator('#music-count').filter({hasText:'18 tracks'}).waitFor();assert(await page.locator('#music-more').isDisabled());
   await page.locator('[data-music-preview]').first().click();await page.getByText('Playing on the worker PC',{exact:true}).waitFor();assert.equal(await page.locator('.ig-song.is-playing').count(),1);
   await page.locator('#music-toggle-playback').click();await page.getByText('Preview paused',{exact:true}).waitFor();assert.equal(await page.locator('.ig-song.is-playing').count(),0);assert.equal(await page.locator('#music-toggle-playback').innerText(),'Resume');
@@ -70,6 +72,7 @@ try{
   await page.getByRole('button',{name:'Keep editing'}).click();await page.locator('[data-ig-tab="story"]').click();
   await page.locator('[data-ig-field="story.enabled"]').uncheck();await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();
   assert.equal(await page.locator('[data-preview-destination="instagramStory"]').count(),0);
-  assert.deepEqual(errors,[]);assert.equal(queue.runs.length,0);
+  // Exactly one HTTP 400 is deliberate: the first music open exercises safe retry.
+  assert.deepEqual(errors,['Failed to load resource: the server responded with a status of 400 (Bad Request)']);assert.equal(queue.runs.length,0);
   console.log('Instagram UI passed: native-song dialog, optional repost, editable link, touch/keyboard placement, separate preview, dark/mobile layout. No social site or publishing API was used.');
 }finally{await browser.close();await new Promise(r=>server.close(r));await fs.rm(dataDir,{recursive:true,force:true});}

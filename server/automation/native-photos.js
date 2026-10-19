@@ -109,8 +109,10 @@ export async function selectAlbumPhotos(s,album) {
     }
     if(!chosen)throw new InterventionError('The Android photo preview could not be matched uniquely to the reviewed image. Nothing was shared.');
   }
+  await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('next_button_textview')&&n.enabled==='true'),'Instagram is still preparing the selected images.');
   await s.clickId('next_button_textview');
-  await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('media_thumbnail_tray_button')),'Instagram photo editor is still loading.');
+  // Large carousels can decode slowly on the dedicated low-memory emulator.
+  await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('media_thumbnail_tray_button')),'Instagram photo editor is still loading.',90000);
 }
 export async function photoEvidence(s) {
   const nodes=(await s.screen()).filter(n=>visible(n)&&n['resource-id']===nativeId('photo_media_preview_image_view'));
