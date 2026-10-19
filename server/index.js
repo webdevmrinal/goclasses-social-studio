@@ -206,6 +206,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     finally{queue.emit('change',queue.state());}
   });
   app.post('/api/instagram/music/search',async(req,res)=>{requireIdle();res.json(await instagramWorker.query(req.body.query));});
+  app.post('/api/instagram/music/more',async(req,res)=>{requireIdle();res.json(await instagramWorker.more());});
+  app.post('/api/instagram/music/pause',async(req,res)=>{requireIdle();res.json(await instagramWorker.pause());});
   app.post('/api/instagram/music/preview',async(req,res)=>{requireIdle();res.json(await instagramWorker.preview(req.body.key));});
   app.post('/api/instagram/music/select',async(req,res)=>{requireIdle();try{res.json(await instagramWorker.choose(req.body.key));}finally{queue.emit('change',queue.state());}});
   app.post('/api/instagram/music/close',async(req,res)=>{requireIdle();try{await instagramWorker.cancelPicker();res.json({ok:true});}finally{queue.emit('change',queue.state());}});

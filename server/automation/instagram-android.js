@@ -4,7 +4,7 @@ import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
 import {addStoryLink,instagramOnlyStoryAudience,storyAudienceEvidence,discardStory} from './native-story.js';
-import {musicResults,searchMusic,applyTrack,openMusicLibrary,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
+import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {instagramBaseline,instagramPublication,instagramCaptionMatches} from './instagram-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
@@ -34,62 +34,82 @@ export class InstagramAndroidWorker {
   }
   async closePicker(){if(!this.picker)return;if(this.picker.album){await discardPost(this.s,'');await removeAlbum(this.s,this.picker.album);}else if(this.picker.owned)await discardPost(this.s,'');}
   expirePicker(){clearTimeout(this.timer);this.timer=setTimeout(()=>{if(this.operation)this.expirePicker();else this.cancelPicker().catch(()=>{});},5*60*1000);this.timer.unref();}
-  progress(message){this.progressState={picker:true,message,at:new Date().toISOString()};this.onProgress?.();}
+  progress(message,phase='working',working=true){this.progressState={picker:true,message,phase,working,at:new Date().toISOString()};this.onProgress?.();}
+  pickerState(){return {results:this.picker.results,hasMore:this.picker.hasMore!==false,playback:this.picker.playback||null};}
+  mergeSongs(rows){for(const row of rows){const i=this.picker.results.findIndex(song=>song.key===row.key);if(i<0)this.picker.results.push(row);else this.picker.results[i]=row;}this.picker.results.sort((a,b)=>Number(a.selector.match(/^audio_browser_track_(\d+)_/)?.[1])-Number(b.selector.match(/^audio_browser_track_(\d+)_/)?.[1]));}
   async startPicker(config,files){
     if(!Array.isArray(files)||!files.length)throw new Error('Upload the Instagram images before choosing a song.');
     this.opening=true;this.progress('Connecting to Android and checking the account...');
     try{await this.open(config);}catch(e){this.opening=false;throw e;}
     try{
-      this.picker={account:config.platforms.instagram.handle,query:'',results:[],owned:false};
+      this.picker={account:config.platforms.instagram.handle,query:'',results:[],owned:false,hasMore:true,playback:null};
       this.progress('Copying and verifying your uploaded images...');
       this.picker.album=await pushAlbum(this.s,files);this.s.uploadAlbum=this.picker.album;
       this.progress('Opening your images in Instagram...');
       await openGallery(this.s,this.picker.album.folder);this.picker.owned=true;
       await selectAlbumPhotos(this.s,this.picker.album);
       this.progress('Loading Instagram music recommendations for this post...');
-      await openMusicLibrary(this.s);
-      let previous='',stable=0;
-      this.picker.results=await this.s.until(nodes=>{const rows=musicResults(nodes),stamp=JSON.stringify(rows);stable=stamp===previous?stable+1:0;previous=stamp;return rows.length&&stable>=1?rows:false;},'Instagram recommendations did not load. Close the picker and try again.');
-      this.progress('Recommendations ready');this.expirePicker();
-      return {results:this.picker.results};
+      this.picker.results=await openMusicLibrary(this.s);
+      this.progress('Recommendations ready','ready',false);this.expirePicker();
+      return this.pickerState();
     }catch(e){await this.closePicker().catch(()=>{});await this.close();throw e;}finally{this.opening=false;}
   }
   async query(query){
     if(this.opening||!this.picker||this.operation)throw new Error('Open the music picker again.');
     if(typeof query!=='string'||query.trim().length<2||query.length>100)throw new Error('Search with 2-100 characters.');
-    this.operation=true;
-    try{this.expirePicker();this.picker.query=query.trim();this.picker.results=await searchMusic(this.s,this.picker.query);return {results:this.picker.results};}
-    finally{this.operation=false;}
+    this.operation=true;this.progress('Searching Instagram...','searching');
+    try{this.expirePicker();if(this.picker.playback)await setMusicPlayback(this.s,this.picker.playback,false);this.picker.query=query.trim();this.picker.results=await searchMusic(this.s,this.picker.query);this.picker.hasMore=Boolean(this.picker.results.length);this.picker.playback=null;this.progress('Search ready','ready',false);return this.pickerState();}
+    catch(e){this.progress(e.message,'error',false);throw e;}finally{this.operation=false;}
+  }
+  async more(){
+    if(this.opening||!this.picker||this.operation)throw new Error('Wait for the current music operation.');
+    this.operation=true;this.expirePicker();this.progress('Loading more songs from Instagram...','loading');
+    try{
+      const ordinal=track=>Number(track?.selector?.match(/^audio_browser_track_(\d+)_/)?.[1]||0),anchor=this.picker.results.reduce((a,b)=>ordinal(a)>ordinal(b)?a:b,null);
+      if(anchor)await revealMusicResult(this.s,anchor,rows=>this.mergeSongs(rows));
+      let changed=true;
+      for(let i=0;i<2&&changed;i++){const before=(await musicPage(this.s)).map(r=>r.key).join(','),rows=await scrollMusicPage(this.s);this.mergeSongs(rows);changed=rows.map(r=>r.key).join(',')!==before;}
+      this.picker.hasMore=changed;this.progress('Songs loaded','ready',false);return this.pickerState();
+    }catch(e){this.progress(e.message,'error',false);throw e;}finally{this.operation=false;}
   }
   async preview(key){
     if(this.opening||!this.picker||this.operation)throw new Error('Wait for the current music operation.');
-    this.operation=true;this.expirePicker();
+    this.operation=true;this.expirePicker();this.progress('Opening the audio preview...','previewing');
     try{
-      const result=this.picker.results.find(r=>r.key===key),current=musicResults(await this.s.screen()).find(r=>r.key===key);
-      if(!result||!current||result.title!==current.title||result.artist!==current.artist)throw new Error('Search for that song again.');
-      await this.s.click('id',current.selector);
-      await this.s.until(nodes=>nodes.some(n=>n['resource-id']==='audio_bar_select_tap_target'&&n['content-desc']==='Select track '+result.title+' by '+result.artist),'The audio preview did not load.');
-      return {playing:key};
-    }finally{this.operation=false;}
+      const result=this.picker.results.find(r=>r.key===key);if(!result)throw new Error('Search for that song again.');
+      if(musicPlayback(await this.s.screen(),result)===null){
+        const current=await revealMusicResult(this.s,result,rows=>this.mergeSongs(rows));await this.s.click('id',current.selector);
+        await this.s.until(nodes=>musicPlayback(nodes,result)!==null,'The audio preview did not load.');
+      }
+      this.picker.playback=await setMusicPlayback(this.s,result,true);this.progress('Playing on the worker PC','playing',false);return {...this.pickerState(),playing:key};
+    }catch(e){this.progress(e.message,'error',false);throw e;}finally{this.operation=false;}
+  }
+  async pause(){
+    if(this.opening||!this.picker||this.operation)throw new Error('Wait for the current music operation.');
+    if(!this.picker.playback)throw new Error('Preview a song first.');
+    this.operation=true;this.expirePicker();this.progress('Pausing the audio preview...','pausing');
+    try{this.picker.playback=await setMusicPlayback(this.s,this.picker.playback,false);this.progress('Preview paused','paused',false);return this.pickerState();}
+    catch(e){this.progress(e.message,'error',false);throw e;}finally{this.operation=false;}
   }
   async choose(key){
     if(this.opening||!this.picker||this.operation)throw new Error('Open the music picker again.');
     this.operation=true;
     try{
-      const result=this.picker.results.find(r=>r.key===key);
-      if(!result||!musicResults(await this.s.screen()).some(r=>r.key===key&&r.title===result.title&&r.artist===result.artist))throw new Error('Search for that song again.');
-      const selection={...result,id:randomUUID(),account:this.picker.account,query:this.picker.query||result.title,durationSeconds:30,createdAt:new Date().toISOString()};
+      this.progress('Confirming your song and closing the native draft...','selecting');
+      const result=this.picker.results.find(r=>r.key===key);if(!result)throw new Error('Search for that song again.');
+      await revealMusicResult(this.s,result,rows=>this.mergeSongs(rows));
+      const selection={...result,id:randomUUID(),account:this.picker.account,query:result.title.slice(0,100),durationSeconds:30,createdAt:new Date().toISOString()};
       delete selection.selector;this.selections.push(selection);
       await atomicWrite(path.join(this.dataDir,'instagram-music.json'),this.selections);
       await this.closePicker();await this.close();return {selection};
-    }catch(e){this.operation=false;throw e;}
+    }catch(e){this.operation=false;this.progress(e.message,'error',false);throw e;}
   }
-  async cancelPicker(){if(this.opening)throw new Error('Wait for the Instagram library to open, then close it.');if(this.operation)throw new Error('Wait for the current music search to finish.');try{await this.closePicker();}finally{await this.close();}}
+  async cancelPicker(){if(this.opening)throw new Error('Wait for the Instagram library to open, then close it.');if(this.operation)throw new Error('Wait for the current music search to finish.');this.progress('Closing the music picker...','closing');try{await this.closePicker();}finally{await this.close();}}
   async applyStoryMusic(s,music){
     await s.click('id','music_button');
     await s.until(n=>n.some(x=>x['resource-id']===nativeId('row_search_edit_text')),'Story music did not open.');
-    const results=await searchMusic(s,music.query);
-    const match=results.find(r=>r.key===music.key&&r.title===music.title&&r.artist===music.artist);
+    await searchMusic(s,music.query);
+    const match=await revealMusicResult(s,music);
     if(!match)throw new InterventionError('The reviewed song is not available for this Story. Nothing was shared.');
     await s.click('id',match.selector);
     await s.until(n=>n.some(x=>x['resource-id']==='audio_bar_select_tap_target'&&x['content-desc']==='Select track '+music.title+' by '+music.artist),'The music preview differs from the selected song.');
@@ -151,8 +171,7 @@ export class InstagramAndroidWorker {
       await openGallery(s,album.folder);owned=true;
       await selectAlbumPhotos(s,album);
       await ctx.step('Adding the exact selected music from Instagram...');
-      await openMusicLibrary(s);const results=await searchMusic(s,music.query);
-      if(!results.some(r=>r.key===music.key&&r.title===music.title&&r.artist===music.artist))throw new InterventionError('The reviewed song is no longer available for this feed post.');
+      await openMusicLibrary(s);await searchMusic(s,music.query);
       const clip=await applyTrack(s,music,music.durationSeconds);
       await ctx.step('Verifying the native caption, images and music...');
       await nativeCaption(s,ctx.caption);

@@ -72,6 +72,7 @@ function applyTheme() { document.documentElement.dataset.theme = theme === 'syst
 applyTheme(); systemTheme.addEventListener('change', applyTheme);
 let state = { config: null, media: [], runs: [], login: { running: false, items: {} }, protected: false };
 let view = 'settings';
+let musicPickerUi=null;
 let musicPickerOpen=false,androidProgressDialog=null,androidProgressKey='',androidProgressDismissed='';
 let captionTab = 'instagram';
 let mode = 'TEST'; // Never restore LIVE mode from storage or server state.
@@ -680,7 +681,7 @@ function applyStatus(data) {
   const changedRuns = JSON.stringify(state.runs) !== JSON.stringify(data.runs);
   state.runs = data.runs; state.login = data.login; state.workerBusy = data.workerBusy; state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
-  if(musicPickerOpen&&data.androidProgress?.picker){const label=document.querySelector('#music-state');if(label)label.textContent=data.androidProgress.message;}
+  if(musicPickerOpen&&data.androidProgress?.picker)musicPickerUi?.progress(data.androidProgress);
   if (data.config) {
     state.config = data.config;
     document.querySelectorAll('#settings-form input[name], #settings-form textarea[name]').forEach(input => {
@@ -746,33 +747,44 @@ try {
 async function musicDialog(){
   if(workerBusy())return toast('Finish the current operation first.',true);
   const images=platformMedia('instagram');if(!images.length)return toast('Upload and select Instagram images first.',true);
-  musicPickerOpen=true;let pickerOwned=false,pickerOpening=true;
-  showDialog('Instagram music','<p id="music-state" role="status">Opening your images in Instagram. This can take a few minutes on a slow PC...</p><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results"></div>','<button class="button" data-music-close>Cancel</button>');
-  const close=async()=>{if(pickerOpening){document.querySelector('#music-state').textContent='Wait for the Instagram library to open.';return;}if(!pickerOwned){musicPickerOpen=false;modal.close();await refresh();shell();return;}try{await api('/api/instagram/music/close',{method:'POST',body:{}});musicPickerOpen=false;modal.close();await refresh();shell();}catch(e){document.querySelector('#music-state').textContent=e.message;}};
-  modal.querySelector('[data-music-close]').onclick=close;
-  modal.oncancel=e=>{if(musicPickerOpen){e.preventDefault();close();}};
-  const results=data=>{
-    document.querySelector('#music-state').textContent=data.results.length?(document.querySelector('#music-query').value.trim()?'Select a song':'Recommended for your images'):document.querySelector('#music-query').value.trim()?'No songs found':'Search by song or artist';
-    document.querySelector('#music-results').innerHTML=data.results.map(track=>'<div class="ig-song"><button type="button" class="ig-song-listen" data-music-preview="'+escape(track.key)+'" aria-label="Listen to '+escape(track.title)+' on the worker PC" title="Listen on the worker PC">'+icon('play')+'</button><button type="button" class="ig-song-select" data-music-key="'+escape(track.key)+'"><span><strong>'+escape(track.title)+'</strong><small>'+escape(track.artist)+'</small></span><small>'+escape(track.length)+'</small></button></div>').join('');
-    for(const button of modal.querySelectorAll('[data-music-preview]'))button.onclick=async()=>{
-      modal.querySelectorAll('button,input').forEach(el=>el.disabled=true);
-      try{await api('/api/instagram/music/preview',{method:'POST',body:{key:button.dataset.musicPreview}});document.querySelector('#music-state').textContent='Playing on the worker PC';}
-      catch(e){document.querySelector('#music-state').textContent=e.message;}finally{modal.querySelectorAll('button,input').forEach(el=>el.disabled=false);}
-    };
-    for(const button of modal.querySelectorAll('[data-music-key]'))button.onclick=async()=>{
-      modal.querySelectorAll('button,input').forEach(el=>el.disabled=true);
-      try{const chosen=await api('/api/instagram/music/select',{method:'POST',body:{key:button.dataset.musicKey}});draft.instagram.music={enabled:true,selection:chosen.selection};saveDraft();musicPickerOpen=false;modal.close();await refresh();shell();}
-      catch(e){document.querySelector('#music-state').textContent=e.message;modal.querySelectorAll('button,input').forEach(el=>el.disabled=false);}
-    };
+  musicPickerOpen=true;let pickerOwned=false,pickerOpening=true,busy=true,phase='opening',songs=[],playback=null,hasMore=true,started=Date.now(),progressStamp='';
+  const skeletons=()=>Array.from({length:5},()=>'<div class="ig-song-skeleton" aria-hidden="true"><i></i><span></span><b></b></div>').join('');
+  showDialog('Instagram music','<div class="ig-emulator-sync is-busy" id="music-sync" aria-busy="true"><span class="ig-sync-orb" aria-hidden="true"></span><div><p id="music-state" role="status" aria-live="polite">Opening your images in Instagram...</p><small id="music-sync-hint">Connecting to the emulator</small></div><small id="music-elapsed"></small><span class="ig-sync-line" aria-hidden="true"></span></div><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required disabled><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results" aria-label="Instagram music results" aria-busy="true">'+skeletons()+'</div><div class="ig-music-pagination"><small id="music-count"></small><button class="button small" id="music-more" disabled>Load more</button></div><div id="music-player" class="ig-music-player" hidden></div>','<button class="button" data-music-close disabled>Cancel</button>');
+  modal.classList.add('ig-music-dialog');
+  const el=id=>modal.querySelector('#'+id),label=message=>{el('music-state').textContent=message;};
+  const elapsedTimer=setInterval(()=>{if(!musicPickerOpen)return;const clock=el('music-elapsed');if(!clock){clearInterval(elapsedTimer);return;}const seconds=Math.floor((Date.now()-started)/1000);clock.textContent=busy?Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0'):'';},1000);
+  const sync=(next,message)=>{
+    phase=next;if(message)label(message);el('music-sync').dataset.phase=phase;el('music-sync').classList.toggle('is-busy',busy);el('music-sync').classList.toggle('is-playing',!busy&&Boolean(playback&&!playback.paused));el('music-sync').setAttribute('aria-busy',String(busy));
+    el('music-sync-hint').textContent=busy?'Communicating with the emulator':playback?'Audio plays on the worker PC':'Choose a track, or load more from Instagram';
   };
-  try{
-    const opened=await api('/api/instagram/music/open',{method:'POST',body:{mediaIds:images.map(image=>image.id)}});pickerOwned=true;pickerOpening=false;results(opened);
-    modal.querySelector('#music-search-form button').disabled=false;document.querySelector('#music-query').focus({preventScroll:true});
-    modal.querySelector('#music-search-form').onsubmit=async e=>{
-      e.preventDefault();const form=e.target,button=form.querySelector('button');button.disabled=true;document.querySelector('#music-state').textContent='Searching Instagram...';
-      try{results(await api('/api/instagram/music/search',{method:'POST',body:{query:document.querySelector('#music-query').value}}));}catch(e){document.querySelector('#music-state').textContent=e.message;}finally{button.disabled=false;}
-    };
-  }catch(e){document.querySelector('#music-state').textContent=e.message;}finally{pickerOpening=false;}
+  const controls=()=>{modal.querySelectorAll('button,input').forEach(control=>control.disabled=busy);el('music-more').disabled=busy||!hasMore;el('music-more').textContent=busy&&phase==='loading'?'Loading...':hasMore?'Load more':'End of results';el('music-results').setAttribute('aria-busy',String(busy));};
+  const finish=async()=>{clearInterval(elapsedTimer);musicPickerUi=null;musicPickerOpen=false;modal.classList.remove('ig-music-dialog');modal.close();await refresh();shell();};
+  const operation=async(next,message,action)=>{
+    if(busy)return;busy=true;started=Date.now();sync(next,message);controls();
+    try{await action();}catch(error){sync('error',error.message);}finally{if(musicPickerOpen){busy=false;sync(phase);controls();}}
+  };
+  const render=data=>{
+    const old=new Set(songs.map(song=>song.key)),scroll=el('music-results').scrollTop;songs=data.results||songs;playback=data.playback??null;hasMore=data.hasMore!==false;
+    el('music-results').innerHTML=songs.length?songs.map(track=>{const active=playback?.key===track.key,playing=active&&!playback.paused;return '<div class="ig-song '+(!old.has(track.key)?'ig-song-new ':'')+(playing?'is-playing':active?'is-paused':'')+'"><button type="button" class="ig-song-listen" data-music-preview="'+escape(track.key)+'" aria-label="'+escape((playing?'Pause ':active?'Resume ':'Listen to ')+track.title)+'" title="'+(playing?'Pause preview':active?'Resume preview':'Listen on worker PC')+'">'+icon(playing?'pause':'play')+'</button><button type="button" class="ig-song-select" data-music-key="'+escape(track.key)+'" aria-label="Choose '+escape(track.title)+' by '+escape(track.artist)+'"><span><strong>'+escape(track.title)+'</strong><small>'+escape(track.artist)+'</small></span><small>'+escape(track.length)+'</small></button>'+(playing?'<span class="ig-equalizer" aria-hidden="true"><i></i><i></i><i></i></span>':'')+'</div>';}).join(''):'<p class="ig-music-empty">No songs found. Try another song or artist.</p>';
+    el('music-results').scrollTop=scroll;el('music-count').textContent=songs.length+' tracks';el('music-player').hidden=!playback;
+    if(playback){el('music-player').innerHTML='<span class="ig-player-art '+(!playback.paused?'is-playing':'')+'" aria-hidden="true"><i></i><i></i><i></i></span><span class="ig-player-title"><strong>'+escape(playback.title)+'</strong><small>'+escape(playback.artist)+'</small></span><button class="button small" id="music-toggle-playback">'+icon(playback.paused?'play':'pause')+(playback.paused?'Resume':'Pause')+'</button>';el('music-toggle-playback').onclick=()=>togglePlayback(playback.key,true);}
+    for(const button of modal.querySelectorAll('[data-music-preview]'))button.onclick=()=>togglePlayback(button.dataset.musicPreview);
+    for(const button of modal.querySelectorAll('[data-music-key]'))button.onclick=()=>operation('selecting','Confirming your song and closing the native draft...',async()=>{const chosen=await api('/api/instagram/music/select',{method:'POST',body:{key:button.dataset.musicKey}});draft.instagram.music={enabled:true,selection:chosen.selection};saveDraft();await finish();});
+    controls();
+  };
+  const togglePlayback=(key,player=false)=>operation(playback?.key===key&&!playback.paused?'pausing':'previewing',playback?.key===key&&!playback.paused?'Pausing preview...':'Loading audio preview...',async()=>{
+    const pause=playback?.key===key&&!playback.paused,data=await api('/api/instagram/music/'+(pause?'pause':'preview'),{method:'POST',body:pause?{}:{key}});
+    if(!data.playback||data.playback.key!==key)throw new Error('Instagram did not confirm the audio preview.');render(data);sync(data.playback.paused?'paused':'playing',data.playback.paused?'Preview paused':'Playing on the worker PC');
+    const focus=player?el('music-toggle-playback'):[...modal.querySelectorAll('[data-music-preview]')].find(button=>button.dataset.musicPreview===key);focus?.focus({preventScroll:true});
+  });
+  const close=()=>operation('closing','Closing the native music draft...',async()=>{if(pickerOwned)await api('/api/instagram/music/close',{method:'POST',body:{}});await finish();});
+  modal.querySelector('[data-music-close]').onclick=close;modal.oncancel=e=>{if(musicPickerOpen){e.preventDefault();if(!pickerOpening)close();}};
+  const controller={progress(data){if(data.at===progressStamp)return;progressStamp=data.at;sync(data.phase||phase,data.message);}};musicPickerUi=controller;
+  el('music-more').onclick=()=>operation('loading','Loading more songs from Instagram...',async()=>{const count=songs.length;render(await api('/api/instagram/music/more',{method:'POST',body:{}}));sync('ready',songs.length>count?'More songs loaded':hasMore?'Browse more songs':'All available songs loaded');});
+  el('music-search-form').onsubmit=e=>{e.preventDefault();operation('searching','Searching Instagram...',async()=>{render(await api('/api/instagram/music/search',{method:'POST',body:{query:el('music-query').value}}));el('music-results').scrollTop=0;sync('ready',songs.length?'Search ready':'No songs found');});};
+  try{render(await api('/api/instagram/music/open',{method:'POST',body:{mediaIds:images.map(image=>image.id)}}));pickerOwned=true;sync('ready','Recommended for your images');}
+  catch(error){el('music-results').innerHTML='';sync('error',error.message);}
+  finally{pickerOpening=false;busy=false;sync(phase);controls();el('music-query').disabled=!pickerOwned;el('music-search-form button').disabled=!pickerOwned;el('music-more').disabled=!pickerOwned||!hasMore;if(pickerOwned)el('music-query').focus({preventScroll:true});}
 }
 function updateStoryItem(key){
   const item=draft.instagram.story.layout[key],el=document.querySelector('[data-story-item="'+key+'"]');

@@ -17,9 +17,14 @@ const {app,queue}=await createApp({dataDir,browser:{page:async()=>{throw Error('
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');const origin='http://127.0.0.1:'+server.address().port;
 const browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-await page.route('**/api/instagram/music/**',route=>{
-  const endpoint=route.request().url().split('/').at(-1);if(endpoint==='open')assert.equal(route.request().postDataJSON().mediaIds.length,1);
-  return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(endpoint==='select'?{selection}:endpoint==='close'?{ok:true}:{results:[selection]})});
+const tracks=Array.from({length:18},(_,i)=>({...selection,key:String(123+i),title:i?'Fixture song '+i:selection.title}));let loaded=9,playback=null;
+await page.route('**/api/instagram/music/**',async route=>{
+  const endpoint=route.request().url().split('/').at(-1),body=route.request().postDataJSON();if(endpoint==='open')assert.equal(body.mediaIds.length,1);
+  await new Promise(resolve=>setTimeout(resolve,endpoint==='open'?900:180));
+  if(endpoint==='more')loaded=18;
+  if(endpoint==='preview'){const track=tracks.find(track=>track.key===body.key);playback={key:track.key,title:track.title,artist:track.artist,paused:false};}
+  if(endpoint==='pause')playback={...playback,paused:true};
+  return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(endpoint==='select'?{selection}:endpoint==='close'?{ok:true}:{results:tracks.slice(0,loaded),hasMore:loaded<18,playback})});
 });
 try{
   await page.goto(origin);await page.getByRole('button',{name:'Compose',exact:true}).click();
@@ -35,7 +40,14 @@ try{
   assert.equal(await page.locator('[data-ig-panel="feed"]').isVisible(),false);
   await page.locator('[data-ig-panel="story"] [data-ig-field="music.enabled"]').check();
   await page.locator('[data-ig-panel="story"] [data-ig-music]').click();
-  await page.locator('[data-music-preview]').click();await page.getByText('Playing on the worker PC',{exact:true}).waitFor();await page.locator('[data-music-key]').click();await page.locator('#modal').waitFor({state:'hidden'});
+  await page.locator('#music-sync.is-busy').waitFor();assert.equal(await page.locator('.ig-song-skeleton').count(),5);assert(await page.locator('#music-query').isDisabled());
+  await page.locator('#music-count').filter({hasText:'9 tracks'}).waitFor();assert.equal(await page.locator('[data-music-preview]').count(),9);
+  await page.locator('#music-more').click();await page.locator('#music-count').filter({hasText:'18 tracks'}).waitFor();assert(await page.locator('#music-more').isDisabled());
+  await page.locator('[data-music-preview]').first().click();await page.getByText('Playing on the worker PC',{exact:true}).waitFor();assert.equal(await page.locator('.ig-song.is-playing').count(),1);
+  await page.locator('#music-toggle-playback').click();await page.getByText('Preview paused',{exact:true}).waitFor();assert.equal(await page.locator('.ig-song.is-playing').count(),0);assert.equal(await page.locator('#music-toggle-playback').innerText(),'Resume');
+  await page.locator('#music-toggle-playback').click();await page.getByText('Playing on the worker PC',{exact:true}).waitFor();
+  await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/music-expanded-desktop.png'});await page.setViewportSize({width:390,height:844});await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.equal(await page.locator('.ig-player-art i').first().evaluate(e=>getComputedStyle(e).animationName),'none');await page.screenshot({path:'test-results/music-expanded-dark-mobile.png'});await page.setViewportSize({width:1440,height:1000});await page.emulateMedia({colorScheme:'light',reducedMotion:'reduce'});
+  await page.locator('[data-music-key]').first().click();await page.locator('#modal').waitFor({state:'hidden'});
   assert.match(await page.locator('[data-ig-panel="story"] .ig-music').innerText(),/Fixture song/);
   await page.locator('[data-ig-field="story.linkEnabled"]').uncheck();assert.equal(await page.locator('[data-story-item="link"]').count(),0);assert.equal(await page.locator('[data-ig-field="story.url"]').count(),0);
   await page.locator('[data-ig-field="story.linkEnabled"]').check();
