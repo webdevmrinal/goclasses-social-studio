@@ -7,6 +7,7 @@ import { checkWhatsAppLogin, prepareWhatsApp } from './whatsapp.js';
 import { telegramWebUrl } from '../../shared/telegram.js';
 import { checkTelegramLogin, prepareTelegram } from './telegram.js';
 import { publicationBaseline, confirmPublication } from './publication.js';
+import { prepareXSubmit } from './x-submit.js';
 
 export function destinationUrl(id, config) {
   const p = config.platforms[id];
@@ -253,10 +254,10 @@ async function x(ctx) {
   await pasteCaption(page, editor, caption);
   await verifyCaption(editor, caption);
   const post = dialog.getByTestId('tweetButton');
-  await preparedButton(page, post);
+  let submission;
   const result = await finishPost({ ...ctx,
-    preflight: async () => { await verifyCaption(editor, caption); await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length); },
-    publish: () => post.click(),
+    preflight: async () => { await verifyCaption(editor, caption); await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length); submission = await prepareXSubmit(page, dialog, post); },
+    publish: () => submission.publish(),
     verify: () => page.getByText(/your post was sent/i).waitFor({ timeout: 30000 })
   });
   await page.close().catch(() => {});

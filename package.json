@@ -18,6 +18,7 @@
     "test:browser": "node tests/browser-smoke.js",
     "test:accounts": "node tests/accounts-smoke.js",
     "test:editors": "node tests/editor-smoke.js",
+    "test:x-submit": "node tests/x-submit-smoke.js",
     "test:manychat": "node tests/manychat-smoke.js",
     "test:whatsapp": "node tests/whatsapp-smoke.js",
     "test:destinations": "node tests/destinations-ui.js",
