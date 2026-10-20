@@ -104,7 +104,7 @@ try {
   assert.equal(await page.getByRole('tab', { name: 'Telegram Channel', exact: true }).getAttribute('aria-selected'), 'true');
   await page.getByRole('tab', { name: 'WhatsApp Channel', exact: true }).click();
   assert.match(await page.locator('#caption-whatsapp').inputValue(), /A fresh chapter starts here/);
-  assert((await page.locator('[data-editor-readiness="whatsapp"]').innerText()).includes('1 image'));
+  assert.equal(await page.locator('#editor-whatsapp .destination-image img').count(),1);
   await page.locator('.asset').nth(1).locator('[data-remove]').click();
   await page.screenshot({ path: 'test-results/desktop-whatsapp.png', fullPage: true });
   await page.getByRole('button', { name: 'Preview posts' }).click();

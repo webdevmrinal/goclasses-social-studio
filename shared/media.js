@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 export function mediaIdsFor(draft, id) {
-  return Object.hasOwn(draft.mediaByPlatform || {}, id) ? draft.mediaByPlatform[id] : draft.mediaIds || [];
+  return Object.hasOwn(draft.mediaByPlatform || {}, id) ? draft.mediaByPlatform[id] : (id==='whatsapp'?(draft.mediaIds||[]).slice(0,1):draft.mediaIds||[]);
 }
 export function mediaFor(draft, media, id) {
-  if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) return media;
+  if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) return id==='whatsapp'?media.slice(0,1):media;
   return Array.isArray(draft.mediaByPlatform[id]) ? draft.mediaByPlatform[id].map(key => media.find(item => item.id === key)).filter(Boolean) : [];
 }
 export function selectionErrors(draft) {
@@ -13,3 +13,17 @@ export function selectionErrors(draft) {
   const library = new Set(draft.mediaIds || []);
   return Object.entries(map).flatMap(([id, ids]) => !Array.isArray(ids) || ids.some(key => typeof key !== 'string' || !library.has(key)) || new Set(ids).size !== ids.length ? [`${id}: choose unique images from this draft's library.`] : []);
 }
+
+export function updateDraftMedia(draft,ids,replacements={}){
+ draft.mediaIds=ids;draft.textOnlyPlatforms=(draft.textOnlyPlatforms||[]).filter(id=>['whatsapp','telegram'].includes(id));
+ for(const [id,chosen] of Object.entries(draft.mediaByPlatform||{})){
+  const next=Array.isArray(chosen)?chosen.map(key=>replacements[key]||key).filter(key=>ids.includes(key)):[];
+  if(!next.length&&!draft.textOnlyPlatforms.includes(id))delete draft.mediaByPlatform[id];else draft.mediaByPlatform[id]=next;
+ }
+}
+export function setTextOnly(draft,id,enabled){draft.textOnlyPlatforms=(draft.textOnlyPlatforms||[]).filter(key=>key!==id);if(enabled&&['whatsapp','telegram'].includes(id))draft.textOnlyPlatforms.push(id);}
+export function metadataNeedsReview(draft,media){
+ const ids=new Set((draft.selected||[]).filter(id=>!['manychat','instagramStory'].includes(id)).flatMap(id=>mediaFor(draft,media,id).map(m=>m.id)));
+ return media.filter(m=>ids.has(m.id)&&!m.verification&&(m.metadata?.credentials||m.metadata?.aiMarkers?.length));
+}
+export function metadataConsentValid(images,consent={}){return images.every(image=>consent?.[image.id]===(image.fileHash||image.id));}

@@ -162,7 +162,7 @@ async function optimize(){
   }
   await adbRun(['shell','wm','size',ANDROID_DISPLAY.width+'x'+ANDROID_DISPLAY.height]);
   await adbRun(['shell','wm','density',String(ANDROID_DISPLAY.density)]);
-  console.log('Android animations are off. Display rendering is 540 x 1170 at matching density. Uploaded images, login and drafts are untouched.');
+  console.log(`Android animations are off. Display rendering is ${ANDROID_DISPLAY.width} x ${ANDROID_DISPLAY.height} at matching density. Uploaded images, login and drafts are untouched.`);
   await status();
 }
 async function status() {

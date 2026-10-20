@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { mediaFor, selectionErrors } from './media.js';
-import { INSTAGRAM_STORY, instagramOptions, storyErrors } from './instagram.js';
+import { INSTAGRAM_STORY, instagramOptions, storyErrors, instagramHashtags } from './instagram.js';
 export const PLATFORMS = [
   { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Feed post', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
   { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company photo gallery', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10 },
@@ -29,10 +29,8 @@ export function parseCaptions(input) {
     if (Object.hasOwn(captions, platform.id)) errors.push(`Duplicate section: ${header[1]}`);
     captions[platform.id] = input.slice(header.index + header[0].length, headers[i + 1]?.index ?? input.length).trim();
   }
-  for (const platform of PLATFORMS) {
-    if (platform.optionalImport) captions[platform.id] ||= '';
-    else if (!captions[platform.id]) errors.push(`${platform.name}: section is missing or empty.`);
-  }
+  for (const platform of PLATFORMS) captions[platform.id] ||= '';
+  if(!Object.values(captions).some(value=>value.trim()))errors.push('Add at least one caption section.');
   captions.instagramStory ||= '';
   return { captions, errors };
 }
@@ -48,6 +46,7 @@ export function validateDraft(draft, media, xLength = countCharacters) {
     const caption = draft.captions?.[p.id];
     if (typeof caption !== 'string' || !caption.trim()) errors.push(`${p.name}: add a caption.`);
     else if ((p.id === 'x' ? xLength(caption) : captionLength(p, caption)) > captionLimit(p, images.length)) errors.push(`${p.name}: caption exceeds ${captionLimit(p, images.length).toLocaleString()} characters${p.id === 'telegram' && images.length ? ' with images' : ''}.`);
+    if(p.id==='instagram'&&instagramHashtags(caption).length>5)errors.push('Instagram: use 5 hashtags or fewer to avoid caption changes.');
     if (p.id !== 'manychat' && !p.textOnly && !images.length) errors.push(`${p.name}: add at least one image.`);
     if (p.id !== 'manychat' && images.length > p.maxImages) errors.push(`${p.name}: use ${p.maxImages} image${p.maxImages === 1 ? '' : 's'} or fewer.`);
   }

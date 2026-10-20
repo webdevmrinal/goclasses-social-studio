@@ -36,6 +36,7 @@
     "android:optimize": "node scripts/android-worker.mjs optimize",
     "android:doctor": "node scripts/android-worker.mjs doctor",
     "android:play-store": "node scripts/android-worker.mjs play-store",
+    "test:workflow-ui": "node tests/workflow-ui.js",
     "test:polish-ui": "node tests/polish-ui.js",
     "test:updates": "node --test tests/updates.test.js && node tests/launcher-smoke.mjs"
   },

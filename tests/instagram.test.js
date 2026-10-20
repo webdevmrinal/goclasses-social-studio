@@ -121,9 +121,9 @@ test('native account checks ignore hidden views and preserve visible user drafts
   const node=(name,extra={})=>({'resource-id':nativeId(name),displayed:'true',...extra});
   const profile=[node('profile_header_create_button'),node('profile_tab'),node('action_bar_title',{text:selection.account})];
   const make=initial=>{let nodes=initial;const calls=[],s=Object.create(AndroidSession.prototype);s.activate=async()=>{};s.screen=async()=>nodes;s.clickId=async name=>{calls.push(name);};s.request=async path=>{assert.equal(path,'/back');calls.push('back');nodes=profile;};return {s,calls};};
-  let fixture=make([...profile,node('story_share_controls_action_bar',{displayed:'false'})]);await fixture.s.account(selection.account);assert.deepEqual(fixture.calls,['profile_tab']);
+  let fixture=make([...profile,node('story_share_controls_action_bar',{displayed:'false'})]);await fixture.s.account(selection.account);assert.deepEqual(fixture.calls,[]);
   fixture=make([node('story_share_controls_action_bar'),node('direct_external_share_container_view',{displayed:'false'})]);await assert.rejects(fixture.s.account(selection.account),/Close the unsent/);assert.deepEqual(fixture.calls,[]);
-  fixture=make([node('direct_external_share_container_view'),node('row_search_edit_text',{class:'android.widget.EditText',text:'Search...'})]);await fixture.s.account(selection.account);assert.deepEqual(fixture.calls,['back','profile_tab']);
+  fixture=make([node('direct_external_share_container_view'),node('row_search_edit_text',{class:'android.widget.EditText',text:'Search...'})]);await fixture.s.account(selection.account);assert.deepEqual(fixture.calls,['back']);
   fixture=make([node('music_browser_container')]);await assert.rejects(fixture.s.account(selection.account),/Close the unsent/);assert.deepEqual(fixture.calls,[]);
 });
 

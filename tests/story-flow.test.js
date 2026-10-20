@@ -46,7 +46,7 @@ test('Android activation waits past the launcher and account navigation preserve
  s.request=async endpoint=>{calls.push(endpoint);};s.until=async(predicate,message,timeout)=>{assert.equal(timeout,90000);assert.equal(await predicate([{displayed:'true',package:'com.google.android.apps.nexuslauncher'}]),false);assert(await predicate([{displayed:'true',package:'com.instagram.android'}]));};
  await s.activate();assert.deepEqual(calls,['/appium/device/activate_app']);
  const n=(id,text='')=>({'resource-id':nativeId(id),displayed:'true',text});let viewer=true;
- s.activate=async()=>{};s.screen=async()=>viewer?[n('row_feed_button_share')]:[n('profile_tab'),n('profile_header_create_button'),n('action_bar_title','ours')];s.request=async(endpoint,method,body)=>{assert.equal(endpoint,'/execute/sync');assert.equal(body.args[0].url,'https://www.instagram.com/ours/');viewer=false;};s.clickId=async id=>{assert.equal(id,'profile_tab');};s.until=async predicate=>predicate(await s.screen());
+ s.activate=async()=>{};s.screen=async()=>viewer?[n('row_feed_button_share')]:[n('profile_tab'),n('profile_header_create_button'),n('action_bar_title','ours')];s.request=async(endpoint,method,body)=>{assert.equal(endpoint,'/back');viewer=false;};s.clickId=async id=>{assert.equal(id,'profile_tab');};s.until=async predicate=>predicate(await s.screen());
  await s.account('ours');assert.equal(s.accountHandle,'ours');
  viewer=true;s.screen=async()=>[n('row_feed_button_share'),n('caption_input_text_view','Unsent text')];s.request=async()=>assert.fail('User editor must not be dismissed');await assert.rejects(s.account('ours'),/unsent/);
  s.screen=async()=>[n('row_feed_button_share'),n('media_thumbnail_tray_button')];await assert.rejects(s.account('ours'),/unsent/);
@@ -84,8 +84,8 @@ test('driver startup recovers once from an explicit instrumentation timeout and 
 
 test('confirmed native handoff proceeds directly, while a standalone Story still checks post ownership',async()=>{
  const worker=new InstagramAndroidWorker({dataDir:'unused-fixture'});let checks=0;
- worker.verifyPost=async()=>{checks++;};worker.openStory=async()=>{throw Error('Preparation boundary reached without any publish action');};
- const ctx={id:'instagramStory',runId:'run-a',instagram:{music:{enabled:false},story:{sourcePostUrl:postUrl}},config:{platforms:{instagram:{handle:'ours'}}},step:async()=>{},mode:'TEST'};
+ worker.verifyPost=async()=>{checks++;};worker.openStory=async()=>({});
+ const ctx={id:'instagramStory',runId:'run-a',instagram:{music:{enabled:false},story:{sourcePostUrl:postUrl}},config:{platforms:{instagram:{handle:'ours'}}},step:async message=>{if(message.startsWith('Opening the exact'))throw Error('Preparation boundary reached without any publish action');},mode:'TEST'};
  worker.handoff={runId:'run-a',postUrl,account:'ours'};
  await assert.rejects(worker.run(ctx),/Preparation boundary/);assert.equal(checks,0);
  worker.handoff=null;await assert.rejects(worker.run(ctx),/Preparation boundary/);assert.equal(checks,1);

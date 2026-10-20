@@ -52,7 +52,7 @@ test('switching transport permits review after failed preparation, never after a
 test('native timeout waits for disconnect, prevents late preparation and Share, and never falls back to Web',async()=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'mrinal-native-timeout-'));let stopped=false;const calls=[];
   try{
-    const queue=new Queue(browser,{dataDir:dir,deadline:25,instagramWorker:{checkAccount:async()=>{}},runner:async ctx=>{
+    const queue=new Queue({page:async()=>assert.fail('No native browser page')},{dataDir:dir,deadline:25,instagramWorker:{checkAccount:async()=>{}},runner:async ctx=>{
       calls.push(ctx.id);
       try{
         await new Promise(resolve=>ctx.signal.addEventListener('abort',resolve,{once:true}));

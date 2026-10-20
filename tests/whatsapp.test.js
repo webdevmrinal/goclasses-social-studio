@@ -26,7 +26,8 @@ test('WhatsApp import is optional for old files but mandatory when selected for 
   assert.equal(imported.captions.whatsapp, 'नमस्ते ✅\n\nChannel update');
   assert.deepEqual(validateDraft({ selected: ['whatsapp'], captions: imported.captions }, []), []);
   assert.deepEqual(validateDraft({ selected: ['whatsapp'], captions: imported.captions }, [{}]), []);
-  assert(validateDraft({ selected: ['whatsapp'], captions: imported.captions }, [{}, {}]).some(error => /1 image/.test(error)));
+  assert.deepEqual(validateDraft({selected:['whatsapp'],captions:imported.captions},[{id:'a'},{id:'b'}]),[]);
+  assert(validateDraft({selected:['whatsapp'],captions:imported.captions,mediaIds:['a','b'],mediaByPlatform:{whatsapp:['a','b']}},[{id:'a'},{id:'b'}]).some(error=>/1 image/.test(error)));
 });
 const until = async predicate => { const end = Date.now() + 5000; while (!predicate()) { if (Date.now() > end) throw new Error('Queue timeout'); await new Promise(resolve => setTimeout(resolve, 10)); } };
 test('an expired WhatsApp session pauses all destinations before any LIVE adapter runs', async () => {

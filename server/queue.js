@@ -85,7 +85,7 @@ export class Queue extends EventEmitter {
       item.status = 'posted'; item.finishedAt = new Date().toISOString(); item.message = 'ManyChat update confirmed by operator.';
       run.status = run.pauseAfterManual ? 'paused' : 'running';
       delete run.pauseAfterManual;
-      try { await this.snapshot(run, item, await this.browser.page(item.id), 'operator-confirmed'); } catch { /* Operator confirmation remains authoritative for this manual step. */ }
+      try { if(!usesInstagramAndroid(run.instagram,item.id))await this.snapshot(run, item, await this.browser.page(item.id), 'operator-confirmed'); } catch { /* Operator confirmation remains authoritative for this manual step. */ }
     } else if (action === 'stop') {
       run.status = 'stopping';
       for (const item of run.items) {
@@ -220,11 +220,11 @@ export class Queue extends EventEmitter {
         try {
           const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
-          page = await this.browser.page(item.id==='instagramStory'?'instagram':item.id);
           native=usesInstagramAndroid(run.instagram,item.id);
+          if(!native)page = await this.browser.page(item.id);
           const deadline = native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
           const timeout = new Promise((_, reject) => {
-            timer = setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page.close().catch(() => {}); }, deadline);
+            timer = setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page?.close().catch(() => {}); }, deadline);
           });
           task = this.runner({
             page, id: item.id, runId:run.id, continueInstagramStory:item.id==='instagram'&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
@@ -297,18 +297,20 @@ export class Queue extends EventEmitter {
       if (pending && this.active === pending && ['running', 'stopping'].includes(pending.status)) this.process(pending).catch(error => this.emit('workerError', error));
     }
   }
-  async checkLogins(config, selected, saveDetected = async () => {}) {
+  async checkLogins(config, selected, saveDetected = async () => {}, {instagram}={}) {
     if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');
     this.login = { running: true, items: { ...this.login.items } }; this.emit('change', this.state());
     try {
       for (const id of selected) {
-        this.login.items[id] = { status: 'checking', message: 'Opening the worker browserâ€¦' }; this.emit('change', this.state());
+        this.login.items[id] = { status: 'checking', message: 'Checking connection...' }; this.emit('change', this.state());
         let page;
         try {
-          page = await this.browser.page(id);
-          this.login.items[id] = await this.loginChecker({ page, id, config, step: async message => { this.login.items[id].message = message; this.emit('change', this.state()); } });
+          const native=id==='instagram'&&usesInstagramAndroid(instagram),step=async message=>{this.login.items[id].message=message;this.emit('change',this.state());};
+          if(native){await step('Checking the Android Instagram account...');await this.instagramWorker.checkAccount(config,{onProgress:step});this.login.items[id]={status:'verified',message:'Android account verified.'};}
+          else{page=await this.browser.page(id);this.login.items[id]=await this.loginChecker({page,id,config,step});}
+          if(id==='instagram')this.login.items[id].transport=native?'android':'web';
           if (this.login.items[id].detectedSettings) await saveDetected(id, this.login.items[id].detectedSettings);
-        } catch (error) { this.login.items[id] = { status: error instanceof NetworkError ? 'network_error' : error instanceof InterventionError ? 'needs_login' : 'verification_failed', message: error.message }; }
+        } catch (error) { this.login.items[id] = { status: error instanceof NetworkError ? 'network_error' : error instanceof InterventionError ? id==='instagram'&&usesInstagramAndroid(instagram)?'needs_attention':'needs_login' : 'verification_failed', message: error.message,...(id==='instagram'?{transport:usesInstagramAndroid(instagram)?'android':'web'}:{}) }; }
         this.login.items[id].checkedAt = new Date().toISOString();
         if (page && !page.isClosed()) {
           try {

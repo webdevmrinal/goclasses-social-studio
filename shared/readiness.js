@@ -2,6 +2,7 @@
 import { PLATFORMS, DESTINATIONS, validateDraft } from './platforms.js';
 import { validateManychatDraft } from './manychat.js';
 import { mediaFor } from './media.js';
+import { usesInstagramAndroid } from './instagram.js';
 import { instagramPostUrl } from './manychat.js';
 import { DEFAULT_STORY_LAYOUT,instagramMethod,instagramMusicEnabled } from './instagram.js';
 const instagramKey=(value,id)=>{
@@ -27,7 +28,8 @@ export function destinationReadiness(draft, media, config, login = {}, xLength, 
     errors.push(...setupIssues(config, p.id));
     if (p.id === 'manychat') { try { validateManychatDraft(draft.manychat, draft.captions?.manychat); } catch (error) { errors.push(error.message); } }
     const connection = login[p.id==='instagramStory'?'instagram':p.id];
-    if (blockedLoginStatuses.includes(connection?.status)) errors.push(connection.message || 'Check this connection before running.');
+    const transportApplies=!['instagram','instagramStory'].includes(p.id)||(connection?.transport||'web')===(usesInstagramAndroid(draft.instagram,p.id)?'android':'web');
+    if (transportApplies&&blockedLoginStatuses.includes(connection?.status)) errors.push(connection.message || 'Check this connection before running.');
     const last = runs.find(run => run.items.some(item => item.id === p.id));
     const item = last?.items.find(item => item.id === p.id);
     const previousIds = last?.mediaByPlatform?.[p.id] || last?.media.map(m => m.id);

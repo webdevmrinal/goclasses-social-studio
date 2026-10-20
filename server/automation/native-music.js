@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import {instagramHashtags} from '../../shared/instagram.js';
 import {nativeId,nativeBounds,xpathLiteral,isPhotoAccessPicker,cancelInstagramPhotoAccess} from './android-native.js';
 import {InterventionError} from './utils.js';
 const present=(nodes,name)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(name));
@@ -139,7 +140,10 @@ export async function applyTrack(s,chosen,duration=30) {
   await s.clickId('bottom_sheet_done_button');
   return {durationSeconds:seconds,segmentStart};
 }
+export const normalizeNativeCaption=value=>String(value??'').replace(/\r\n?/g,'\n').normalize('NFC').trim();
+export function captionField(nodes){const fields=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('caption_input_text_view'));return fields.length===1?fields[0]:null;}
 export async function nativeCaption(s,caption) {
+  if(instagramHashtags(caption).length>5)throw new InterventionError('Instagram accepts up to 5 hashtags. Edit this caption before posting; nothing was shared.');
   await s.clickId('media_thumbnail_tray_button');
   let nodes=await s.until(nodes=>present(nodes,'caption_input_text_view')&&nodes,'Instagram post review is still loading.');
   if(nodes.some(n=>n.text==='Sharing posts')){
@@ -147,16 +151,15 @@ export async function nativeCaption(s,caption) {
     nodes=await s.until(nodes=>!nodes.some(n=>n.text==='Sharing posts')&&present(nodes,'caption_input_text_view')&&nodes,'Instagram sharing information did not close.');
   }
   await s.clickId('caption_input_text_view');
-  await s.text('id',nativeId('caption_input_text_view'),caption);
-  nodes=await s.screen();
-  if(nodes.find(n=>n['resource-id']===nativeId('caption_input_text_view'))?.text!==caption)throw new InterventionError('The Android caption does not match the reviewed draft.');
+  await s.replaceText('id',nativeId('caption_input_text_view'),caption);
+  nodes=await s.until(nodes=>normalizeNativeCaption(captionField(nodes)?.text)===normalizeNativeCaption(caption)&&nodes,'The Android caption does not match the reviewed draft. Nothing was shared.',8000);
   if(nodes.some(n=>n['resource-id']===nativeId('next_button_textview')&&n.text==='OK'))await s.clickId('next_button_textview');
   await s.until(nodes=>present(nodes,'share_footer_button'),'Instagram final review did not load.');
 }
 export async function verifyNativeCaption(s,caption,music) {
   const nodes=await s.screen();
-  const normalize=value=>String(value).replace(/\r\n/g,'\n').trim();
-  if(!present(nodes,'share_footer_button')||normalize(nodes.find(n=>n['resource-id']===nativeId('caption_input_text_view'))?.text)!==normalize(caption))throw new InterventionError('The Android post or caption changed after review. Nothing was shared.');
+  const normalize=normalizeNativeCaption;
+  if(!present(nodes,'share_footer_button')||normalize(captionField(nodes)?.text)!==normalize(caption))throw new InterventionError('The Android post or caption changed after review. Nothing was shared.');
   if(music&&(nodes.find(n=>n['resource-id']===nativeId('music_track_title'))?.text!==music.title||nodes.find(n=>n['resource-id']===nativeId('music_track_subtitle'))?.text!==music.artist))throw new InterventionError('The reviewed Instagram music changed.');
 }
 export async function discardPost(s,caption) {
@@ -164,7 +167,7 @@ export async function discardPost(s,caption) {
     const nodes=(await s.screen()).filter(node=>node.displayed==='true');
     if(isPhotoAccessPicker(nodes)){await cancelInstagramPhotoAccess(s);continue;}
     const editor=nodes.find(n=>n['resource-id']===nativeId('caption_input_text_view'));
-    if(editor&&editor.text!==caption)throw new InterventionError('The Android draft was changed by someone. It was preserved.');
+    if(editor&&normalizeNativeCaption(editor.text)!==normalizeNativeCaption(caption))throw new InterventionError('The Android draft was changed by someone. It was preserved.');
     if(nodes.some(n=>n.text==='Start over?'&&n['resource-id']===nativeId('action_sheet_header_text_view'))){
       await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('action_sheet_row_text_view'))+' and @text="Start over"]');continue;
     }

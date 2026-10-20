@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 import {instagramBaseline,instagramPublication,instagramCaptionMatches} from '../server/automation/instagram-reference.js';
-import {InstagramAndroidWorker} from '../server/automation/instagram-android.js';
+
 const browser=await chromium.launch({headless:true}),context=await browser.newContext();
 const caption='Admission details & dates\n\nApply at https://example.com/apply';let fresh=false,wrong=false;
 const picture='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="blue"/></svg>');
@@ -17,9 +17,7 @@ try{
  const baseline=await instagramBaseline(context,'goclasses_cse');fresh=true;
  const proof=await instagramPublication(context,'goclasses_cse',baseline,caption);
  assert.equal(proof.postUrl,'https://www.instagram.com/p/NEW/');
- const page=await context.newPage(),worker=new InstagramAndroidWorker({dataDir:'unused-fixture'});
- await worker.verifyPost(page,proof.postUrl,'goclasses_cse',caption);
- await assert.rejects(worker.verifyPost(page,'https://www.instagram.com/p/FOREIGN/','goclasses_cse'),/not visible/);
+ const page=await context.newPage();await page.goto(proof.postUrl);assert(await instagramCaptionMatches(page,caption));
  wrong=true;await page.goto(proof.postUrl);assert.equal(await instagramCaptionMatches(page,caption),false);
- console.log('Instagram publication fixtures passed: generated alt text, expanded current caption markup, exact owned-profile membership, foreign-post rejection, and changed-caption rejection.');
+ console.log('Instagram web publication fixtures passed: new permalink detection, generated alt text, expanded caption markup and changed-caption rejection.');
 }finally{await browser.close();}

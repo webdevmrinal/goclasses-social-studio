@@ -7,7 +7,7 @@ import path from 'node:path';
 import {InstagramAndroidWorker} from '../server/automation/instagram-android.js';
 import {Queue} from '../server/queue.js';
 import {defaults} from '../server/config.js';
-import {fitScrollArea} from '../shared/android-performance.js';
+import {fitScrollArea,galleryScrollArea} from '../shared/android-performance.js';
 import {tapCanvas} from '../server/automation/native-repost.js';
 import {nativeId} from '../server/automation/android-native.js';
 const config={platforms:{instagram:{handle:'ours'}}};
@@ -39,15 +39,23 @@ test('an intervening failed channel preflight releases the retained Android conn
 });
 test('picker scrolling scales within the same safe region on full and lighter displays',()=>{
  assert.deepEqual(fitScrollArea({width:720,height:1560}),{left:4,top:500,width:712,height:750,direction:'down',percent:.65});
- for(const [width,height] of [[540,1170],[720,1560],[1080,2340]]){
+ for(const [width,height] of [[360,780],[480,1040],[540,1170],[720,1560],[1080,2340]]){
   const area=fitScrollArea({width,height});assert(area.left>=0&&area.left+area.width<width);assert(area.top>height*.3);assert(area.top+area.height<height*.82);
  }
  assert.throws(()=>fitScrollArea({width:undefined,height:undefined}),/could not be verified/);
 });
 test('Story tap exclusions scale with the display and still reject the final sharing strip',async()=>{
- for(const [width,height] of [[540,1170],[720,1560]]){
+ for(const [width,height] of [[360,780],[480,1040],[540,1170],[720,1560]]){
   const calls=[],s={screen:async()=>[{'resource-id':nativeId('story_share_controls_action_bar'),displayed:'true'},{'resource-id':nativeId('camera_photo_texture_view'),displayed:'true',bounds:'[0,0]['+width+','+height+']'}],gesture:async actions=>calls.push(actions)};
   await tapCanvas(s,width*.5,height*.45);assert.equal(calls.length,1);
   await assert.rejects(tapCanvas(s,width*.5,height*.96),/outside the editable safe area/);assert.equal(calls.length,1);
  }
+});
+
+test('gallery swipes exclude the Android system navigation area on small displays',()=>{
+ for(const [width,height] of [[360,780],[480,1040],[540,1170]]){
+  const area=galleryScrollArea({x:0,y:Math.round(height*.68),width,height:Math.round(height*.31)},{width,height});
+  assert(area.top>=height*.68);assert(area.top+area.height<=height*.91);assert(area.left+area.width<width);
+ }
+ assert.throws(()=>galleryScrollArea({x:0,y:1000,width:480,height:20},{width:480,height:1040}),/too small/);
 });

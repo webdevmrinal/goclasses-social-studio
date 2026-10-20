@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import sharp from 'sharp';
-import {fitScrollArea} from '../../shared/android-performance.js';
+import {fitScrollArea,galleryScrollArea} from '../../shared/android-performance.js';
 import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
 export const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -90,8 +90,7 @@ export async function selectAlbumPhotos(s,album) {
   for(let index=0;index<files.length;index++){
     let chosen=false;
     for(let attempt=0;attempt<8&&!chosen;attempt++){
-      const nodes=await s.screen();
-      if(!nodes.some(n=>n['resource-id']===nativeId('gallery_folder_menu_tv')&&n.text===album.folder))throw new InterventionError('Instagram left the reviewed upload album.');
+      const nodes=await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('gallery_folder_menu_tv')&&n.text===album.folder)&&nodes,'Instagram left the reviewed upload album. Nothing was shared.',5000);
       const thumbs=nodes.filter(n=>visible(n)&&n['resource-id']===nativeId('gallery_grid_item_thumbnail'));
       const screenshot=await s.screenshot(),scores=[];
       for(const node of thumbs)scores.push({node,score:await previewScore(screenshot,node,files[index].bytes)});
@@ -106,7 +105,7 @@ export async function selectAlbumPhotos(s,album) {
       if(!grid)break;
       const b=nativeBounds(grid);
       // Only the observed gallery grid can be scrolled, never a publishing surface.
-      await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{left:b.x+4,top:b.y+4,width:b.width-8,height:b.height-8,direction:attempt<4?'down':'up',percent:0.65}]});
+      await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{...galleryScrollArea(b,await sharp(screenshot).metadata()),direction:attempt<4?'down':'up'}]});
     }
     if(!chosen)throw new InterventionError('The Android photo preview could not be matched uniquely to the reviewed image. Nothing was shared.');
   }

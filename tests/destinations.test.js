@@ -21,7 +21,7 @@ test('five shared images become independent ordered selections without truncatio
   assert.deepEqual(mediaFor(current, media, 'x').map(m => m.id), ['3', '1', '4', '0']);
   assert.deepEqual(mediaFor(current, media, 'whatsapp').map(m => m.id), ['2']);
   assert.deepEqual(mediaFor(current, media, 'instagram'), media);
-  delete current.mediaByPlatform; assert.equal(validateDraft(current, media).filter(e => /or fewer/.test(e)).length, 2);
+  delete current.mediaByPlatform; assert.equal(validateDraft(current, media).filter(e => /or fewer/.test(e)).length, 1);
   current.mediaByPlatform = { whatsapp: [], x: ['0'] }; assert.deepEqual(validateDraft(current, media), []);
   current.mediaByPlatform.x = []; assert(validateDraft(current, media).some(e => /X: add at least one/.test(e)));
 });

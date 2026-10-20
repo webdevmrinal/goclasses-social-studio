@@ -36,7 +36,7 @@ try {
   const xIds = await editor('x').locator('.image-choice.chosen').evaluateAll(els => els.map(el => el.dataset.mediaId));
   await editor('x').locator('[data-destination-move][data-direction="1"]').first().click();
   await editor('x').getByRole('button', { name: 'Next image', exact: true }).click(); assert.match(await editor('x').locator('.image-count').innerText(), /2 \/ 4/);
-  await tab('whatsapp'); assert.match(await editor('whatsapp').locator('[data-editor-readiness]').innerText(), /Fix before running/);
+  await tab('whatsapp'); assert.equal(await editor('whatsapp').locator('.image-choice.chosen').count(),1);
   await editor('whatsapp').locator('[data-pick-media]').nth(2).click(); assert.equal(await editor('whatsapp').locator('.image-choice.chosen').count(), 1);
   assert.match(await editor('whatsapp').locator('.destination-image img').getAttribute('alt'), /artwork 3/);
   const waId = await editor('whatsapp').locator('.image-choice.chosen').getAttribute('data-media-id');
@@ -61,7 +61,7 @@ try {
   assert.match(await xPreview.locator('.destination-image img').getAttribute('alt'), /artwork 2/); assert.match(await waPreview.locator('.destination-image img').getAttribute('alt'), /artwork 3/);
   await page.getByRole('button', { name: 'Keep editing' }).click(); await tab('whatsapp'); await page.locator('#caption-whatsapp').fill('');
   await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Review posts' }).waitFor();
-  assert.match(await waPreview.locator('.preview-meta').innerText(), /Excluded/); assert.equal(await page.getByRole('button', { name: 'Run test', exact: true }).isEnabled(), true);
+  assert.equal(await waPreview.count(),0); assert.equal(await page.getByRole('button', { name: 'Run test', exact: true }).isEnabled(), true);
   const started = page.waitForRequest(req => req.url().endsWith('/api/runs') && req.method() === 'POST'); await page.getByRole('button', { name: 'Run test', exact: true }).click();
   assert.deepEqual((await started).postDataJSON().draft.selected, ['instagram', 'x']);
   await page.getByRole('heading', { name: 'Activity' }).waitFor();
@@ -73,7 +73,7 @@ try {
   const firstRun = queue.runs[0]; assert.deepEqual(firstRun.mediaByPlatform.whatsapp, undefined); assert.deepEqual(firstRun.mediaByPlatform.x, [xIds[1], xIds[0], ...xIds.slice(2)]);
   fail = false; const retryRequest = page.waitForRequest(req => req.url().endsWith('/retry'));
   await page.locator('[data-retry-platform="x"]').click(); await page.getByRole('heading', { name: 'Retry X', exact: true }).waitFor(); await page.getByRole('button', { name: 'Retry in TEST', exact: true }).click();
-  assert.deepEqual((await retryRequest).postDataJSON(), { mode: 'TEST', platform: 'x' });
+  assert.deepEqual((await retryRequest).postDataJSON(), { mode: 'TEST', platform: 'x', metadataConsent:{} });
   await page.getByText('Test complete', { exact: true }).first().waitFor({ state: 'attached' });
   const retryCard = page.locator('.run-card').first();
   if (!await retryCard.evaluate(el => el.open)) await retryCard.locator('.run-summary').click();

@@ -1,9 +1,10 @@
 // Social Studio — Created by Mrinal. Copyright (c) 2026 Mrinal.
 import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, captionLength } from '/shared/platforms.js';
 import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
-import { instagramMethod, usesInstagramAndroid, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
+import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
-import { mediaFor, mediaIdsFor } from '/shared/media.js';
+import { freshDraft, workspaceFingerprint, reconcilePublishedDraft } from '/shared/draft.js';
+import { mediaFor, mediaIdsFor, updateDraftMedia, setTextOnly, metadataNeedsReview } from '/shared/media.js';
 import { destinationReadiness, setupIssues } from '/shared/readiness.js';
 import '/vendor/webawesome/components/button-group/button-group.js';
 import '/vendor/webawesome/components/tooltip/tooltip.js';
@@ -51,7 +52,7 @@ const modal = document.querySelector('#modal');
 const blankCaptions = () => Object.fromEntries(PLATFORMS.map(p => [p.id, '']));
 let draft;
 try { draft = JSON.parse(localStorage.getItem('mrinal.social-studio.draft')); } catch { /* Storage may be unavailable in private browsing. */ }
-draft = { captions: blankCaptions(), selected: PLATFORMS.map(p => p.id), mediaIds: [], ...draft };
+draft = { captions: blankCaptions(), selected: [], mediaIds: [], ...draft };
 draft.captions = { ...blankCaptions(), ...draft.captions };
 draft.manychat = { postUrl: '', links: [], ...draft.manychat };
 if (!Array.isArray(draft.manychat.links)) draft.manychat.links = [];
@@ -59,11 +60,12 @@ if (typeof draft.manychat.postUrl !== 'string') draft.manychat.postUrl = '';
 draft.manychat.linksMode ||= draft.manychat.links.length ? 'manual' : 'auto';
 draft.selected = Array.isArray(draft.selected) ? draft.selected.filter(id => DESTINATIONS.some(p => p.id === id)) : [];
 draft.mediaIds = Array.isArray(draft.mediaIds) ? draft.mediaIds : [];
+draft.textOnlyPlatforms=Array.isArray(draft.textOnlyPlatforms)?draft.textOnlyPlatforms:[];
 draft.mediaByPlatform = draft.mediaByPlatform && typeof draft.mediaByPlatform === 'object' && !Array.isArray(draft.mediaByPlatform) ? draft.mediaByPlatform : {};
 draft.instagram={postingMethod:instagramMethod(draft.instagram),music:{enabled:false,...draft.instagram?.music},story:{enabled:false,linkEnabled:true,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
 draft.instagram.story.enabled=draft.instagram.story.enabled===true;draft.instagram.music.enabled=draft.instagram.music.enabled===true;
 try{draft.instagram.story.layout=storyLayout(draft.instagram.story.layout);}catch{draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);}
-draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
+draft.selected=draft.selected.filter(id=>id!=='instagramStory'&&draft.captions[id]?.trim());if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
 let instagramTab='feed';
 let theme = 'system';
 try { theme = localStorage.getItem('mrinal.social-studio.theme') || 'system'; } catch { /* Use system appearance. */ }
@@ -80,6 +82,7 @@ let connected = false;
 let events, pollTimer, saveTimer, sending = false, uploading = false, reviewValid = false;
 let pendingMedia = [], mediaPreviewIndex = 0;
 let cleaningMedia = null, lastMediaOrder = null;
+let liveMetadataConsent={};
 let remoteReadiness = null, reviewDraft = null, reviewBlocked = [], readinessTimer, readinessVersion = 0;
 const platformPreviewIndex = {};
 const runExpansion = new Map();
@@ -98,6 +101,7 @@ const readiness = () => remoteReadiness || destinationReadiness(draft, selectedM
 const runnableIds = () => draft.selected.filter(id => readiness()[id]?.ready);
 function renderReadiness() {
   const ready = readiness();
+  document.querySelectorAll('[data-destination]').forEach(el=>{const selected=draft.selected.includes(el.dataset.destination);el.classList.toggle('selected',selected);el.setAttribute('aria-pressed',String(selected));});
   document.querySelectorAll('[data-destination-status]').forEach(el => { const id = el.dataset.destinationStatus; el.textContent = !draft.selected.includes(id) ? '' : ready[id]?.ready ? 'Ready' : 'Needs attention'; el.classList.toggle('error-text', draft.selected.includes(id) && !ready[id]?.ready); });
   document.querySelectorAll('[data-editor-readiness]').forEach(el => { const item = ready[el.dataset.editorReadiness]; if(!item)return; el.className = 'destination-readiness blocked'; el.hidden = item.ready || !draft.selected.includes(el.dataset.editorReadiness); el.innerHTML = item.ready ? '' : `${icon('info')}<div><strong>Fix before running</strong><ul>${item.errors.map(error => `<li>${escape(error)}</li>`).join('')}</ul></div>`; });
   document.querySelectorAll('[data-caption-tab]').forEach(el => { el.classList.toggle('needs-fix', draft.selected.includes(el.dataset.captionTab) && !ready[el.dataset.captionTab]?.ready); });
@@ -132,6 +136,7 @@ async function api(url, { method = 'GET', body, ...options } = {}) {
 // Persist the final route and edits even when the page closes before debounce.
 window.addEventListener('pagehide',()=>{try{localStorage.setItem('mrinal.social-studio.draft',JSON.stringify(draft));}catch{/* Normal save status reports unavailable storage. */}});
 function saveDraft() {
+  liveMetadataConsent={};
   reviewValid = false;
   reviewDraft = null; remoteReadiness = null;
   readinessVersion++;
@@ -206,8 +211,7 @@ function assetRow(m, i) {
 }
 function changeMediaOrder(ids, message, replacements = {}) {
   const shown = selectedMedia()[mediaPreviewIndex]?.id;
-  lastMediaOrder = { ids: [...draft.mediaIds], selections: structuredClone(draft.mediaByPlatform) }; draft.mediaIds = ids;
-  for (const [id, chosen] of Object.entries(draft.mediaByPlatform)) draft.mediaByPlatform[id] = chosen.map(key => replacements[key] || key).filter(key => ids.includes(key));
+  lastMediaOrder = { ids: [...draft.mediaIds], selections: structuredClone(draft.mediaByPlatform),textOnlyPlatforms:[...(draft.textOnlyPlatforms||[])] };updateDraftMedia(draft,ids,replacements);
   mediaPreviewIndex = Math.max(0, ids.indexOf(shown)); saveDraft(); shell(); if (message) toast(message);
 }
 function metadataHelp() {
@@ -250,7 +254,7 @@ function captionEditor(p) {
     <div data-editor-readiness="${p.id}"></div>${p.id==='instagram'?instagramTabs(instagramTab)+`<div data-ig-panel="feed" class="${instagramTab!=='feed'?'hidden':''}">`+postingMethodControl(draft.instagram,workerBusy()):''}${destinationMediaEditor(p)}
     <label class="editor-label" for="caption-${p.id}">${p.id === 'manychat' ? 'DM text' : 'Post caption'}</label>
     <textarea class="caption-editor" id="caption-${p.id}" data-caption="${p.id}" placeholder="${p.id === 'manychat' ? 'Write your DM…' : 'Write a caption…'}" spellcheck="true">${escape(text)}</textarea>
-    <div class="caption-bottom"><span></span><span id="count-${p.id}" class="${count > limit ? 'error-text' : ''}">${count.toLocaleString()} / ${limit.toLocaleString()}${p.id === 'x' ? ' *' : ''}</span></div>
+    <div class="caption-bottom"><span></span><span id="count-${p.id}" class="${count > limit||p.id==='instagram'&&instagramHashtags(text).length>5 ? 'error-text' : ''}">${p.id==='instagram'?instagramHashtags(text).length+' / 5 hashtags &middot; ':''}${count.toLocaleString()} / ${limit.toLocaleString()}${p.id === 'x' ? ' *' : ''}</span></div>
     ${p.id==='instagram'?musicControl(draft.instagram,workerBusy())+'</div>'+storyEditor({options:draft.instagram,images:platformMedia('instagram'),caption:text,handle:state.config?.platforms.instagram.handle,tab:instagramTab,busy:workerBusy(),captions:draft.captions,preview:latestStoryPreview()}):''}${p.id === 'x' ? '<p class="caption-hint">Link and Unicode counts are checked before running.</p>' : ''}${p.id === 'manychat' ? manychatOptions() : ''}</div>`;
 }
 const nextManychatReplies = () => state.manychatNextReplies || replyBatch(state.config?.platforms.manychat.replyMessages);
@@ -430,7 +434,7 @@ async function upload(files) {
   pendingMedia = [...files].map((file, index) => ({ id: `pending-${Date.now()}-${index}`, name: file.name, url: URL.createObjectURL(file), size: file.size, pending: true }));
   mediaPreviewIndex = selectedMedia().length;
   lastMediaOrder = null; uploading = true; shell();
-  try { const result = await api('/api/upload', { method: 'POST', body: form }); state.media.push(...result.media); draft.mediaIds.push(...result.media.map(m => m.id)); saveDraft(); toast(`${result.media.length === 1 ? 'Image ready' : 'Images ready'}.`); }
+  try { const result = await api('/api/upload', { method: 'POST', body: form }); state.media.push(...result.media); updateDraftMedia(draft,[...draft.mediaIds,...result.media.map(m=>m.id)]); saveDraft(); toast(`${result.media.length === 1 ? 'Image ready' : 'Images ready'}.`); }
   catch (error) { toast(error.message, true); }
   finally {
     const temporaryUrls = pendingMedia.map(m => m.url); pendingMedia = []; uploading = false; shell();
@@ -440,6 +444,20 @@ async function upload(files) {
 function showDialog(title, body, actions) {
   modal.innerHTML = `<h2 id="dialog-title">${title}</h2>${body}<div class="dialog-actions">${actions}</div>`;
   if (!modal.open) modal.showModal();
+}
+function metadataPrompt(proceed,candidate=reviewDraft,library=selectedMedia(),retryRun=null){
+ const images=metadataNeedsReview(candidate,library).filter(image=>liveMetadataConsent[image.id]!== (image.fileHash||image.id));
+ if(!images.length){proceed();return;}
+ showDialog('Clean image metadata?', '<p>Embedded AI-origin metadata is present in '+images.length+' selected image'+(images.length===1?'':'s')+'.</p><ul>'+images.map(m=>'<li>'+escape(m.name)+'</li>').join('')+'</ul><p class="text-muted">Cleaning preserves pixels and dimensions. Platform AI labels are still determined by the platform.</p><p id="metadata-prompt-error" role="alert"></p>', '<button class="button" data-dialog-close>Cancel</button><button class="button" id="metadata-keep">Keep originals</button><button class="button primary" id="metadata-clean-review">Clean &amp; review</button>');
+ modal.querySelector('#metadata-keep').onclick=()=>{for(const image of images)liveMetadataConsent[image.id]=image.fileHash||image.id;modal.close();proceed();};
+ modal.querySelector('#metadata-clean-review').onclick=async()=>{
+  const button=modal.querySelector('#metadata-clean-review');button.disabled=true;button.textContent='Cleaning and verifying...';
+  try{
+   if(retryRun){draft={...freshDraft(instagramMethod(retryRun.instagram)),captions:structuredClone(retryRun.captions),selected:[...candidate.selected],mediaIds:retryRun.media.map(m=>m.id),mediaByPlatform:structuredClone(retryRun.mediaByPlatform||{}),instagram:structuredClone(retryRun.instagram||freshDraft().instagram),manychat:structuredClone(retryRun.manychat||freshDraft().manychat)};draft.textOnlyPlatforms=['whatsapp','telegram'].filter(id=>draft.mediaByPlatform[id]?.length===0);const postUrl=retryRun.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication?.postUrl;if(postUrl&&!draft.selected.includes('instagram')){if(draft.selected.includes('instagramStory'))draft.instagram.story.sourcePostUrl=postUrl;if(draft.selected.includes('manychat'))draft.manychat.postUrl=postUrl;}}
+   for(const image of images){const result=await api('/api/media/'+image.id+'/clean',{method:'POST',body:{}});state.media.push(result.media);updateDraftMedia(draft,draft.mediaIds.map(id=>id===image.id?result.media.id:id),{[image.id]:result.media.id});saveDraft();}
+   modal.close();await preview();toast('Metadata cleaned. Review the updated images before publishing.');
+  }catch(error){modal.querySelector('#metadata-prompt-error').textContent=error.message;button.disabled=false;button.textContent='Clean & review';}
+ };
 }
 function confirmLive(onConfirm, label = 'Publish selected', destinations = draft.selected) {
   showDialog('Ready to publish publicly?', `<p>This will publish to <strong>${destinations.length} selected destination${destinations.length === 1 ? '' : 's'}</strong>: ${destinations.map(id => escape(platform(id).name)).join(', ')}. For ManyChat, this creates and activates an automation that replies to comments and sends the prepared DM. Review the posts first. Type <strong>POST</strong> to confirm this run.</p><label class="field"><span>Confirmation</span><input id="live-confirmation" autocomplete="off" placeholder="Type POST" spellcheck="false"></label><div id="dialog-error" class="dialog-error" role="alert"></div>`, `<button class="button" data-dialog-close>Cancel</button><button class="button danger" id="confirm-live" disabled>${icon('play')} ${label}</button>`);
@@ -471,7 +489,9 @@ async function startRun(confirmation) {
   if (!reviewValid || !reviewDraft?.selected.length || reviewDraft.selected.some(id => !readiness()[id]?.ready)) throw new Error('Review the ready destinations before running.');
   sending = true;
   try {
-    await api('/api/runs', { method: 'POST', body: { draft: reviewDraft, mode, confirmation } });
+    const fingerprint=workspaceFingerprint(draft),live=mode==='LIVE';
+    const started=await api('/api/runs', { method: 'POST', body: { draft: reviewDraft, mode, confirmation, metadataConsent:liveMetadataConsent } });
+    if(live){draft.submission={runId:started.id,fingerprint};saveDraft();}
     mode = 'TEST'; // Live authorization is one run only.
     await refresh(); navigate('activity');
     toast('Run started. You can follow every step here.');
@@ -480,8 +500,8 @@ async function startRun(confirmation) {
 async function checkLogins(selected = PLATFORMS.map(p => p.id)) {
   if (view === 'settings' && document.querySelector('#settings-form')?.dataset.dirty === 'true') return toast('Save your connection changes before checking logins.', true);
   if (!selected.length) return toast('Select at least one destination in Compose.', true);
-  await api('/api/logins', { method: 'POST', body: { selected } });
-  navigate('settings'); toast('Checking connections in the worker browser. Any account needing sign-in will appear below.');
+  await api('/api/logins', { method: 'POST', body: { selected,instagram:{postingMethod:instagramMethod(draft.instagram)} } });
+  navigate('settings'); toast('Checking the selected connections.');
 }
 function exportText() {
   const text = DESTINATIONS.map(p => `=====${p.delimiter}=====\n${p.id==='instagramStory'&&draft.instagram.story.enabled?(draft.instagram.story.linkEnabled!==false?draft.instagram.story.label+'\n'+draft.instagram.story.url:'Share feed post'):draft.captions[p.id] || ''}`).join('\n\n');
@@ -490,12 +510,17 @@ function exportText() {
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+function captionDialog(id){
+ const p=platform(id),editing=draft.selected.includes(id);showDialog((editing?'Edit ':'Add ')+escape(p.name)+' caption','<label class="field"><span>'+(id==='manychat'?'DM text':'Caption')+'</span><textarea id="destination-caption" rows="7" placeholder="Write a caption"></textarea></label><div id="dialog-error" role="alert"></div>','<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="save-destination-caption">'+(editing?'Save caption':'Enable '+escape(p.name))+'</button>');
+ const input=modal.querySelector('#destination-caption');input.value=draft.captions[id]||'';input.focus();
+ modal.querySelector('#save-destination-caption').onclick=()=>{if(!input.value.trim()){modal.querySelector('#dialog-error').textContent='Enter a caption to enable this destination.';return;}if(id==='instagram'&&instagramHashtags(input.value).length>5){modal.querySelector('#dialog-error').textContent='Keep up to 5 hashtags. This caption has '+instagramHashtags(input.value).length+'.';return;}draft.captions[id]=input.value.trim();draft.selected=DESTINATIONS.filter(p=>[...draft.selected,id].includes(p.id)).map(p=>p.id);captionTab=id;saveDraft();modal.close();shell();};
+}
 function importDialog() {
-  showDialog('Import captions', '<p>Paste your platform sections. Optional sections: <code>=====INSTAGRAM_STORY=====</code> (button text and URL), <code>=====WHATSAPP=====</code> and <code>=====TELEGRAM=====</code>.</p><label class="field"><span>Structured captions</span><textarea id="import-captions" placeholder="=====INSTAGRAM=====&#10;Your caption here…&#10;&#10;=====LINKEDIN=====&#10;Your company update…"></textarea></label><div id="dialog-error" class="dialog-error" role="alert"></div>', '<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="parse-captions">Import captions</button>');
+  showDialog('Import captions', '<p>Paste your platform sections. Include only the platforms you need. Missing or empty captions stay off. <code>=====INSTAGRAM_STORY=====</code> is optional.</p><label class="field"><span>Structured captions</span><textarea id="import-captions" placeholder="=====INSTAGRAM=====&#10;Your caption here…&#10;&#10;=====LINKEDIN=====&#10;Your company update…"></textarea></label><div id="dialog-error" class="dialog-error" role="alert"></div>', '<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="parse-captions">Import captions</button>');
   document.querySelector('#parse-captions').onclick = () => {
     const { captions, errors } = parseCaptions(document.querySelector('#import-captions').value);
     if (errors.length) { document.querySelector('#dialog-error').textContent = errors.join('\n'); return; }
-    draft.captions = captions; draft.instagram.story=importStory(captions);draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(draft.instagram.story.enabled)draft.selected.push('instagramStory');saveDraft(); modal.close(); view = 'compose'; shell(); toast('Captions imported.');
+    draft.captions = captions; draft.instagram.story=importStory(captions);draft.selected=PLATFORMS.filter(p=>captions[p.id]?.trim()).map(p=>p.id);if(draft.instagram.story.enabled)draft.selected.push('instagramStory');saveDraft(); modal.close(); view = 'compose'; shell(); toast('Captions imported.');
   };
 }
 async function copyText(text) {
@@ -523,10 +548,10 @@ document.addEventListener('click', async e => {
     if (button.dataset.fixDestination) { captionTab = button.dataset.fixDestination==='instagramStory'?'instagram':button.dataset.fixDestination;if(button.dataset.fixDestination==='instagramStory')instagramTab='story'; navigate('compose'); document.querySelector(`#editor-${captionTab}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (button.dataset.pickMedia) {
       const id = button.dataset.pickMedia, p = platform(id), selected = [...mediaIdsFor(draft, id)], image = button.dataset.mediaId;
-      draft.mediaByPlatform[id] = p.maxImages === 1 ? selected.length === 1 && selected[0] === image ? [] : [image] : selected.includes(image) ? selected.filter(key => key !== image) : [...selected, image];
+      draft.mediaByPlatform[id] = p.maxImages === 1 ? selected.length === 1 && selected[0] === image ? [] : [image] : selected.includes(image) ? selected.filter(key => key !== image) : [...selected, image];setTextOnly(draft,id,!draft.mediaByPlatform[id].length);
       platformPreviewIndex['editor' + id] = Math.max(0, draft.mediaByPlatform[id].indexOf(image)); saveDraft(); shell(); return;
     }
-    if (button.dataset.platformMediaAction) { const id = button.dataset.platformMediaAction; if (button.dataset.selectionAction === 'inherit') delete draft.mediaByPlatform[id]; else draft.mediaByPlatform[id] = []; saveDraft(); shell(); return; }
+    if (button.dataset.platformMediaAction) { const id = button.dataset.platformMediaAction; if (button.dataset.selectionAction === 'inherit'){delete draft.mediaByPlatform[id];setTextOnly(draft,id,false);}else{draft.mediaByPlatform[id]=[];setTextOnly(draft,id,true);} saveDraft(); shell(); return; }
     if (button.dataset.destinationMove) {
       const id = button.dataset.destinationMove, ids = [...mediaIdsFor(draft, id)], index = ids.indexOf(button.dataset.mediaId), target = index + Number(button.dataset.direction);
       if (index >= 0 && target >= 0 && target < ids.length) { [ids[index], ids[target]] = [ids[target], ids[index]]; draft.mediaByPlatform[id] = ids; saveDraft(); shell(); } return;
@@ -540,7 +565,7 @@ document.addEventListener('click', async e => {
     }
     if (button.dataset.view) { if (button.dataset.view === 'preview') await preview(); else navigate(button.dataset.view); return; }
     if (button.dataset.destination) {
-      const id = button.dataset.destination; draft.selected = draft.selected.includes(id) ? draft.selected.filter(p => p !== id) : PLATFORMS.filter(p => [...draft.selected, id].includes(p.id)).map(p => p.id); saveDraft(); shell(); return;
+      const id = button.dataset.destination;if(!draft.selected.includes(id)&&!draft.captions[id]?.trim()){captionDialog(id);return;} draft.selected = draft.selected.includes(id) ? draft.selected.filter(p => p !== id) : DESTINATIONS.filter(p => [...draft.selected, id].includes(p.id)).map(p => p.id); saveDraft(); shell(); return;
     }
     if (button.dataset.captionTab) { captionTab = button.dataset.captionTab; shell(); document.querySelector(`#tab-${captionTab}`)?.focus(); return; }
     if (button.dataset.copyInstagram) { draft.captions[button.dataset.copyInstagram] = draft.captions.instagram; saveDraft(); shell(); toast('Instagram caption copied. Make it your own.'); return; }
@@ -556,7 +581,7 @@ document.addEventListener('click', async e => {
       return;
     }
     if (button.dataset.restoreMedia) { const item = state.media.find(m => m.id === button.dataset.restoreMedia); if (item?.sourceId) changeMediaOrder(draft.mediaIds.map(id => id === item.id ? item.sourceId : id), 'Original image restored.', { [item.id]: item.sourceId }); return; }
-    if (button.hasAttribute('data-undo-media')) { const restore = lastMediaOrder; if (restore) { draft.mediaIds = restore.ids; draft.mediaByPlatform = restore.selections; lastMediaOrder = null; saveDraft(); shell(); toast('Image change undone.'); } return; }
+    if (button.hasAttribute('data-undo-media')) { const restore = lastMediaOrder; if (restore) { draft.mediaIds = restore.ids; draft.mediaByPlatform = restore.selections;draft.textOnlyPlatforms=restore.textOnlyPlatforms||[]; lastMediaOrder = null; saveDraft(); shell(); toast('Image change undone.'); } return; }
     if (button.hasAttribute('data-manychat-add')) { customizeManychatLinks(); if (draft.manychat.links.length < 3) draft.manychat.links.push({ label: '', url: '' }); saveDraft(); refreshManychatLinks(); return; }
     if (button.hasAttribute('data-manychat-remove')) { customizeManychatLinks(); draft.manychat.links.splice(Number(button.dataset.manychatRemove), 1); saveDraft(); refreshManychatLinks(); return; }
     if (button.hasAttribute('data-manychat-auto')) { draft.manychat.linksMode = 'auto'; draft.manychat.links = []; saveDraft(); refreshManychatLinks(); return; }
@@ -567,7 +592,7 @@ document.addEventListener('click', async e => {
       if (document.querySelector('#settings-form')?.dataset.dirty === 'true') return toast('Save your connection changes before continuing.', true);
       const verified = verifiedDestinations();
       draft.selected = verified.filter(id => draft.selected.includes(id));
-      if (!draft.selected.length) draft.selected = verified;
+      draft.selected=draft.selected.filter(id=>draft.captions[id]?.trim());if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
       saveDraft(); navigate('compose'); return;
     }
     if (button.dataset.mode) {
@@ -582,7 +607,7 @@ document.addEventListener('click', async e => {
       const runId = button.dataset.retry;
       const retryPlatform = button.dataset.retryPlatform;
       const retry = async confirmation => {
-        await api(`/api/runs/${runId}/retry`, { method: 'POST', body: { mode: confirmation === 'POST' ? 'LIVE' : 'TEST', confirmation, platform: retryPlatform } });
+        await api(`/api/runs/${runId}/retry`, { method: 'POST', body: { mode: confirmation === 'POST' ? 'LIVE' : 'TEST', confirmation, platform: retryPlatform, metadataConsent:liveMetadataConsent } });
         await refresh(); shell(); toast(retryPlatform ? `${platform(retryPlatform).name} queued.` : 'Failed destinations queued.');
       };
       const saved=state.runs.find(run=>run.id===runId),routeNote=saved?.items.some(item=>item.id==='instagram'&&item.status==='failed')&&(!retryPlatform||retryPlatform==='instagram')?`<p>Instagram feed: <strong>${instagramMethod(saved.instagram)==='web'?'Web':'Android'}</strong> (saved route). Change the route in Compose for a new reviewed run.</p>`:'';
@@ -590,7 +615,7 @@ document.addEventListener('click', async e => {
       document.querySelector('#retry-test').onclick = async () => { try { await retry(); modal.close(); } catch (error) { toast(error.message, true); } };
       document.querySelector('#retry-live').onclick = () => {
         const selected = state.runs.find(r => r.id === runId).items.filter(i => i.status === 'failed' && (!retryPlatform || i.id === retryPlatform));
-        confirmLive(retry, `Publish ${selected.length} failed destination${selected.length === 1 ? '' : 's'}`, selected.map(i => i.id));
+        const source=state.runs.find(r=>r.id===runId),candidate={selected:selected.map(i=>i.id),mediaByPlatform:source.mediaByPlatform,mediaIds:source.media.map(m=>m.id)};metadataPrompt(()=>confirmLive(retry,`Publish ${selected.length} failed destination${selected.length===1?'':'s'}`,candidate.selected),candidate,source.media,source);
       }; return;
     }
     if (button.dataset.resolve) {
@@ -619,7 +644,7 @@ document.addEventListener('click', async e => {
     if (button.dataset.action === 'import') importDialog();
     if (button.dataset.action === 'export') exportText();
     if (button.dataset.action === 'preview') await preview();
-    if (button.dataset.action === 'run') { if (mode === 'LIVE') confirmLive(startRun, 'Publish selected', reviewDraft.selected); else await startRun(); }
+    if (button.dataset.action === 'run') { if (mode === 'LIVE') metadataPrompt(()=>confirmLive(startRun,'Publish selected',reviewDraft.selected)); else await startRun(); }
     if (button.dataset.action === 'logins') await checkLogins();
     if (button.dataset.action === 'logout') { await api('/api/logout', { method: 'POST', body: {} }); showLogin(); }
     if (button.dataset.action === 'download-log') download('social-studio-report.json', JSON.stringify({ application: 'GO Classes Social Studio', createdBy: 'Mrinal', exportedAt: new Date().toISOString(), runs: state.runs }, null, 2), 'application/json');
@@ -657,9 +682,10 @@ document.addEventListener('input', e => {
   const id = e.target.dataset.caption;
   if (!id) return;
   draft.captions[id] = e.target.value;
+  if(!e.target.value.trim())draft.selected=draft.selected.filter(key=>key!==id);
   if (id === 'manychat') refreshManychatLinks();
   const p = platform(id), limit = captionLimit(p, platformMedia(id).length); const length = captionLength(p, e.target.value); const el = document.querySelector(`#count-${id}`);
-  el.textContent = `${length.toLocaleString()} / ${limit.toLocaleString()}${id === 'x' ? ' *' : ''}`; el.classList.toggle('error-text', length > limit);
+  el.textContent = `${id==='instagram'?instagramHashtags(e.target.value).length+' / 5 hashtags ? ':''}${length.toLocaleString()} / ${limit.toLocaleString()}${id === 'x' ? ' *' : ''}`; el.classList.toggle('error-text', length > limit||id==='instagram'&&instagramHashtags(e.target.value).length>5);
   const saved = document.querySelector('#draft-status'); if (saved) saved.textContent = 'Saving…'; saveDraft(); renderReadiness();
 });
 document.addEventListener('keydown', e => {
@@ -688,7 +714,9 @@ function applyStatus(data) {
   const changedConnections = JSON.stringify(state.login.items) !== JSON.stringify(data.login.items);
   const changedBusy=state.workerBusy!==data.workerBusy;
   const changedRuns = JSON.stringify(state.runs) !== JSON.stringify(data.runs);
-  state.runs = data.runs; state.login = data.login; state.workerBusy = data.workerBusy; state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
+  state.runs = data.runs;
+  const completed=reconcilePublishedDraft(draft,state.runs.find(run=>run.id===draft.submission?.runId));if(completed){draft=completed.draft;saveDraft();if(completed.cleared)toast('Published. Workspace cleared.');}
+  state.login = data.login; state.workerBusy = data.workerBusy; state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
   if(musicPickerOpen&&data.androidProgress?.picker)musicPickerUi?.progress(data.androidProgress);
   if (data.config) {
@@ -698,6 +726,7 @@ function applyStatus(data) {
       const [id, key] = input.name.split('.'); input.value = state.config.platforms[id]?.[key] ?? '';
     });
   }
+  if(completed&&['compose','preview'].includes(view)){view='compose';shell();}
   if (view === 'activity'&&(changedRuns||changedBusy)) renderActivity();
   renderAndroidProgress();
   if (view === 'settings') {
@@ -729,7 +758,8 @@ function connect() {
 }
 async function load() {
   const data = await api('/api/bootstrap'); state = data;
-  draft.mediaIds = draft.mediaIds.filter(id => state.media.some(m => m.id === id));
+  updateDraftMedia(draft,draft.mediaIds.filter(id=>state.media.some(m=>m.id===id)));
+  const completed=reconcilePublishedDraft(draft,state.runs.find(run=>run.id===draft.submission?.runId));if(completed){draft=completed.draft;saveDraft();}
   for (const [id, ids] of Object.entries(draft.mediaByPlatform)) { if (!platform(id) || !Array.isArray(ids)) delete draft.mediaByPlatform[id]; else draft.mediaByPlatform[id] = ids.filter(key => draft.mediaIds.includes(key)); }
   connected = true;
   if (activeRun()) view = 'activity';

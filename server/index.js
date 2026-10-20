@@ -16,7 +16,7 @@ import { Queue } from './queue.js';
 import { destinationUrl } from './automation/platforms.js';
 import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
-import { mediaFor, selectionErrors } from '../shared/media.js';
+import { mediaFor, selectionErrors, metadataNeedsReview, metadataConsentValid } from '../shared/media.js';
 import { InstagramAndroidWorker } from './automation/instagram-android.js';
 import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '../shared/instagram.js';
 import { destinationReadiness } from '../shared/readiness.js';
@@ -175,6 +175,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const readiness = destinationReadiness(draft, selectedMedia, config, queue.login.items, xLength, queue.runs);
     for (const id of draft.selected) errors.push(...readiness[id].errors);
     if (errors.length) return res.status(400).json({ error: errors.join('\n') });
+    if(mode==='LIVE'&&!metadataConsentValid(metadataNeedsReview(draft,selectedMedia),req.body.metadataConsent))return res.status(409).json({error:'Review the embedded origin metadata before publishing. Clean the selected images or explicitly keep the originals.'});
     const run = await queue.start({ draft, config, mode, confirmation, media: selectedMedia });
     res.status(201).json({ id: run.id });
   });
@@ -193,6 +194,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if(selected.includes('instagramStory')&&!selected.includes('instagram')&&sourceInstagramPublication?.postUrl)retryDraft.instagram.story.sourcePostUrl=sourceInstagramPublication.postUrl;
     const draftErrors = validateDraft(retryDraft, original.media, xLength);
     if (draftErrors.length) return res.status(400).json({ error: draftErrors.join('\n') });
+    if(req.body.mode==='LIVE'&&!metadataConsentValid(metadataNeedsReview(retryDraft,original.media),req.body.metadataConsent))return res.status(409).json({error:'Review the embedded origin metadata before this live retry. Clean in Compose or explicitly keep the originals.'});
     const run = await queue.start({ draft: retryDraft, config, mode: req.body.mode || 'TEST', confirmation: req.body.confirmation, media: original.media, retryOf: original.id, sourceInstagramPublication });
     res.status(201).json({ id: run.id });
   });
@@ -215,6 +217,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
   app.post('/api/logins', (req, res) => {
     const selected = req.body.selected;
+    let instagram;try{instagram=instagramOptions(req.body.instagram);}catch(error){return res.status(400).json({error:error.message});}
     if (!Array.isArray(selected) || !selected.length || selected.length > PLATFORMS.length || new Set(selected).size !== selected.length || selected.some(id => !PLATFORMS.some(p => p.id === id))) return res.status(400).json({ error: 'Select valid destinations to check.' });
     if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });
     queue.checkLogins(config, selected, async (id, detected) => {
@@ -225,7 +228,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
       const valid = validateConfig(updated);
       await atomicWrite(path.join(dataDir, 'config.json'), valid);
       config = valid; queue.settings = config;
-    }).catch(error => console.error(error)); res.status(202).json({ ok: true });
+    },{instagram}).catch(error => console.error(error)); res.status(202).json({ ok: true });
   });
   app.post('/api/manual-login', async (req, res) => {
     if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });

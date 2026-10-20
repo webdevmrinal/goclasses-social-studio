@@ -28,6 +28,7 @@ export function storyLayout(value=DEFAULT_STORY_LAYOUT) {
   return out;
 }
 // Explicit feed transport; older reviewed drafts keep their original behavior.
+export const instagramHashtags=text=>[...String(text||'').matchAll(/(^|[^\p{L}\p{N}_])#([\p{L}\p{M}\p{N}_]+)/gu)].map(m=>'#'+m[2]);
 export function instagramMethod(value={}) {
   return value?.postingMethod ?? (value?.music?.enabled===true?'android':'web');
 }

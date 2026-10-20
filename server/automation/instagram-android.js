@@ -6,9 +6,9 @@ import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.
 import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,discardStory} from './native-story.js';
 import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
-import {instagramBaseline,instagramPublication,instagramCaptionMatches} from './instagram-reference.js';
+import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
-import {instagramOptions,instagramMusicEnabled} from '../../shared/instagram.js';
+import {instagramOptions,instagramMusicEnabled,instagramHashtags} from '../../shared/instagram.js';
 import {atomicWrite,readJson} from '../config.js';
 import {finishPost,InterventionError} from './utils.js';
 
@@ -151,18 +151,18 @@ export class InstagramAndroidWorker {
     finally{if(!retained)await this.close();}
   }
   async run(ctx){
+    if(ctx.id==='instagram'&&instagramHashtags(ctx.caption).length>5)throw new InterventionError('Instagram accepts up to 5 hashtags. Edit the caption before starting Android.');
     const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
     let url;
     if(ctx.id==='instagramStory'){
-      let source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl;
-      if(!source&&ctx.mode==='TEST')source=(await instagramBaseline(ctx.page.context(),ctx.config.platforms.instagram.handle))[0];
+      const source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl;
       url=instagramPostUrl(source);
-      if(!url)throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
+      if(!url&&ctx.mode!=='TEST')throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
       // The retained session comes only from this run's confirmed native feed.
       // Standalone Story retries still verify ownership through the exact permalink.
-      if(!this.handoff){await ctx.step('Verifying the exact feed post for the Android Story...');await this.verifyPost(ctx.page,url,ctx.config.platforms.instagram.handle);}
     }
     await ctx.step(this.handoff?'Continuing from the confirmed Android feed post...':'Checking the dedicated Android Instagram account...');
+    const inherited=Boolean(this.handoff);
     const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.openForRun(ctx);
     let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
@@ -175,6 +175,8 @@ export class InstagramAndroidWorker {
     };
     try{
       if(ctx.id==='instagramStory'){
+        if(!url&&ctx.mode==='TEST'){const existing=await nativeInstagramBaseline(s,ctx.config.platforms.instagram.handle);url=existing[3]||existing[0];}
+        if(!inherited){await ctx.step('Verifying the exact native feed post for the Story...');await this.verifyPost(s,url,ctx.config.platforms.instagram.handle);}
         await ctx.step('Opening the exact feed post as a Story...');
         await openRepost(s,url);owned=true;
         await ctx.step('Applying the reviewed shared-post card layout...');
@@ -196,7 +198,7 @@ export class InstagramAndroidWorker {
         if(status==='dry_run')await discardStory(s);
         return {status};
       }
-      const baseline=ctx.mode==='LIVE'?await instagramBaseline(ctx.page.context(),ctx.config.platforms.instagram.handle):null;
+      const baseline=ctx.mode==='LIVE'?await nativeInstagramBaseline(s,ctx.config.platforms.instagram.handle):null;
       await ctx.step('Transferring and verifying the reviewed Android image copies...');
       album=await pushAlbum(s,ctx.files);s.uploadAlbum=album;
       await ctx.step('Opening the isolated upload album and checking limited photo access...');
@@ -218,8 +220,7 @@ export class InstagramAndroidWorker {
         preflight:async()=>{ctx.signal?.throwIfAborted();await verifyNativeCaption(s,ctx.caption,music);if(JSON.stringify(await photoEvidence(s))!==JSON.stringify(photos))throw new InterventionError('The reviewed Android images changed.');},
         publish:async()=>{submitted=true;const id=await s.find('id',nativeId('share_footer_button'));await s.request('/element/'+id+'/click','POST',{});},
         verify:async()=>{
-          publication=await instagramPublication(ctx.page.context(),ctx.config.platforms.instagram.handle,baseline,ctx.caption);
-          if(!publication.postUrl&&publication.candidates?.length===1){await this.verifyPost(ctx.page,publication.candidates[0],ctx.config.platforms.instagram.handle,ctx.caption);publication.postUrl=publication.candidates[0];}
+          publication=await nativeInstagramPublication(s,ctx.config.platforms.instagram.handle,baseline,ctx.caption);
           if(!publication.postUrl)throw new Error('Feed submission began, but its exact new post could not be confirmed. Verify Instagram before retrying.');
         }
       });
@@ -235,12 +236,5 @@ export class InstagramAndroidWorker {
       throw e;
     }finally{if(!retained)await this.close();}
   }
-  async verifyPost(page,url,handle,caption){
-    const owned=await instagramBaseline(page.context(),handle);
-    if(!owned.includes(instagramPostUrl(url)))throw new InterventionError('The exact post is not visible in the configured Instagram profile grid. Nothing was shared.');
-    await page.goto(url,{waitUntil:'domcontentloaded'});
-    await page.locator('main').waitFor({state:'visible',timeout:30000});
-    if(instagramPostUrl(page.url())!==instagramPostUrl(url))throw new InterventionError('Instagram opened a different post.');
-    if(caption&&!await instagramCaptionMatches(page,caption))throw new Error('The new Instagram post caption could not be confirmed.');
-  }
+  async verifyPost(s,url,handle,caption){return verifyNativePost(s,url,handle,caption);}
 }

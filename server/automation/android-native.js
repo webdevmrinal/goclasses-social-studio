@@ -168,6 +168,12 @@ export class AndroidSession {
     await this.request('/element/'+id+'/clear','POST',{});
     await this.request('/element/'+id+'/value','POST',{text,value:[...text]});
   }
+  async replaceText(using,value,text){
+    if(text.endsWith('\\n'))throw new InterventionError('The caption ends with a literal backslash-n. Use a real line break before posting.');
+    const id=await this.find(using,value);
+    if(await this.request('/element/'+id+'/attribute/password')==='true')throw new Error('Password fields are never filled.');
+    await this.request('/execute/sync','POST',{script:'mobile: replaceElementValue',args:[{elementId:id,text}]});
+  }
   async screenshot() { return Buffer.from(await this.request('/screenshot'),'base64'); }
   async activate() {
     await this.request('/appium/device/activate_app','POST',{appId:'com.instagram.android'});
@@ -180,7 +186,7 @@ export class AndroidSession {
   async account(expected) {
     await this.activate();
     // Public post/share navigation can be dismissed, but never an unsent editor.
-    for(let i=0;i<3;i++){
+    for(let i=0;i<12;i++){
       const current=(await this.screen()).filter(n=>n.displayed==='true');
       if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view'))){
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
@@ -188,17 +194,16 @@ export class AndroidSession {
       }
       if(current.some(n=>n['resource-id']===nativeId('new_post_title')||n['resource-id']===nativeId('gallery_folder_menu_tv')))throw new InterventionError('Instagram has an unfinished New post screen. Close it in the emulator, then retry. Your draft was preserved.');
       if(current.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Close the unsent Instagram Android draft before continuing.');
-      if(current.some(n=>n['resource-id']===nativeId('row_feed_button_share'))&&!current.some(n=>n['resource-id']===nativeId('profile_tab'))){
-        // A confirmed/public post viewer has no tab bar. Navigate to our own profile,
-        // only after the unsent-editor checks above; never back out of a draft.
-        await this.request('/execute/sync','POST',{script:'mobile: deepLink',args:[{url:'https://www.instagram.com/'+encodeURIComponent(expected)+'/',package:'com.instagram.android'}]});
-        await delay(400);continue;
+      if(!current.some(n=>n['resource-id']===nativeId('profile_tab'))&&(current.some(n=>n['resource-id']===nativeId('row_feed_profile_header'))||current.some(n=>n['resource-id']===nativeId('row_feed_button_share'))||current.some(n=>n['resource-id']===nativeId('profile_tab_layout')))){
+        // Close only an observed public viewer/profile, never an unsent editor.
+        await this.request('/back','POST',{});await delay(300);continue;
       }
       break;
     }
-    const nodes=await this.until(nodes=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_tab')) && nodes,'Finish Instagram sign-in or close its unsent Android draft before preparing a post.');
+    const ownProfile=nodes=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('action_bar_title')&&n.text===expected)&&nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_header_create_button'));
+    const nodes=await this.until(nodes=>(ownProfile(nodes)||nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_tab'))) && nodes,'Finish Instagram sign-in or close its unsent Android draft before preparing a post.');
     if(nodes.some(n=>n.displayed==='true'&&/new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|caption_input_text_view|music_editor_controls_container/.test(n['resource-id']||'')))throw new InterventionError('Instagram has an unsent Android draft. Close it yourself before preparing another post.');
-    await this.clickId('profile_tab');
+    if(!ownProfile(nodes))await this.clickId('profile_tab');
     await this.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('action_bar_title') && n.text===expected),'The Android Instagram account does not match @'+expected+'.');
     this.accountHandle=expected;
   }

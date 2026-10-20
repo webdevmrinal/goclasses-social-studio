@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Mrinal. Native publication receipt fixture; all controls are simulated.
+import test from 'node:test';import assert from 'node:assert/strict';import {nativeId} from '../server/automation/android-native.js';import {nativeInstagramPublication,nativeInstagramBaseline} from '../server/automation/native-reference.js';
+const n=(id,text='',extra={})=>({'resource-id':id?nativeId(id):'',package:'com.instagram.android',displayed:'true',text,...extra});
+const url=id=>'https://www.instagram.com/p/'+id+'/';
+function fixture({fresh=true,caption='Reviewed caption',author='ours'}={}){
+ const old=['PIN1','PIN2','PIN3','OLD1','OLD2','OLD3'],tiles=fresh?[...old.slice(0,3),'NEW',...old.slice(3)]:old;let location='review-finished',post='',sheet=false,clipboard='',copies=0;
+ const screen=()=>location==='profile'?[n('action_bar_title','ours'),n('profile_tab_layout'),n('profile_header_familiar_post_count_value',String(tiles.length)),...tiles.slice(0,6).map((id,i)=>n('image_button','',{'content-desc':'Photo by Ours at Row '+(Math.floor(i/3)+1)+', Column '+(i%3+1),bounds:'['+(i%3*160)+','+(300+Math.floor(i/3)*200)+']['+(i%3*160+158)+','+(498+Math.floor(i/3)*200)+']'}))]:location==='post'?(sheet?[n('button','',{'content-desc':'Copy link'})]:[n('row_feed_button_share','',{'content-desc':'Send post. Button.'}),n('row_feed_photo_profile_name',post==='NEW'?author:'ours'),n('','ours '+(post==='NEW'?caption:'Older caption'))]):[];
+ const s={screen:async()=>screen(),account:async handle=>{assert.equal(handle,'ours');location='profile';},until:async predicate=>{const value=await predicate(screen());assert(value,'Native fixture predicate must match its current surface');return value;},find:async()=>{assert.equal(location,'post');return 'public-share';},click:async(using,value)=>{if(value.includes('image_button')){const m=value.match(/Row (\d+), Column (\d+)/);assert(m);post=tiles[(+m[1]-1)*3+(+m[2]-1)];location='post';}else{assert(value.includes('Copy link'));assert(sheet);clipboard=url(post);sheet=false;copies++;}},request:async(endpoint,method,body)=>{
+ if(endpoint==='/back'){assert.equal(location,'post');if(sheet)sheet=false;else location='profile';return;}
+ if(endpoint.includes('/click')){assert.equal(location,'post');sheet=true;return;}
+ assert.equal(endpoint,'/execute/sync');const arg=body.args[0];if(body.script==='mobile: deepLink'){if(arg.url=== 'https://www.instagram.com/ours/')location='profile';else{post=arg.url.match(/\/p\/([^/]+)/)[1];location='post';}return;}
+ if(body.script==='mobile: setClipboard'){clipboard=Buffer.from(arg.content,'base64').toString();return;}
+ if(body.script==='mobile: getClipboard')return Buffer.from(clipboard).toString('base64');assert.fail('Unexpected native command');
+ }};return {s,baseline:old.map(url),copies:()=>copies};
+}
+test('native confirmation skips existing pinned posts and requires the exact fresh author, URL and caption',async()=>{const f=fixture();const proof=await nativeInstagramPublication(f.s,'ours',f.baseline,'Reviewed caption');assert.equal(proof.postUrl,url('NEW'));assert.deepEqual(proof.candidates,[url('NEW')]);assert.equal(f.copies(),5);});
+test('native receipt never calls an old post new or accepts a changed caption/foreign account',async()=>{for(const options of [{fresh:false},{caption:'Changed caption'},{author:'foreign'}]){const f=fixture(options);await assert.rejects(nativeInstagramPublication(f.s,'ours',f.baseline,'Reviewed caption'));}});
+test('native baseline reads six distinct public profile links and returns to account verification',async()=>{const f=fixture({fresh:false});assert.deepEqual(await nativeInstagramBaseline(f.s,'ours'),f.baseline);assert.equal(f.copies(),6);});

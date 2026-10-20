@@ -29,11 +29,13 @@ test('structured captions preserve Unicode and intentional line breaks', () => {
   assert.deepEqual(result.errors, []);
   assert.equal(result.captions.youtubeCS, 'नमस्ते ✅\n\nSecond line');
 });
-test('parser rejects missing, empty, duplicate and unknown sections', () => {
+test('parser accepts omitted captions but rejects duplicate and unknown sections', () => {
   const result = parseCaptions('=====X=====\n\n=====X=====\nSecond\n=====UNKNOWN=====\nHi');
   assert(result.errors.some(s => s.includes('Duplicate')));
   assert(result.errors.some(s => s.includes('Unknown')));
-  assert(result.errors.some(s => s.includes('missing or empty')));
+  assert(!result.errors.some(s=>s.includes('missing or empty')));
+  assert.deepEqual(parseCaptions('=====X=====\nOnly X').errors,[]);
+  assert.equal(parseCaptions('=====X=====\nOnly X').captions.instagram,'');
 });
 test('X uses weighted Unicode and URL counting on the server', () => {
   const weighted = text => twitterText.parseTweet(text).weightedLength;
