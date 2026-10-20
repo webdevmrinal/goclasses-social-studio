@@ -3,8 +3,13 @@ import { PLATFORMS, DESTINATIONS, validateDraft } from './platforms.js';
 import { validateManychatDraft } from './manychat.js';
 import { mediaFor } from './media.js';
 import { instagramPostUrl } from './manychat.js';
-import { DEFAULT_STORY_LAYOUT } from './instagram.js';
-const instagramKey=(value,id)=>{const song=value?.music?.selection,track=song?.key||song?.id||'';if(id==='instagram')return JSON.stringify({enabled:value?.music?.enabled===true,track:value?.music?.enabled?track:''});const story=value?.story||{};return JSON.stringify({track:value?.music?.enabled?track:'',musicEnabled:value?.music?.enabled===true,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});};
+import { DEFAULT_STORY_LAYOUT,instagramMethod,instagramMusicEnabled } from './instagram.js';
+const instagramKey=(value,id)=>{
+  const song=value?.music?.selection,enabled=instagramMusicEnabled(value,id),track=enabled?(song?.key||song?.id||''):'';
+  if(id==='instagram')return JSON.stringify({method:instagramMethod(value),enabled,track});
+  const story=value?.story||{};
+  return JSON.stringify({track,musicEnabled:enabled,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});
+};
 export function setupIssues(config, id) {
   if(id==='instagramStory')id='instagram';
   const p = config?.platforms?.[id] || {};
@@ -30,6 +35,8 @@ export function destinationReadiness(draft, media, config, login = {}, xLength, 
     const parentSame=p.id!=='instagramStory'||Boolean(instagramPostUrl(draft.instagram?.story?.sourcePostUrl))||last?.captions.instagram===draft.captions?.instagram&&JSON.stringify(last?.mediaByPlatform?.instagram||last?.media.map(m=>m.id))===JSON.stringify(mediaFor(draft,media,'instagram').map(m=>m.id));
     const currentIds=p.id==='instagramStory'?[]:mediaFor(draft,media,p.id).map(m=>m.id);
     const sameDraft = sameOptions && parentSame && last?.captions[p.id] === draft.captions?.[p.id] && JSON.stringify(previousIds) === JSON.stringify(currentIds);
+    const unresolvedFeed=p.id==='instagram'&&runs.some(run=>run.items.some(i=>i.id==='instagram'&&i.status==='uncertain')&&run.captions?.instagram===draft.captions?.instagram&&JSON.stringify(run.mediaByPlatform?.instagram||run.media?.map(m=>m.id))===JSON.stringify(currentIds));
+    if(unresolvedFeed)errors.push('An Instagram submission with these images and caption needs verification in Activity before another attempt, even with a different posting method.');
     if (sameDraft && ['failed', 'uncertain', 'attention', 'needs_setup'].includes(item?.status)) errors.push(`Last attempt needs review in Activity: ${String(item.message).slice(0, 300)}`);
     return [p.id, { ready: !errors.length, errors: [...new Set(errors)] }];
   }));

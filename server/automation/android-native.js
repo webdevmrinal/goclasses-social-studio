@@ -54,6 +54,13 @@ export async function cancelInstagramPhotoAccess(s){
   await s.until(next=>!isPhotoAccessPicker(next)&&next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Android photo access is still closing. Close that dialog in the emulator and retry.',15000);
   return true;
 }
+export const ANDROID_UNRESPONSIVE='Instagram is not responding in Android. Its draft was preserved. Wait for it in the emulator, or choose Web in Compose for a faster feed post. Nothing was retried automatically.';
+export function instagramAnr(nodes){
+  const visible=nodes.filter(n=>n.displayed==='true'&&n.package==='android');
+  return visible.some(n=>n['resource-id']==='android:id/alertTitle'&&/^Instagram (?:isn['\u2019]t|is not) responding$/i.test(n.text||''))&&
+    visible.some(n=>n['resource-id']==='android:id/aerr_wait'&&n.text==='Wait')&&
+    visible.some(n=>n['resource-id']==='android:id/aerr_close'&&n.text==='Close app');
+}
 export class AndroidSession {
   constructor({signal}={}) {
     this.signal=signal;
@@ -62,14 +69,15 @@ export class AndroidSession {
     this.adbPath = path.join(this.root, 'sdk', 'platform-tools', 'adb.exe');
   }
   async adb(args, timeout=20000) {
-    const result = await exec(this.adbPath, ['-s', ANDROID_SERIAL, ...args], { windowsHide:true, timeout, maxBuffer:4*1024*1024 });
-    return result.stdout.trim();
+    this.signal?.throwIfAborted();
+    const result = await exec(this.adbPath, ['-s', ANDROID_SERIAL, ...args], { windowsHide:true, timeout, maxBuffer:4*1024*1024, signal:this.signal });
+    this.signal?.throwIfAborted();return result.stdout.trim();
   }
   async open({ start = false } = {}) {
     // Warm workers skip the launcher, repeated PowerShell ownership queries and tuning.
     let ready=false;try{const response=await fetch(ANDROID_URL+'/status',{signal:AbortSignal.timeout(1200)});ready=response.ok&&(await response.json()).value?.ready===true;}catch{}
     const existing=ready?await this.adb(['emu','avd','name']).catch(()=>''):'';
-    if(start&&(!ready||!existing.split(/\r?\n/).map(value=>value.trim()).includes(ANDROID_AVD)))await exec(process.execPath, [path.resolve('scripts/android-worker.mjs'), 'start'], { windowsHide:true, timeout:150000, maxBuffer:1024*1024 });
+    if(start&&(!ready||!existing.split(/\r?\n/).map(value=>value.trim()).includes(ANDROID_AVD)))await exec(process.execPath, [path.resolve('scripts/android-worker.mjs'), 'start'], { windowsHide:true, timeout:150000, maxBuffer:1024*1024, signal:this.signal });
     const name = (existing||await this.adb(['emu','avd','name'])).split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&x!=='OK').join('');
     if (name !== ANDROID_AVD || await this.adb(['shell','getprop','sys.boot_completed']) !== '1') throw new InterventionError('Start the dedicated Instagram Android emulator and finish signing in.');
     const packages = await this.adb(['shell','pm','list','packages']);
@@ -90,24 +98,37 @@ export class AndroidSession {
       // its signed-in account and every unsent editor. No publication is retried.
       for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
     });
+    this.signal?.throwIfAborted();
     await this.request('/appium/settings','POST',{settings:{waitForIdleTimeout:500,waitForSelectorTimeout:500,enableMultiWindows:false,enableTopmostWindowFromActivePackage:false}});
     return this;
   }
   async request(endpoint, method='GET', body) {
     if (!this.id) throw new Error('No Android inspection session.');
     if(this.signal?.aborted && method!=='DELETE')throw new InterventionError('Android operation stopped. Its unsent draft was preserved.');
-    const response=await fetch(ANDROID_URL+'/session/'+this.id+endpoint,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:this.signal?AbortSignal.any([this.signal,AbortSignal.timeout(45000)]):AbortSignal.timeout(45000)});
+    const response=await fetch(ANDROID_URL+'/session/'+this.id+endpoint,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:this.signal&&method!=='DELETE'?AbortSignal.any([this.signal,AbortSignal.timeout(45000)]):AbortSignal.timeout(45000)});
     const out=await response.json();
+    if(method!=='DELETE')this.signal?.throwIfAborted();
     if(!response.ok || out.value?.error) throw new Error('Android: '+(out.value?.message || out.value?.error || response.status));
     return out.value;
   }
   async close() {
     if (!this.id) return;
-    this.signal=null;
     try { await this.request('','DELETE'); } finally { this.id=null; }
   }
   async screen() {
-    const nodes=nativeNodes(await this.request('/source'));
+    let nodes=nativeNodes(await this.request('/source'));
+    if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait')&&!instagramAnr(nodes))throw new InterventionError('Android has an unrecognized app-not-responding dialog. Close it yourself before continuing. Its draft was preserved.');
+    if(instagramAnr(nodes)){
+      if(this.anrWaited)throw new InterventionError(ANDROID_UNRESPONSIVE);
+      this.anrWaited=true;
+      await this.onUnresponsive?.('Instagram stopped responding. Giving it one chance to recover; your draft is preserved...');
+      // Only the verified system Wait control. Never Close app, relaunch,
+      // discard a draft, or repeat Share after an unresponsive-app dialog.
+      await this.click('id','android:id/aerr_wait');
+      const end=Date.now()+20000;
+      do{await delay(500);nodes=nativeNodes(await this.request('/source'));if(!instagramAnr(nodes))break;}while(Date.now()<end);
+      if(instagramAnr(nodes))throw new InterventionError(ANDROID_UNRESPONSIVE);
+    }
     if(nodes.some(n=>n.password==='true' && n.displayed==='true')) throw new InterventionError('Finish Instagram sign-in yourself in the emulator. Passwords and codes are never read or filled.');
     return nodes;
   }

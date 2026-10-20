@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import { usesInstagramAndroid } from '../../shared/instagram.js';
 import { navigate, firstVisible, clickAny, dismissCookies, assertNoChallenge, pasteCaption, verifyCaption, waitForImages, preparedButton, uploadImages, finishPost, InterventionError, AccountMismatchError, ReadinessError, NetworkError, waitUntilReady } from './utils.js';
 import { setupErrors } from '../config.js';
 import { prepareManychat } from './manychat.js';
@@ -145,7 +146,7 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
 }
 
 export async function automate(ctx) {
-  if(ctx.id==='instagramStory'||ctx.id==='instagram'&&ctx.instagram?.music?.enabled){
+  if(usesInstagramAndroid(ctx.instagram,ctx.id)){
     if(!ctx.instagramWorker)throw new InterventionError('The Android Instagram worker is unavailable.');
     return ctx.instagramWorker.run(ctx);
   }

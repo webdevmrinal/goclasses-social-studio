@@ -8,7 +8,7 @@ import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,s
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {instagramBaseline,instagramPublication,instagramCaptionMatches} from './instagram-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
-import {instagramOptions} from '../../shared/instagram.js';
+import {instagramOptions,instagramMusicEnabled} from '../../shared/instagram.js';
 import {atomicWrite,readJson} from '../config.js';
 import {finishPost,InterventionError} from './utils.js';
 
@@ -22,10 +22,10 @@ export class InstagramAndroidWorker {
     if(!chosen)throw new Error('Choose the Instagram song again from this music picker.');
     return structuredClone(chosen);
   }
-  async open(config,signal){
+  async open(config,signal,onProgress){
     if(this.busy)throw new InterventionError('Finish choosing Instagram music before starting a run.');
     this.busy=true;
-    try{this.s=await this.sessionFactory({signal}).open({start:true});await this.s.account(config.platforms.instagram.handle);return this.s;}
+    try{this.s=this.sessionFactory({signal});await this.s.open({start:true});this.s.onUnresponsive=onProgress||((message)=>this.progress(message));await this.s.account(config.platforms.instagram.handle);return this.s;}
     catch(e){await this.close();throw e;}
   }
   async close(){
@@ -122,12 +122,12 @@ export class InstagramAndroidWorker {
     return {key:music.key,title:music.title,artist:music.artist,segmentStart:segment,style:'Music Only'};
   }
   async openStory(ctx,url){
-    if(!this.handoff)return this.open(ctx.config,ctx.signal);
+    if(!this.handoff)return this.open(ctx.config,ctx.signal,ctx.step);
     const held=this.handoff;
     if(!this.s||held.runId!==ctx.runId||held.postUrl!==url||held.account!==ctx.config.platforms.instagram.handle){
       await this.close();throw new InterventionError('The confirmed Instagram feed handoff changed. Retry only the Story from its exact post URL.');
     }
-    this.handoff=null;this.s.signal=ctx.signal;
+    this.handoff=null;this.s.signal=ctx.signal;this.s.onUnresponsive=ctx.step;
     return this.s;
   }
   retainForStory(ctx,status,publication){
@@ -137,7 +137,7 @@ export class InstagramAndroidWorker {
   }
   async checkAccount(config){try{await this.open(config);}finally{await this.close();}}
   async run(ctx){
-    const options=instagramOptions(ctx.instagram),music=options.music.enabled?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
+    const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
     let url;
     if(ctx.id==='instagramStory'){
       let source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl;
@@ -149,7 +149,7 @@ export class InstagramAndroidWorker {
       if(!this.handoff){await ctx.step('Verifying the exact feed post for the Android Story...');await this.verifyPost(ctx.page,url,ctx.config.platforms.instagram.handle);}
     }
     await ctx.step(this.handoff?'Continuing from the confirmed Android feed post...':'Checking the dedicated Android Instagram account...');
-    const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.open(ctx.config,ctx.signal);
+    const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.open(ctx.config,ctx.signal,ctx.step);
     let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
       const nodes=await s.screen();
@@ -187,14 +187,18 @@ export class InstagramAndroidWorker {
       album=await pushAlbum(s,ctx.files);s.uploadAlbum=album;
       await ctx.step('Opening the isolated upload album and checking limited photo access...');
       await openGallery(s,album.folder);owned=true;
+      await ctx.step('Selecting the reviewed images and waiting for Instagram to decode them...');
       await selectAlbumPhotos(s,album);
-      await ctx.step('Adding the exact selected music from Instagram...');
-      await openMusicLibrary(s);await searchMusic(s,music.query);
-      const clip=await applyTrack(s,music,music.durationSeconds);
-      await ctx.step('Verifying the native caption, images and music...');
+      let clip;
+      if(music){
+        await ctx.step('Loading Instagram music for the reviewed images...');await openMusicLibrary(s);
+        await ctx.step('Finding the exact selected song: '+music.title+'...');await searchMusic(s,music.query);
+        await ctx.step('Applying and verifying the selected audio clip...');clip=await applyTrack(s,music,music.durationSeconds);
+      }
+      await ctx.step('Verifying the native caption and images'+(music?' with music':'')+'...');
       await nativeCaption(s,ctx.caption);
       const photos=await photoEvidence(s);
-      await ctx.recordPreparation({kind:'instagramMusic',music:{...music,...clip},images:ctx.files.length});
+      await ctx.recordPreparation({kind:'instagramAndroid',music:music?{...music,...clip}:null,images:ctx.files.length});
       let publication;
       const status=await finishPost({...ctx,snapshot,
         preflight:async()=>{ctx.signal?.throwIfAborted();await verifyNativeCaption(s,ctx.caption,music);if(JSON.stringify(await photoEvidence(s))!==JSON.stringify(photos))throw new InterventionError('The reviewed Android images changed.');},

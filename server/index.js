@@ -18,7 +18,7 @@ import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor, selectionErrors } from '../shared/media.js';
 import { InstagramAndroidWorker } from './automation/instagram-android.js';
-import { instagramOptions } from '../shared/instagram.js';
+import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '../shared/instagram.js';
 import { destinationReadiness } from '../shared/readiness.js';
 import { UpdateBridge } from './updates.js';
 
@@ -142,7 +142,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const errors = validateDraft(draft, selectedMedia, xLength);
     if(draft.selected.some(id=>['instagram','instagramStory'].includes(id))){
       const options=instagramOptions({...draft.instagram,story:{...draft.instagram?.story,enabled:draft.selected.includes('instagramStory')}});
-      if(process.platform!=='win32'&&(options.music.enabled||draft.selected.includes('instagramStory')))throw new Error('Android music and Story sharing need the configured Windows worker. Turn off music for fast browser feed posting on this Mac.');
+      if(process.platform!=='win32'&&draft.selected.some(id=>usesInstagramAndroid(options,id)))throw new Error('Android posting and Story sharing need the configured Windows worker. Choose Web for feed posting on this Mac.');
       if(options.music.enabled)options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
       draft.instagram=options;
     }
@@ -157,8 +157,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const selectedMedia = libraryFor(req.body);
     const destinations=destinationReadiness(req.body,selectedMedia,config,queue.login.items,xLength,queue.runs);
     for(const id of ['instagram','instagramStory']){
-      if(process.platform!=='win32'&&(id==='instagramStory'&&req.body.selected?.includes(id)||id==='instagram'&&req.body.instagram?.music?.enabled)){destinations[id].ready=false;destinations[id].errors.push('Android music and Story sharing require the configured Windows worker.');}
-      if(!req.body.instagram?.music?.enabled||!req.body.selected?.includes(id))continue;
+      if(process.platform!=='win32'&&(id==='instagramStory'&&req.body.selected?.includes(id)||id==='instagram'&&req.body.selected?.includes(id)&&usesInstagramAndroid(req.body.instagram,id))){destinations[id].ready=false;destinations[id].errors.push('Android posting and Story sharing require the configured Windows worker.');}
+      if(!instagramMusicEnabled(req.body.instagram,id)||!req.body.selected?.includes(id))continue;
       try{instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
       catch(error){destinations[id].ready=false;destinations[id].errors.push(error.message);}
     }
@@ -255,11 +255,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const port = Number(process.env.PORT || 3000);
   if ((host !== '127.0.0.1' && host !== 'localhost' || process.env.APP_ORIGIN) && (process.env.APP_PASSWORD || '').length < 16) throw new Error('Shared access requires APP_PASSWORD with at least 16 characters. Set it in .env first.');
   const { app, queue, browser } = await createApp();
-  const server = app.listen(port, host, () => console.log(`\nGO Classes Social Studio · Created by Mrinal\nhttp://${host}:${port}\nTEST mode is always the default.\n`));
+  const server = app.listen(port, host, () => console.log(`\nGO Classes Social Studio Â· Created by Mrinal\nhttp://${host}:${port}\nTEST mode is always the default.\n`));
   let closing = false;
   const shutdown = async () => {
     if (closing) return; closing = true;
-    console.log('Saving run state and closing the worker browser…');
+    console.log('Saving run state and closing the worker browserâ€¦');
     server.close();
     // Keep the persisted in-flight state intact: init() will require an operator review.
     await queue.persist(); await browser.close();

@@ -35,6 +35,13 @@ try{
   for(const p of PLATFORMS.filter(p=>p.id!=='instagram'))await page.locator('[data-destination="'+p.id+'"]').click();
   const buffer=await sharp({create:{width:800,height:800,channels:3,background:'#e5b37c'}}).png().toBuffer();
   await page.locator('#file-input').setInputFiles({name:'Admission artwork.png',mimeType:'image/png',buffer});await page.getByText('Image ready.',{exact:true}).waitFor();
+  assert(await page.locator('[data-ig-method][value="web"]').isChecked());
+  assert.equal(await page.locator('[data-ig-panel="feed"] [data-ig-music]').count(),0);
+  await page.locator('[data-ig-method][value="android"]').check();
+  await page.locator('[data-ig-panel="feed"] [data-ig-field="music.enabled"]').check();
+  assert(await page.locator('[data-ig-panel="feed"] [data-ig-music]').isVisible());
+  await page.locator('[data-ig-method][value="web"]').check();
+  assert.equal(await page.locator('[data-ig-panel="feed"] [data-ig-music]').count(),0);
   await page.locator('[data-ig-tab="story"]').click();assert.equal(await page.locator('[data-ig-field="story.enabled"]').isChecked(),true);
   assert.equal(await page.locator('[data-ig-field="story.label"]').inputValue(),'Application Form');
   assert.equal(await page.locator('[data-ig-field="story.url"]').inputValue(),'https://www.goclasses.in/apply');
@@ -67,11 +74,20 @@ try{
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'test-results/instagram-story-dark-mobile.png',fullPage:true});
   await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();
   assert.equal(await page.locator('[data-preview-destination="instagramStory"]').count(),1);
+  assert.match(await page.locator('[data-preview-destination="instagram"] .preview-caption').innerText(),/Web.*No feed music/);
   assert.match(await page.locator('[data-preview-destination="instagramStory"] .preview-caption').innerText(),/Instagram \+ Facebook/);
   assert.match(await page.locator('[data-preview-destination="instagramStory"] .preview-meta').innerText(),/Included/);
   await page.getByRole('button',{name:'Keep editing'}).click();await page.locator('[data-ig-tab="story"]').click();
   await page.locator('[data-ig-field="story.enabled"]').uncheck();await page.locator('[data-action="preview"]').click();await page.getByRole('heading',{name:'Review posts'}).waitFor();
   assert.equal(await page.locator('[data-preview-destination="instagramStory"]').count(),0);
+  await page.getByRole('button',{name:'Keep editing'}).click();await page.locator('[data-ig-tab="feed"]').click();
+  await page.locator('[data-ig-method][value="android"]').check();await page.locator('[data-ig-panel="feed"] [data-ig-field="music.enabled"]').uncheck();
+  await page.reload();await page.getByRole('button',{name:'Compose',exact:true}).click();
+  assert(await page.locator('[data-ig-method][value="android"]').isChecked());assert(!await page.locator('[data-ig-panel="feed"] [data-ig-field="music.enabled"]').isChecked());
+  await page.locator('[data-ig-method][value="web"]').check();await page.setViewportSize({width:390,height:844});
+  await page.locator('.ig-posting-method').scrollIntoViewIfNeeded();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:'test-results/instagram-route-dark-mobile.png'});await page.setViewportSize({width:1440,height:1000});
+  await page.screenshot({path:'test-results/instagram-route-desktop.png'});
   // Exactly one HTTP 400 is deliberate: the first music open exercises safe retry.
   assert.deepEqual(errors,['Failed to load resource: the server responded with a status of 400 (Bad Request)']);assert.equal(queue.runs.length,0);
   console.log('Instagram UI passed: native-song dialog, optional repost, editable link, touch/keyboard placement, separate preview, dark/mobile layout. No social site or publishing API was used.');
