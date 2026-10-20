@@ -10,7 +10,7 @@ import {destinationReadiness} from '../shared/readiness.js';
 import {Queue} from '../server/queue.js';
 import {defaults} from '../server/config.js';
 import {createApp} from '../server/index.js';
-import {AndroidSession,instagramAnr,nativeNodes} from '../server/automation/android-native.js';
+import {AndroidSession,instagramAnr,androidAnrOwner,nativeNodes} from '../server/automation/android-native.js';
 const browser={page:async()=>({isClosed:()=>true,close:async()=>{}})};
 const wait=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,10));}assert.fail('Queue did not settle');};
 const selection={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',key:'123',title:'Reviewed song',artist:'Artist'};
@@ -104,4 +104,13 @@ test('HTTP Web-only validation ignores an unused stored song and freezes the rev
     assert.equal(response.status,200);const data=await response.json();assert(!data.destinations.instagram.errors.some(e=>/song|Android/.test(e)));
     draft.instagram.postingMethod='invalid';const invalid=await fetch(origin+'/api/validate',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(draft)});assert.equal(invalid.status,400);assert.match((await invalid.json()).error,/choose Web or Android/);
   }finally{await new Promise(resolve=>server.close(resolve));await fs.rm(dir,{recursive:true,force:true});}
+});
+
+
+test('verified System UI ANR uses one non-destructive Wait and never dismisses another app',async()=>{
+ const frame=dialog().map(n=>({...n,text:n.text.replace('Instagram','System UI')}));assert.equal(androidAnrOwner(frame),'systemUi');assert(!instagramAnr(frame));
+ const s=Object.create(AndroidSession.prototype);let current=frame,waits=0;
+ s.request=async()=>xml(current);s.click=async(using,id)=>{assert.equal(id,'android:id/aerr_wait');waits++;current=[];};
+ assert.deepEqual(await s.screen(),[]);current=frame;await assert.rejects(s.screen(),/System UI is not responding/);assert.equal(waits,1);
+ assert.equal(androidAnrOwner(dialog().map(n=>({...n,text:n.text.replace('Instagram','Messages')}))),null);
 });

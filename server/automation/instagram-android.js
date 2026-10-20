@@ -30,7 +30,7 @@ export class InstagramAndroidWorker {
   }
   async close(){
     clearTimeout(this.timer);
-    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;this.progressState=null;this.handoff=null;}
+    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;this.progressState=null;this.handoff=null;this.preflight=null;}
   }
   async closePicker(){if(!this.picker)return;if(this.picker.album){await discardPost(this.s,'');await removeAlbum(this.s,this.picker.album);}else if(this.picker.owned)await discardPost(this.s,'');}
   expirePicker(){clearTimeout(this.timer);this.timer=setTimeout(()=>{if(this.operation)this.expirePicker();else this.cancelPicker().catch(()=>{});},5*60*1000);this.timer.unref();}
@@ -47,6 +47,7 @@ export class InstagramAndroidWorker {
       this.picker.album=await pushAlbum(this.s,files);this.s.uploadAlbum=this.picker.album;
       this.progress('Opening your images in Instagram...');
       await openGallery(this.s,this.picker.album.folder);this.picker.owned=true;
+      this.progress('Selecting and verifying your uploaded images...');
       await selectAlbumPhotos(this.s,this.picker.album);
       this.progress('Loading Instagram music recommendations for this post...');
       this.picker.results=await openMusicLibrary(this.s);
@@ -121,8 +122,17 @@ export class InstagramAndroidWorker {
     await s.until(n=>n.some(x=>x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x['resource-id']===nativeId('music_editor_done_button')&&x.displayed==='true'),'Story music did not return to the editor.');
     return {key:music.key,title:music.title,artist:music.artist,segmentStart:segment,style:'Music Only'};
   }
+  async openForRun(ctx){
+    if(!this.preflight)return this.open(ctx.config,ctx.signal,ctx.step);
+    const held=this.preflight;this.preflight=null;
+    if(!this.s||held.runId!==ctx.runId||held.account!==ctx.config.platforms.instagram.handle){await this.close();throw new InterventionError('The Android preflight changed. Review this run before retrying.');}
+    this.s.signal=ctx.signal;this.s.onUnresponsive=ctx.step;
+    // Verify the account and absence of user drafts again; reuse only the
+    // expensive driver connection, never a stale UI/account assertion.
+    try{await this.s.account(held.account);return this.s;}catch(error){await this.close();throw error;}
+  }
   async openStory(ctx,url){
-    if(!this.handoff)return this.open(ctx.config,ctx.signal,ctx.step);
+    if(!this.handoff)return this.openForRun(ctx);
     const held=this.handoff;
     if(!this.s||held.runId!==ctx.runId||held.postUrl!==url||held.account!==ctx.config.platforms.instagram.handle){
       await this.close();throw new InterventionError('The confirmed Instagram feed handoff changed. Retry only the Story from its exact post URL.');
@@ -135,7 +145,11 @@ export class InstagramAndroidWorker {
     if(status!=='posted'||!ctx.continueInstagramStory||!ctx.runId||!postUrl||ctx.signal?.aborted)return false;
     this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle};return true;
   }
-  async checkAccount(config){try{await this.open(config);}finally{await this.close();}}
+  async checkAccount(config,{runId,onProgress}={}){
+    let retained=false;
+    try{await this.open(config,undefined,onProgress);if(runId){this.preflight={runId,account:config.platforms.instagram.handle};retained=true;}}
+    finally{if(!retained)await this.close();}
+  }
   async run(ctx){
     const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
     let url;
@@ -149,7 +163,7 @@ export class InstagramAndroidWorker {
       if(!this.handoff){await ctx.step('Verifying the exact feed post for the Android Story...');await this.verifyPost(ctx.page,url,ctx.config.platforms.instagram.handle);}
     }
     await ctx.step(this.handoff?'Continuing from the confirmed Android feed post...':'Checking the dedicated Android Instagram account...');
-    const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.open(ctx.config,ctx.signal,ctx.step);
+    const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.openForRun(ctx);
     let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
       const nodes=await s.screen();

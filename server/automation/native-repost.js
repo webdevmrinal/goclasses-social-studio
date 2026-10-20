@@ -26,7 +26,8 @@ export async function storyCanvas(s) {
 }
 export async function tapCanvas(s,x,y) {
   const c=await storyCanvas(s);
-  if(x<c.x+20||x>c.x+c.width-110||y<c.y+140||y>c.y+c.height-180)throw new InterventionError('That Story gesture is outside the editable safe area.');
+  const scale=c.width/720;
+  if(x<c.x+20*scale||x>c.x+c.width-110*scale||y<c.y+140*scale||y>c.y+c.height-180*scale)throw new InterventionError('That Story gesture is outside the editable safe area.');
   await s.gesture([{type:'pointerMove',duration:0,x:Math.round(x),y:Math.round(y)},{type:'pointerDown',button:0},{type:'pointerUp',button:0}]);
 }
 export async function whiteCard(s,c,{maxY=.88,allowClipped=false,expectedWidth}={}) {
@@ -48,14 +49,14 @@ export async function whiteCard(s,c,{maxY=.88,allowClipped=false,expectedWidth}=
   if(full.length<(allowClipped?3:12)||!allowClipped&&(bottom-y<c.height*.18||bottom-y>c.height*.78)||expectedWidth&&Math.abs(widest.width-expectedWidth)>c.width*.04)throw new InterventionError('The shared-post card bounds are ambiguous.');
   return {x:widest.x,y,width:widest.width,height:bottom-y};
 }
-export async function pinchItem(s,center,width,ratio) {
+export async function pinchItem(s,center,width,ratio,screenWidth=720) {
   if(Math.abs(ratio-1)<.025)return;
   if(ratio<.45||ratio>1.8)throw new InterventionError('Story resize exceeds the supported safe range.');
   const radius=width*.22;
   const actions=[-1,1].map((direction,i)=>({type:'pointer',id:'story-finger-'+i,parameters:{pointerType:'touch'},actions:[
-    {type:'pointerMove',duration:0,x:Math.round(Math.min(center.x,390)),y:Math.round(center.y+direction*radius)},
+    {type:'pointerMove',duration:0,x:Math.round(Math.min(center.x,screenWidth*390/720)),y:Math.round(center.y+direction*radius)},
     {type:'pointerDown',button:0},{type:'pause',duration:100},
-    {type:'pointerMove',duration:650,x:Math.round(Math.min(center.x,390)),y:Math.round(center.y+direction*radius*ratio)},{type:'pointerUp',button:0}
+    {type:'pointerMove',duration:650,x:Math.round(Math.min(center.x,screenWidth*390/720)),y:Math.round(center.y+direction*radius*ratio)},{type:'pointerUp',button:0}
   ]}));
   await s.request('/actions','POST',{actions});
 }
@@ -66,7 +67,7 @@ export async function placeRepost(s,layout,{framed=false,hasLink=true}={}) {
   const box=await whiteCard(s,c,boundsOptions);
   const desired={x:c.x+c.width*layout.card.x,y:c.y+c.height*layout.card.y};
   const ratio=c.width*layout.card.width/box.width,center={x:box.x+box.width/2,y:box.y+box.height/2};
-  await pinchItem(s,center,box.width,ratio);
+  await pinchItem(s,center,box.width,ratio,c.width);
   let after=await whiteCard(s,c,boundsOptions);
   for(let attempt=0;attempt<3;attempt++){
     const current={x:after.x+after.width/2,y:after.y+after.height/2};

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import { ANDROID_DRIVER_SETTINGS } from '../../shared/android-performance.js';
 import { InterventionError } from './utils.js';
 const exec = promisify(execFile);
 export const ANDROID_SERIAL = 'emulator-5556';
@@ -55,12 +56,16 @@ export async function cancelInstagramPhotoAccess(s){
   return true;
 }
 export const ANDROID_UNRESPONSIVE='Instagram is not responding in Android. Its draft was preserved. Wait for it in the emulator, or choose Web in Compose for a faster feed post. Nothing was retried automatically.';
-export function instagramAnr(nodes){
+export const ANDROID_SYSTEM_UNRESPONSIVE='Android System UI is not responding. Its screen and draft were preserved. Wait in the emulator before another Android attempt, or use Web for the feed.';
+export function androidAnrOwner(nodes){
   const visible=nodes.filter(n=>n.displayed==='true'&&n.package==='android');
-  return visible.some(n=>n['resource-id']==='android:id/alertTitle'&&/^Instagram (?:isn['\u2019]t|is not) responding$/i.test(n.text||''))&&
-    visible.some(n=>n['resource-id']==='android:id/aerr_wait'&&n.text==='Wait')&&
-    visible.some(n=>n['resource-id']==='android:id/aerr_close'&&n.text==='Close app');
+  if(!visible.some(n=>n['resource-id']==='android:id/aerr_wait'&&n.text==='Wait')||!visible.some(n=>n['resource-id']==='android:id/aerr_close'&&n.text==='Close app'))return null;
+  const title=visible.find(n=>n['resource-id']==='android:id/alertTitle')?.text||'';
+  if(/^Instagram (?:isn['\u2019]t|is not) responding$/i.test(title))return 'instagram';
+  if(/^System UI (?:isn['\u2019]t|is not) responding$/i.test(title))return 'systemUi';
+  return null;
 }
+export function instagramAnr(nodes){return androidAnrOwner(nodes)==='instagram';}
 export class AndroidSession {
   constructor({signal}={}) {
     this.signal=signal;
@@ -99,7 +104,7 @@ export class AndroidSession {
       for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
     });
     this.signal?.throwIfAborted();
-    await this.request('/appium/settings','POST',{settings:{waitForIdleTimeout:500,waitForSelectorTimeout:500,enableMultiWindows:false,enableTopmostWindowFromActivePackage:false}});
+    await this.request('/appium/settings','POST',{settings:ANDROID_DRIVER_SETTINGS});
     return this;
   }
   async request(endpoint, method='GET', body) {
@@ -117,17 +122,20 @@ export class AndroidSession {
   }
   async screen() {
     let nodes=nativeNodes(await this.request('/source'));
-    if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait')&&!instagramAnr(nodes))throw new InterventionError('Android has an unrecognized app-not-responding dialog. Close it yourself before continuing. Its draft was preserved.');
-    if(instagramAnr(nodes)){
-      if(this.anrWaited)throw new InterventionError(ANDROID_UNRESPONSIVE);
+    const anr=androidAnrOwner(nodes);
+    if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait')&&!anr)throw new InterventionError('Android has an unrecognized app-not-responding dialog. Close it yourself before continuing. Its draft was preserved.');
+    if(anr){
+      const message=anr==='instagram'?ANDROID_UNRESPONSIVE:ANDROID_SYSTEM_UNRESPONSIVE;
+      if(this.anrWaited)throw new InterventionError(message);
       this.anrWaited=true;
-      await this.onUnresponsive?.('Instagram stopped responding. Giving it one chance to recover; your draft is preserved...');
+      await this.onUnresponsive?.((anr==='instagram'?'Instagram':'Android System UI')+' stopped responding. Giving it one chance to recover; your draft is preserved...');
       // Only the verified system Wait control. Never Close app, relaunch,
       // discard a draft, or repeat Share after an unresponsive-app dialog.
       await this.click('id','android:id/aerr_wait');
       const end=Date.now()+20000;
-      do{await delay(500);nodes=nativeNodes(await this.request('/source'));if(!instagramAnr(nodes))break;}while(Date.now()<end);
-      if(instagramAnr(nodes))throw new InterventionError(ANDROID_UNRESPONSIVE);
+      do{await delay(500);nodes=nativeNodes(await this.request('/source'));if(!androidAnrOwner(nodes))break;}while(Date.now()<end);
+      if(androidAnrOwner(nodes))throw new InterventionError(message);
+      if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait'))throw new InterventionError('Android has another unrecognized system dialog. Its screen and draft were preserved.');
     }
     if(nodes.some(n=>n.password==='true' && n.displayed==='true')) throw new InterventionError('Finish Instagram sign-in yourself in the emulator. Passwords and codes are never read or filled.');
     return nodes;

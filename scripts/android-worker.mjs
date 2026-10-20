@@ -8,10 +8,11 @@ import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import net from 'node:net';
+import {ANDROID_DISPLAY,ANDROID_ANIMATIONS,displaySettings} from '../shared/android-performance.js';
 
 const exec = promisify(execFile);
 const action = process.argv[2] || 'status';
-if (!['status', 'start', 'cold-start', 'stop', 'doctor', 'play-store'].includes(action)) throw new Error('Use status, start, cold-start, stop, doctor, or play-store.');
+if (!['status', 'start', 'cold-start', 'stop', 'doctor', 'play-store', 'optimize'].includes(action)) throw new Error('Use status, start, cold-start, stop, doctor, play-store, or optimize.');
 if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) throw new Error('This experimental emulator launcher currently supports Windows.');
 const root = path.join(process.env.LOCALAPPDATA, 'GoClassesSocialStudio', 'android-worker');
 const sdk = path.join(root, 'sdk');
@@ -26,12 +27,11 @@ const performanceSettings = {
   'hw.keyboard': 'yes', 'hw.keyboard.lid': 'no',
   'hw.cpu.ncore': '4', 'hw.ramSize': '2048',
   'hw.gpu.enabled': 'yes', 'hw.gpu.mode': 'host',
+  ...displaySettings(),
   'fastboot.forceColdBoot': 'yes', 'fastboot.forceFastBoot': 'no'
 };
 const androidSettings = [
-  ['global', 'window_animation_scale', '0.5'],
-  ['global', 'transition_animation_scale', '0.5'],
-  ['global', 'animator_duration_scale', '0.5'],
+  ...ANDROID_ANIMATIONS.map(key=>['global',key,'0']),
   ['secure', 'show_ime_with_hard_keyboard', '1']
 ];
 const appiumUrl = 'http://127.0.0.1:4731';
@@ -121,7 +121,7 @@ async function prepareDevice() {
   // Only the dedicated, stopped AVD is tuned. Never wipe Android data or app sessions.
   const changes = Object.entries(performanceSettings).filter(([key, value]) => current[key] !== value);
   if (!changes.length) return;
-  const backup = avdConfig + '.before-performance-tuning';
+  const backup = avdConfig + '.before-performance-v2';
   if (!await exists(backup)) await fs.copyFile(avdConfig, backup, constants.COPYFILE_EXCL);
   let updated = original;
   for (const [key, value] of changes) {
@@ -139,7 +139,31 @@ async function tuneAndroid() {
     if (await adbRun(['shell', 'settings', 'get', scope, key]) !== value) {
       await adbRun(['shell', 'settings', 'put', scope, key, value]);
     }
+    if(Number(await adbRun(['shell','settings','get',scope,key]))!==Number(value))throw new Error('Android did not apply '+key+'.');
   }
+}
+async function optimize(){
+  await requireTools();
+  let state;
+  try{const response=await fetch('http://127.0.0.1:3000/api/status',{signal:AbortSignal.timeout(1500)});if(response.ok)state=await response.json();else throw new Error('Cannot verify that Social Studio is idle. Close the app before optimizing.');}
+  catch(error){if(!/fetch failed|ECONNREFUSED/.test(error.message))throw error;}
+  if(state?.workerBusy||state?.login?.running||state?.runs?.some(run=>['running','pausing','stopping','awaiting_manual'].includes(run.status)))throw new Error('Finish the current run or music picker before optimizing Android.');
+  if(!await booted())throw new Error('Start Android before applying live performance settings.');
+  const previous={size:await adbRun(['shell','wm','size']),density:await adbRun(['shell','wm','density']),animations:{}};
+  for(const key of ANDROID_ANIMATIONS)previous.animations[key]=await adbRun(['shell','settings','get','global',key]);
+  const backup=path.join(root,'performance-before-v2.json');if(!await exists(backup))await fs.writeFile(backup,JSON.stringify(previous,null,2));
+  await tuneAndroid();
+  const messaging='com.google.android.apps.messaging';
+  if((await adbRun(['shell','pm','list','packages','-e',messaging])).split(/\r?\n/).includes('package:'+messaging)){
+    const stateBackup=path.join(root,'messages-before-performance-v2.txt');
+    if(!await exists(stateBackup))await fs.writeFile(stateBackup,await adbRun(['shell','dumpsys','package',messaging]));
+    await adbRun(['shell','pm','disable-user','--user','0',messaging]);
+    console.log('Disabled the unused stock Messages app in this dedicated emulator. Its data is preserved.');
+  }
+  await adbRun(['shell','wm','size',ANDROID_DISPLAY.width+'x'+ANDROID_DISPLAY.height]);
+  await adbRun(['shell','wm','density',String(ANDROID_DISPLAY.density)]);
+  console.log('Android animations are off. Display rendering is 540 x 1170 at matching density. Uploaded images, login and drafts are untouched.');
+  await status();
 }
 async function status() {
   const tools = {
@@ -156,6 +180,9 @@ async function status() {
     configuration: {
       hardwareKeyboard: config['hw.keyboard'] === 'yes', cpuCores: config['hw.cpu.ncore'] || null,
       memoryMB: config['hw.ramSize'] || null, graphics: config['hw.gpu.mode'] || null,
+      display:await booted()?await adbRun(['shell','wm','size']):config['hw.lcd.width']+'x'+config['hw.lcd.height'],
+      density:await booted()?await adbRun(['shell','wm','density']):config['hw.lcd.density'],
+      animationScale:await booted()?await adbRun(['shell','settings','get','global','animator_duration_scale']):null,
       quickBoot: config['fastboot.forceFastBoot'] === 'yes' && config['fastboot.forceColdBoot'] === 'no'
     },
     appiumUrl, publishingEnabled: false
@@ -174,7 +201,7 @@ async function start({ cold = false } = {}) {
     runtime.emulatorPid = await launch(emulator, [
       '-avd', avdName, '-port', '5556', '-memory', '2048', '-cores', '4',
       // Snapshot restore stalled on this WHPX worker. Keep fast runtime settings, but boot reliably.
-      '-gpu', 'host', '-feature', '-Vulkan', '-no-snapshot', '-no-boot-anim',
+      '-accel', 'on', '-gpu', 'host', '-feature', '-Vulkan', '-no-snapshot', '-no-boot-anim',
       '-camera-back', 'none', '-camera-front', 'none', '-timezone', 'Asia/Kolkata'
     ], { visible: true, log: path.join(root, 'logs', 'emulator.log') });
   }
@@ -224,6 +251,7 @@ try {
   if (action === 'start') await start();
   if (action === 'cold-start') await start({ cold: true });
   if (action === 'stop') await stop();
+  if(action==='optimize')await optimize();
   if (action === 'doctor') {
     await requireTools();
     const text = await run(process.execPath, [appium, 'driver', 'doctor', 'uiautomator2'], 60000, true);

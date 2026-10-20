@@ -42,7 +42,7 @@ export async function addStoryLink(s,{url,label,layout}) {
     try{sticker=await changedSticker(before,await s.screenshot(),canvas);break;}catch(error){if(attempt===11)throw error;}
   }
   const destination={x:canvas.x+canvas.width*(layout?.link.x??.5),y:canvas.y+canvas.height*(layout?.link.y??.81)};
-  if(destination.y>=canvas.y+canvas.height-120)throw new Error('Unsafe Story sticker position.');
+  if(destination.y>=canvas.y+canvas.height-120*(canvas.width/720))throw new Error('Unsafe Story sticker position.');
   let moved=sticker;
   for(let attempt=0;attempt<3;attempt++){
     const center={x:moved.x+moved.width/2,y:moved.y+moved.height/2};

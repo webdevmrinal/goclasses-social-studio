@@ -188,7 +188,7 @@ export class Queue extends EventEmitter {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
       if(nativeItem&&this.instagramWorker&&run.status!=='stopping'){
         await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
-        try{await this.instagramWorker.checkAccount(run.config);}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=error.message;run.status='attention';await this.change();return;}}
+        try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,onProgress:message=>this.log(run,nativeItem,message)});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
@@ -291,7 +291,7 @@ export class Queue extends EventEmitter {
       }
     } finally {
       // A pause, stop or failure at the destination boundary must not retain a native session.
-      if(this.instagramWorker?.handoff)await this.instagramWorker.close().catch(error=>this.emit('workerError',error));
+      if(this.instagramWorker?.handoff||this.instagramWorker?.preflight)await this.instagramWorker.close().catch(error=>this.emit('workerError',error));
       this.processing = false; this.emit('change', this.state());
       const pending = this.pendingKick; this.pendingKick = null;
       if (pending && this.active === pending && ['running', 'stopping'].includes(pending.status)) this.process(pending).catch(error => this.emit('workerError', error));

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import sharp from 'sharp';
+import {fitScrollArea} from '../../shared/android-performance.js';
 import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
 export const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -142,7 +143,7 @@ export async function allowAlbum(s,album) {
       }
     }
     if(matched.size===album.manifest.length)break;
-    await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{left:4,top:500,width:712,height:750,direction:'down',percent:.65}]});
+    await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[fitScrollArea(await sharp(shot).metadata())]});
   }
   if(matched.size!==album.manifest.length)throw new InterventionError('Grant access to the Studio upload album in Android, then rerun preparation. No other photos were selected.');
   const add=(await s.screen()).find(n=>n['resource-id']==='com.google.android.providers.media.module:id/button_add');

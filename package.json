@@ -33,6 +33,7 @@
     "android:start": "node scripts/android-worker.mjs start",
     "android:cold-start": "node scripts/android-worker.mjs cold-start",
     "android:stop": "node scripts/android-worker.mjs stop",
+    "android:optimize": "node scripts/android-worker.mjs optimize",
     "android:doctor": "node scripts/android-worker.mjs doctor",
     "android:play-store": "node scripts/android-worker.mjs play-store",
     "test:polish-ui": "node tests/polish-ui.js",
