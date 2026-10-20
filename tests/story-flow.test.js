@@ -85,7 +85,7 @@ test('driver startup recovers once from an explicit instrumentation timeout and 
 test('confirmed native handoff proceeds directly, while a standalone Story still checks post ownership',async()=>{
  const worker=new InstagramAndroidWorker({dataDir:'unused-fixture'});let checks=0;
  worker.verifyPost=async()=>{checks++;};worker.openStory=async()=>({});
- const ctx={id:'instagramStory',runId:'run-a',instagram:{music:{enabled:false},story:{sourcePostUrl:postUrl}},config:{platforms:{instagram:{handle:'ours'}}},step:async message=>{if(message.startsWith('Opening the exact'))throw Error('Preparation boundary reached without any publish action');},mode:'TEST'};
+ const ctx={id:'instagramStory',runId:'run-a',instagram:{music:{enabled:false},story:{sourcePostUrl:postUrl}},config:{platforms:{instagram:{handle:'ours'}}},recordPreparation:async()=>{},step:async message=>{if(message.startsWith('Opening the exact'))throw Error('Preparation boundary reached without any publish action');},mode:'TEST'};
  worker.handoff={runId:'run-a',postUrl,account:'ours'};
  await assert.rejects(worker.run(ctx),/Preparation boundary/);assert.equal(checks,0);
  worker.handoff=null;await assert.rejects(worker.run(ctx),/Preparation boundary/);assert.equal(checks,1);

@@ -3,6 +3,18 @@ import {instagramHashtags} from '../../shared/instagram.js';
 import {nativeId,nativeBounds,xpathLiteral,isPhotoAccessPicker,cancelInstagramPhotoAccess} from './android-native.js';
 import {InterventionError} from './utils.js';
 const present=(nodes,name)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(name));
+export function musicClipPosition(nodes){
+  const clips=nodes.filter(n=>n.displayed==='true'&&n.tag==='android.widget.SeekBar'&&n['content-desc']?.startsWith('Select the part of the audio track'));
+  return clips.length===1&&/^\d+(?:\.\d+)?$/.test(clips[0].text||'')?clips[0].text:null;
+}
+export async function waitForMusicClip(s,readyControl,message){
+  let previous=null;
+  return s.until(nodes=>{
+    const segmentStart=present(nodes,readyControl)?musicClipPosition(nodes):null;
+    const stable=segmentStart!==null&&segmentStart===previous;previous=segmentStart;
+    return stable?{nodes,segmentStart}:false;
+  },message);
+}
 export function musicResults(nodes) {
   return nodes.flatMap((node,index)=>{
     const id=node['resource-id']?.match(/^audio_browser_track_\d+_(\d+)$/)?.[1];

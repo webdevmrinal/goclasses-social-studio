@@ -6,7 +6,7 @@ import path from 'node:path';
 import { atomicWrite, readJson, DATA } from './config.js';
 import { automate, checkLogin } from './automation/platforms.js';
 import { assertNoChallenge, InterventionError, NetworkError } from './automation/utils.js';
-import { replyBatch, validateManychatDraft } from '../shared/manychat.js';
+import { replyBatch, validateManychatDraft, instagramPostUrl } from '../shared/manychat.js';
 import { verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor } from '../shared/media.js';
 import { usesInstagramAndroid } from '../shared/instagram.js';
@@ -78,7 +78,7 @@ export class Queue extends EventEmitter {
     else if (action === 'resume' && run.status === 'paused') run.status = 'running';
     else if (action === 'continue' && run.status === 'attention') {
       const item = run.items.find(i => i.status === 'attention');
-      if (item) item.status = 'queued';
+      if (item) {item.failureMessage ||= item.message;item.status = 'queued';}
       run.status = 'running';
     } else if (action === 'done' && run.status === 'awaiting_manual') {
       const item = run.items.find(i => i.status === 'awaiting_manual');
@@ -181,6 +181,15 @@ export class Queue extends EventEmitter {
     await atomicWrite(path.join(this.dataDir, 'manychat-rotation.json'), this.replyRotation);
     run.manychatRotationAdvanced = true;
   }
+  testInstagramPublication(run){
+    if(run.mode!=='TEST')return undefined;
+    const handle=run.config?.platforms?.instagram?.handle;
+    for(const previous of this.runs){
+      if(previous.id===run.id||!handle||previous.config?.platforms?.instagram?.handle!==handle)continue;
+      const postUrl=instagramPostUrl(previous.items.find(item=>item.id==='instagram'&&item.status==='posted')?.publication?.postUrl);
+      if(postUrl)return {postUrl};
+    }
+  }
   async process(run) {
     if (this.processing) return;
     this.processing = true;
@@ -188,7 +197,7 @@ export class Queue extends EventEmitter {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
       if(nativeItem&&this.instagramWorker&&run.status!=='stopping'){
         await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
-        try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,onProgress:message=>this.log(run,nativeItem,message)});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=error.message;run.status='attention';await this.change();return;}}
+        try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,onProgress:message=>this.log(run,nativeItem,message)});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
@@ -213,6 +222,7 @@ export class Queue extends EventEmitter {
           run.finishedAt = new Date().toISOString(); run.confirmedLive = false;
           await this.change(); break;
         }
+        delete item.recoveryMessage;
         item.status = 'running'; item.startedAt = new Date().toISOString(); delete item.finishedAt;
         await this.change();
         let page, timer, task, native=false;
@@ -231,6 +241,7 @@ export class Queue extends EventEmitter {
             mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
+            instagramTestPublication:this.testInstagramPublication(run),
             captureInstagramPost: run.items.some(i=>i.id==='instagramStory') || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
             step: message => { controller.signal.throwIfAborted(); return this.log(run, item, message); }, snapshot: (label, target = page) => { controller.signal.throwIfAborted(); return this.snapshot(run, item, page, label, false, target); },
             recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = details; await this.change(); },
@@ -257,6 +268,7 @@ export class Queue extends EventEmitter {
             }
           } else {
             item.status = typeof result === 'string' ? result : result.status;
+            delete item.failureMessage;delete item.recoveryMessage;
             if (result?.publication) item.publication = result.publication;
             item.message = item.status === 'posted' ? item.id === 'manychat' ? 'Automation activated; Edit and Stop controls confirmed.' : 'Published and confirmed by platform.' : item.id === 'manychat' ? 'TEST complete Â· automation prepared; Go live was not clicked.' : 'TEST complete Â· nothing published.';
             if (item.status === 'posted') await this.advanceReplies(run, item);
@@ -282,7 +294,7 @@ export class Queue extends EventEmitter {
           item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
           item.finishedAt = new Date().toISOString();
           if (!item.submitting && run.status !== 'stopping' && (error instanceof InterventionError || error instanceof NetworkError)) {
-            item.status = 'attention'; run.status = 'attention';
+            item.failureMessage=item.message;item.status = 'attention'; run.status = 'attention';
           }
           if (page && !page.isClosed()) { try { await this.snapshot(run, item, page, 'error', true); } catch { /* Browser may already be gone. */ } }
           await this.log(run, item, item.message);

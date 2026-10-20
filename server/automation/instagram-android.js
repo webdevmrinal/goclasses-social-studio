@@ -4,7 +4,7 @@ import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
 import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,discardStory} from './native-story.js';
-import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
+import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
@@ -114,9 +114,7 @@ export class InstagramAndroidWorker {
     await s.click('id',match.selector);
     await s.until(n=>n.some(x=>x['resource-id']==='audio_bar_select_tap_target'&&x['content-desc']==='Select track '+music.title+' by '+music.artist),'The music preview differs from the selected song.');
     await s.click('id','audio_bar_select_tap_target');
-    const nodes=await s.until(n=>n.some(x=>x['resource-id']===nativeId('music_editor_done_button'))&&n,'Story music clip did not load.');
-    const segment=nodes.find(n=>n.tag==='android.widget.SeekBar')?.text;
-    if(!/^\d+(?:\.\d+)?$/.test(segment||''))throw new InterventionError('The Story audio clip could not be verified.');
+    const {segmentStart:segment}=await waitForMusicClip(s,'music_editor_done_button','The Story audio clip is still loading or could not be verified. Nothing was shared.');
     await s.click('accessibility id','Music Only');
     await s.clickId('music_editor_done_button');
     await s.until(n=>n.some(x=>x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x['resource-id']===nativeId('music_editor_done_button')&&x.displayed==='true'),'Story music did not return to the editor.');
@@ -155,7 +153,7 @@ export class InstagramAndroidWorker {
     const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
     let url;
     if(ctx.id==='instagramStory'){
-      const source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl;
+      const source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl||(ctx.mode==='TEST'?ctx.instagramTestPublication?.postUrl:undefined);
       url=instagramPostUrl(source);
       if(!url&&ctx.mode!=='TEST')throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
       // The retained session comes only from this run's confirmed native feed.
@@ -177,6 +175,7 @@ export class InstagramAndroidWorker {
       if(ctx.id==='instagramStory'){
         if(!url&&ctx.mode==='TEST'){const existing=await nativeInstagramBaseline(s,ctx.config.platforms.instagram.handle);url=existing[3]||existing[0];}
         if(!inherited){await ctx.step('Verifying the exact native feed post for the Story...');await this.verifyPost(s,url,ctx.config.platforms.instagram.handle);}
+        await ctx.recordPreparation({kind:'instagramStory',testExistingPost:ctx.mode==='TEST',postUrl:url,stage:'source_verified',story:options.story});
         await ctx.step('Opening the exact feed post as a Story...');
         await openRepost(s,url);owned=true;
         await ctx.step('Applying the reviewed shared-post card layout...');

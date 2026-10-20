@@ -60,15 +60,24 @@ export async function pinchItem(s,center,width,ratio,screenWidth=720) {
   ]}));
   await s.request('/actions','POST',{actions});
 }
+export function nativeStoryTarget(c,layout,box,{hasLink=true}={}){
+  const ratio=c.width*layout.card.width/box.width,height=box.height*ratio,desired={x:c.x+c.width*layout.card.x,y:c.y+c.height*layout.card.y};
+  if(desired.y-height/2<c.y+c.height*.08)throw new InterventionError('The post card is too high for the Story safe area. Move it down or use Auto-align in Compose.');
+  if(desired.y+height/2>c.y+c.height*(hasLink?layout.link.y-.065:.9))throw new InterventionError('The post card overlaps the link or Story safe area. Move or resize it in Compose.');
+  return {desired,ratio};
+}
 export async function placeRepost(s,layout,{framed=false,hasLink=true}={}) {
   const c=await storyCanvas(s);
   if(!framed){await tapCanvas(s,c.x+c.width*.45,c.y+c.height*.5);await new Promise(r=>setTimeout(r,500));}
   const boundsOptions=framed?{maxY:layout.link.y-.05}:{};
   const box=await whiteCard(s,c,boundsOptions);
-  const desired={x:c.x+c.width*layout.card.x,y:c.y+c.height*layout.card.y};
-  const ratio=c.width*layout.card.width/box.width,center={x:box.x+box.width/2,y:box.y+box.height/2};
-  await pinchItem(s,center,box.width,ratio,c.width);
-  let after=await whiteCard(s,c,boundsOptions);
+  const {desired}=nativeStoryTarget(c,layout,box,{hasLink});
+  let after=box;
+  for(let attempt=0;attempt<3&&Math.abs(after.width-c.width*layout.card.width)>c.width*.025;attempt++){
+    const center={x:after.x+after.width/2,y:after.y+after.height/2},ratio=c.width*layout.card.width/after.width;
+    await pinchItem(s,center,after.width,ratio,c.width);await new Promise(r=>setTimeout(r,350));after=await whiteCard(s,c,boundsOptions);
+  }
+  nativeStoryTarget(c,layout,after,{hasLink});
   for(let attempt=0;attempt<3;attempt++){
     const current={x:after.x+after.width/2,y:after.y+after.height/2};
     if(Math.abs(current.y-desired.y)<c.height*.025&&Math.abs(current.x-desired.x)<c.width*.025)break;

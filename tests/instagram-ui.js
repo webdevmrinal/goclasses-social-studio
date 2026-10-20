@@ -66,6 +66,7 @@ try{
   assert.equal(await card.evaluate(e=>parseFloat(e.style.left)),50);assert(await page.locator('[data-story-guide="x"]').isVisible());await page.mouse.up();
   await page.locator('[data-story-align]').click();assert.equal(await card.evaluate(e=>parseFloat(e.style.left)),50);assert.equal(await link.evaluate(e=>parseFloat(e.style.left)),50);
   const cardBox=await card.boundingBox(),linkBox=await link.boundingBox();assert(cardBox.y+cardBox.height<linkBox.y);
+  const highCanvas=await page.locator('[data-story-canvas]').boundingBox(),highCard=await card.boundingBox();await page.mouse.move(highCard.x+highCard.width/2,highCard.y+highCard.height/2);await page.mouse.down();await page.mouse.move(highCard.x+highCard.width/2,highCanvas.y-100);await page.mouse.up();const fittedCard=await card.boundingBox();assert(fittedCard.y>=highCanvas.y+highCanvas.height*.12-1,'Card stays below the Story header');await page.locator('[data-story-align]').click();
   const start=await card.evaluate(e=>parseFloat(e.style.top));await card.focus();await card.press('ArrowUp');assert.equal(await card.evaluate(e=>parseFloat(e.style.top)),start-1);
   const b=await link.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2,b.y+b.height/2-20);await page.mouse.up();
   await page.locator('[data-ig-field="story.label"]').fill('Apply now');assert.equal(await link.locator('b').innerText(),'APPLY NOW');

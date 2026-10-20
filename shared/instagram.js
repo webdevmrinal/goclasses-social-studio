@@ -22,7 +22,8 @@ export function storyLayout(value=DEFAULT_STORY_LAYOUT) {
     const v=value?.[key];
     if(!v||!['x','y','width'].every(k=>typeof v[k]==='number'&&Number.isFinite(v[k])))throw new Error('Instagram Story: invalid item placement.');
     const minWidth=key==='card'?.45:.3,maxWidth=key==='card'?.88:.8;
-    if(v.width<minWidth||v.width>maxWidth||v.x<v.width/2+.02||v.x>1-v.width/2-.02||v.y<(key==='card'?.26:.69)||v.y>(key==='card'?.62:.88))throw new Error('Instagram Story: keep items inside the safe area.');
+    const epsilon=1e-9;
+    if(v.width<minWidth-epsilon||v.width>maxWidth+epsilon||v.x<v.width/2+.02-epsilon||v.x>1-v.width/2-.02+epsilon||v.y<(key==='card'?.26:.69)-epsilon||v.y>(key==='card'?.62:.88)+epsilon)throw new Error('Instagram Story: keep items inside the safe area.');
     out[key]={x:v.x,y:v.y,width:v.width};
   }
   return out;
@@ -69,7 +70,8 @@ export function importStory(captions) {
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
 export function snapStoryPosition(layout,key,x,y,{hasLink=true,cardHeight=.53,linkHeight=.07,thresholdX=.025,thresholdY=.016}={}){
   const item=layout[key];if(!item||!['card','link'].includes(key))throw new Error('Unknown Story item.');
-  const other=key==='card'?'link':'card',minX=item.width/2+.02,maxX=1-item.width/2-.02,minY=key==='card'?.26:.69,maxY=key==='card'?.62:.88;
+  const other=key==='card'?'link':'card',minX=item.width/2+.02,maxX=1-item.width/2-.02,height=clamp(key==='card'?cardHeight:linkHeight,.03,.85),minY=key==='card'?Math.max(.26,.12+height/2):.69,maxY=key==='card'?Math.min(.62,.9-height/2):Math.min(.88,.9-height/2);
+  if(minY>maxY)throw new Error('This Story item is too tall for the safe area. Use Auto-align or a smaller card.');
   x=clamp(x,minX,maxX);y=clamp(y,minY,maxY);
   const xs=[{position:.5,guide:.5}],ys=key==='card'?[.5]:[DEFAULT_STORY_LAYOUT.link.y];
   if(hasLink){
