@@ -35,17 +35,17 @@ export async function musicPage(s){
   let previous='',stable=0;
   return s.until(nodes=>{assertMusicLibrary(nodes);const rows=musicResults(nodes),stamp=JSON.stringify(rows);stable=stamp===previous?stable+1:0;previous=stamp;return rows.length&&stable>=1?rows:false;},'Instagram music is still loading. Try again.');
 }
-export async function expandMusicTray(s){
+export async function expandMusicTray(s,{requireRows=true}={}){
   const nodes=await s.screen();assertMusicLibrary(nodes);
   const handle=nodes.find(n=>n.displayed==='true'&&n['resource-id']===nativeId('bottom_sheet_drag_handle_frame'));
-  if(!handle){if(present(nodes,'music_browser_container'))return musicPage(s);throw new InterventionError('The native music tray handle is unavailable. Reopen the picker.');}
+  if(!handle){if(present(nodes,'music_browser_container')||present(nodes,'music_search_clips_landing_page_container'))return requireRows?musicPage(s):musicResults(nodes);throw new InterventionError('The native music tray handle is unavailable. Reopen the picker.');}
   const b=nativeBounds(handle),containers=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('bottom_sheet_container')).map(nativeBounds),top=Math.min(...containers.map(b=>b.y));
   if(!Number.isFinite(top))throw new InterventionError('The music tray bounds are unavailable.');
   if(b.y>top+50){
     await s.adb(['shell','input','swipe',String(Math.round(b.x+b.width/2)),String(Math.round(b.y+b.height/2)),String(Math.round(b.x+b.width/2)),String(Math.round(top+b.height/2)),'500']);
     await s.until(nodes=>{assertMusicLibrary(nodes);const h=nodes.find(n=>n.displayed==='true'&&n['resource-id']===nativeId('bottom_sheet_drag_handle_frame'));return h&&nativeBounds(h).y<=top+50;},'Instagram did not expand the music tray.');
   }
-  return musicPage(s);
+  return requireRows?musicPage(s):musicResults(await s.screen());
 }
 export async function scrollMusicPage(s,direction='down'){
   const nodes=await s.screen();assertMusicLibrary(nodes);
@@ -61,7 +61,8 @@ export async function revealMusicResult(s,chosen,onPage=()=>{}){
   const expected=musicIndex(chosen),seen=new Set();
   for(let i=0;i<18;i++){
     const rows=await musicPage(s);onPage(rows);
-    const matches=rows.filter(r=>r.key===chosen.key&&r.title===chosen.title&&r.artist===chosen.artist&&(!chosen.length||r.length===chosen.length));
+    const matches=rows.filter(r=>(!chosen.key||r.key===chosen.key)&&r.title===chosen.title&&r.artist===chosen.artist&&(!chosen.length||r.length===chosen.length));
+    if(matches.length>1)throw new InterventionError('More than one exact song matched. Add its Instagram audio link or ID. Nothing was selected.');
     if(matches.length===1)return matches[0];
     const stamp=rows.map(r=>r.key).join(',');if(seen.has(stamp))break;seen.add(stamp);
     const first=musicIndex(rows[0]),direction=Number.isFinite(expected)&&expected<first?'up':'down';
@@ -80,6 +81,12 @@ export async function setMusicPlayback(s,track,playing){
   if(current!==playing)await s.click('id','audio_bar_playback_tap_target');
   await s.until(nodes=>musicPlayback(nodes,track)===playing,'Instagram did not confirm the playback change.');
   return {key:track.key,title:track.title,artist:track.artist,paused:!playing};
+}
+export function inheritedStoryAudio(nodes){
+ const own=nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android'),unique=(id,desc)=>own.filter(n=>n['resource-id']===nativeId(id)&&(desc===undefined||n['content-desc']===desc)).length===1;
+ if(!unique('music_editor_done_button','Done')||!unique('delete_button','Remove music')||!unique('album_art_button','Return to music search'))return null;
+ const segmentStart=musicClipPosition(own),duration=own.filter(n=>/^\d+ second clip$/.test(n['content-desc']||''));if(segmentStart===null||duration.length!==1)return null;
+ return {inherited:true,segmentStart,durationSeconds:Number(duration[0]['content-desc'].split(' ')[0]),verifiedBy:'native_inherited_audio_controls'};
 }
 export async function openStoryMusicLibrary(s){
   let nodes=await s.screen();
@@ -104,7 +111,7 @@ export async function openMusicLibrary(s) {
   return expandMusicTray(s);
 }
 export async function searchMusic(s,query) {
-  await expandMusicTray(s);
+  await expandMusicTray(s,{requireRows:false});
   await s.clickId('row_search_edit_text');
   await s.text('id',nativeId('row_search_edit_text'),query);
   await s.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('row_search_edit_text')&&n.text===query),'Instagram did not accept the music query.');

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { mediaFor, selectionErrors } from './media.js';
-import { INSTAGRAM_STORY, instagramOptions, storyErrors, instagramHashtags } from './instagram.js';
+import { INSTAGRAM_STORY, INSTAGRAM_MUSIC, instagramOptions, storyErrors, instagramHashtags } from './instagram.js';
 export const PLATFORMS = [
   { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Feed post', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
   { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company photo gallery', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10, textOnly: true },
@@ -12,7 +12,7 @@ export const PLATFORMS = [
   { id: 'telegram', delimiter: 'TELEGRAM', name: 'Telegram Channel', detail: 'Channel post · photo album', color: '#2488b8', icon: 'telegram', limit: 4096, maxImages: 10, optionalImport: true, textOnly: true }
 ];
 
-export const DESTINATIONS = [...PLATFORMS, INSTAGRAM_STORY];
+export const DESTINATIONS = [...PLATFORMS, INSTAGRAM_STORY, INSTAGRAM_MUSIC];
 
 export const captionLimit = (p, images = 0) => p.id === 'telegram' && images ? 1024 : p.limit;
 export const captionLength = (p, text = '') => p.id === 'telegram' ? text.length : countCharacters(text);
@@ -50,7 +50,8 @@ export function validateDraft(draft, media, xLength = countCharacters) {
     if (p.id !== 'manychat' && !p.textOnly && !images.length) errors.push(`${p.name}: add at least one image.`);
     if (p.id !== 'manychat' && images.length > p.maxImages) errors.push(`${p.name}: use ${p.maxImages} image${p.maxImages === 1 ? '' : 's'} or fewer.`);
   }
-  if(selected.includes('instagram') || selected.includes('instagramStory')) {
+  if(selected.includes('instagramMusic')&&draft.instagram?.music?.enabled!==true)errors.push('Instagram music: enable music before retrying this step.');
+  if(selected.some(id=>['instagram','instagramStory','instagramMusic'].includes(id))) {
     try { const options=instagramOptions({...draft.instagram,story:{...draft.instagram?.story,enabled:selected.includes('instagramStory')}}); if(selected.includes('instagramStory'))errors.push(...storyErrors(options.story,selected)); }catch(e){errors.push(e.message);}
   }
   return errors;

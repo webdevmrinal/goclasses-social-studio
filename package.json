@@ -2,7 +2,7 @@
   "name": "goc-social-studio",
   "version": "1.0.0",
   "private": true,
-  "description": "GO Classes Social Studio \u00e2\u20ac\u201d created by Mrinal",
+  "description": "GO Classes Social Studio â€” created by Mrinal",
   "author": "Mrinal",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
@@ -39,7 +39,8 @@
     "test:workflow-ui": "node tests/workflow-ui.js",
     "test:polish-ui": "node tests/polish-ui.js",
     "test:updates": "node --test tests/updates.test.js && node tests/launcher-smoke.mjs",
-    "test:instagram-resolution-ui": "node tests/instagram-resolution-ui.js"
+    "test:instagram-resolution-ui": "node tests/instagram-resolution-ui.js",
+    "test:hybrid-ui": "node tests/hybrid-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

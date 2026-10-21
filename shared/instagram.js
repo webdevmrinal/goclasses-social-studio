@@ -1,6 +1,14 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { detectManychatLinks, instagramPostUrl } from './manychat.js';
 export const INSTAGRAM_STORY = { id:'instagramStory', delimiter:'INSTAGRAM_STORY', name:'Instagram Story', detail:'Share the feed post', color:'#c54786', icon:'instagram', maxImages:0, limit:0, optionalImport:true, textOnly:true, parentId:'instagram' };
+export const INSTAGRAM_MUSIC={id:'instagramMusic',delimiter:'INSTAGRAM_MUSIC',name:'Instagram music',detail:'Add music to the published feed',icon:'instagram',color:'#c54786',maxImages:0,limit:0,optionalImport:true,textOnly:true,parentId:'instagram'};
+export function musicReference(value={}){
+ const title=typeof value.title==='string'?value.title.trim():'',artist=typeof value.artist==='string'?value.artist.trim():'',audioUrl=typeof value.audioUrl==='string'?value.audioUrl.trim():'';
+ if(!title||!artist||[title,artist].some(s=>s.length>200||/[\r\n\u0000-\u001f]/.test(s)))throw new Error('Instagram: enter the exact song title and artist from your phone.');
+ let key;if(audioUrl){const match=audioUrl.match(/^(?:https:\/\/(?:www\.)?instagram\.com\/(?:reels\/audio|audio)\/)?([1-9][0-9]{4,29})(?:\/)?(?:\?[^\s#]*)?$/);if(!match)throw new Error('Instagram: use an Instagram audio link or numeric audio ID.');key=match[1];}
+ return {title,artist,audioUrl,...(key?{key}:{}),query:title+' '+artist,durationSeconds:30,source:'details'};
+}
+export const instagramNeedsMusicEdit=value=>instagramMethod(value)==='web'&&value?.music?.enabled===true;
 export const DEFAULT_STORY_LAYOUT = {card:{x:.5,y:.43,width:.8},link:{x:.5,y:.81,width:.66}};
 export function storyUrl(value) {
   try { const u=new URL(value); return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password&&u.hostname&&u.href.length<=2048?u.href:null; } catch{return null;}
@@ -34,10 +42,10 @@ export function instagramMethod(value={}) {
   return value?.postingMethod ?? (value?.music?.enabled===true?'android':'web');
 }
 export function usesInstagramAndroid(value,id='instagram') {
-  return id==='instagramStory'||id==='instagram'&&instagramMethod(value)==='android';
+  return ['instagramStory','instagramMusic'].includes(id)||id==='instagram'&&instagramMethod(value)==='android';
 }
 export function instagramMusicEnabled(value,id='instagram') {
-  return value?.music?.enabled===true&&usesInstagramAndroid(value,id);
+  return value?.music?.enabled===true&&['instagram','instagramMusic','instagramStory'].includes(id);
 }
 export function instagramOptions(value={}) {
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid Instagram options.');
@@ -45,12 +53,14 @@ export function instagramOptions(value={}) {
   if(!['web','android'].includes(postingMethod))throw new Error('Instagram: choose Web or Android for feed posting.');
   if(typeof music!=='object'||typeof story!=='object'||Array.isArray(music)||Array.isArray(story))throw new Error('Invalid Instagram options.');
   if(music.enabled!==undefined&&typeof music.enabled!=='boolean'||story.enabled!==undefined&&typeof story.enabled!=='boolean'||story.linkEnabled!==undefined&&typeof story.linkEnabled!=='boolean')throw new Error('Invalid Instagram option switch.');
+  if(music.source!==undefined&&!['details','picker'].includes(music.source))throw new Error('Instagram: choose song details or the Instagram picker.');
   const selection=music.selection;
-  const enabled=music.enabled===true&&(postingMethod==='android'||story.enabled===true);
-  if(enabled&&(!selection||typeof selection.id!=='string'||!/^[a-f0-9-]{36}$/.test(selection.id)))throw new Error('Instagram: choose a song from the Android music picker.');
+  const enabled=music.enabled===true,musicSource=music.source==='details'?'details':'picker';
+  if(enabled&&musicSource==='details')musicReference(music.reference);
+  if(enabled&&musicSource==='picker'&&(!selection||typeof selection.id!=='string'||!/^[a-f0-9-]{36}$/.test(selection.id)))throw new Error('Instagram: choose a song from the Android music picker.');
   const source=typeof story.sourcePostUrl==='string'?story.sourcePostUrl.trim():'';
   if(source&&!instagramPostUrl(source))throw new Error('Instagram Story: use an exact Instagram post URL.');
-  return {postingMethod,music:{enabled,...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
+  return {postingMethod,music:{enabled,source:musicSource,...(music.reference?{reference:structuredClone(music.reference)}:{}),...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
 }
 export function storyErrors(story={},selected=[]) {
   const errors=[];

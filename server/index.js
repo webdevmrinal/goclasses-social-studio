@@ -140,10 +140,10 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const checkDraft = async draft => {
     const selectedMedia = libraryFor(draft);
     const errors = validateDraft(draft, selectedMedia, xLength);
-    if(draft.selected.some(id=>['instagram','instagramStory'].includes(id))){
+    if(draft.selected.some(id=>['instagram','instagramStory','instagramMusic'].includes(id))){
       const options=instagramOptions({...draft.instagram,story:{...draft.instagram?.story,enabled:draft.selected.includes('instagramStory')}});
-      if(process.platform!=='win32'&&draft.selected.some(id=>usesInstagramAndroid(options,id)))throw new Error('Android posting and Story sharing need the configured Windows worker. Choose Web for feed posting on this Mac.');
-      if(options.music.enabled)options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
+      if(process.platform!=='win32'&&(draft.selected.some(id=>usesInstagramAndroid(options,id))||draft.selected.includes('instagram')&&options.music.enabled))throw new Error('Android posting and Story sharing need the configured Windows worker. Choose Web for feed posting on this Mac.');
+      if(options.music.enabled&&options.music.source!=='details')options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
       draft.instagram=options;
     }
     if (draft.selected?.includes('manychat')) validateManychatDraft(draft.manychat, draft.captions?.manychat);
@@ -157,9 +157,9 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const selectedMedia = libraryFor(req.body);
     const destinations=destinationReadiness(req.body,selectedMedia,config,queue.login.items,xLength,queue.runs);
     for(const id of ['instagram','instagramStory']){
-      if(process.platform!=='win32'&&(id==='instagramStory'&&req.body.selected?.includes(id)||id==='instagram'&&req.body.selected?.includes(id)&&usesInstagramAndroid(req.body.instagram,id))){destinations[id].ready=false;destinations[id].errors.push('Android posting and Story sharing require the configured Windows worker.');}
+      if(process.platform!=='win32'&&(id==='instagramStory'&&req.body.selected?.includes(id)||id==='instagram'&&req.body.selected?.includes(id)&&(usesInstagramAndroid(req.body.instagram,id)||req.body.instagram?.music?.enabled))){destinations[id].ready=false;destinations[id].errors.push('Android posting and Story sharing require the configured Windows worker.');}
       if(!instagramMusicEnabled(req.body.instagram,id)||!req.body.selected?.includes(id))continue;
-      try{instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
+      try{if(req.body.instagram?.music?.source!=='details')instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
       catch(error){destinations[id].ready=false;destinations[id].errors.push(error.message);}
     }
     res.json({destinations});
@@ -213,6 +213,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/instagram/music/preview',async(req,res)=>{requireIdle();res.json(await instagramWorker.preview(req.body.key));});
   app.post('/api/instagram/music/select',async(req,res)=>{requireIdle();try{res.json(await instagramWorker.choose(req.body.key));}finally{queue.emit('change',queue.state());}});
   app.post('/api/instagram/music/close',async(req,res)=>{requireIdle();try{await instagramWorker.cancelPicker();res.json({ok:true});}finally{queue.emit('change',queue.state());}});
+  app.post('/api/runs/:id/kill',async(req,res)=>{await queue.control('kill',req.params.id);res.json({ok:true});});
   app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });
   app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
   app.post('/api/logins', (req, res) => {

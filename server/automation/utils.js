@@ -121,7 +121,8 @@ export async function uploadImages(page, files, step, { input, trigger } = {}) {
 }
 
 // The only path that invokes a final publication action. Never retry this action.
-export async function finishPost({ mode, confirmedLive, publish, verify, snapshot, step, markSubmitting, preflight }) {
+export async function finishPost({ mode, confirmedLive, publish, verify, snapshot, step, markSubmitting, preflight, signal }) {
+  signal?.throwIfAborted();
   await preflight?.();
   await snapshot('ready-to-publish');
   if (mode !== 'LIVE') {
@@ -132,6 +133,7 @@ export async function finishPost({ mode, confirmedLive, publish, verify, snapsho
   await preflight?.();
   await step('Publishing…');
   await markSubmitting(); // Persist before the side effect, including on process interruption.
+  signal?.throwIfAborted(); // A stop can arrive while submission intent is persisted.
   await publish();
   await verify();
   try { await snapshot('published'); }

@@ -56,7 +56,8 @@ export async function copyNativePostUrl(s){
  const value=await s.request('/execute/sync','POST',{script:'mobile: getClipboard',args:[{}]});
  const url=instagramPostUrl(Buffer.from(value,'base64').toString('utf8'));
  if(!url)throw new InterventionError('Instagram did not return the exact post link. Nothing was sent.');
- if((await s.screen()).some(n=>visible(n)&&n['resource-id']===nativeId('button')&&n['content-desc']==='Copy link')){await s.request('/back','POST',{});await s.until(n=>!n.some(x=>visible(x)&&x['resource-id']===nativeId('button')&&x['content-desc']==='Copy link'),'The Copy link sheet did not close.');}
+ const after=await s.screen();if(after.some(n=>visible(n)&&n['resource-id']===nativeId('direct_private_share_container_view'))){if(after.some(n=>visible(n)&&/EditText$/.test(n.class||n.tag||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('The share message changed. Its draft was preserved.');await s.request('/back','POST',{});await s.until(n=>!n.some(x=>visible(x)&&x['resource-id']===nativeId('direct_private_share_container_view')),'The empty link-copy share sheet did not close.');}
+ else if(after.some(n=>visible(n)&&n['resource-id']===nativeId('button')&&n['content-desc']==='Copy link')){await s.request('/back','POST',{});await s.until(n=>!n.some(x=>visible(x)&&x['resource-id']===nativeId('button')&&x['content-desc']==='Copy link'),'The Copy link sheet did not close.');}
  return url;
 }
 async function profileGrid(s,handle,{refresh=false}={}){

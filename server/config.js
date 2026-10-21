@@ -63,7 +63,7 @@ export function validateConfig(input) {
 export function setupErrors(config, selected) {
   const errors = [];
   for (let id of selected) {
-    if(id==='instagramStory')id='instagram';
+    if(['instagramStory','instagramMusic'].includes(id))id='instagram';
     const p = config.platforms[id];
     if ((id === 'instagram' || id === 'x') && !p.handle) errors.push(`Set the expected ${id === 'x' ? 'X' : 'Instagram'} account handle in Settings.`);
     if (id === 'linkedin' && (!p.companyPageUrl || !p.companyName)) errors.push('Set the LinkedIn company admin URL and company name in Settings.');

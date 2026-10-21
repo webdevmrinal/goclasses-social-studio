@@ -1,0 +1,75 @@
+﻿// Copyright (c) 2026 Mrinal. Edit only one verified existing Instagram post; never create a feed post.
+import sharp from 'sharp';
+import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
+import {verifyNativePost} from './native-reference.js';
+import {normalizeNativeCaption,searchMusic,revealMusicResult,musicPlayback,musicClipPosition} from './native-music.js';
+import {digest} from './native-photos.js';
+import {InterventionError} from './utils.js';
+const visible=nodes=>nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android');
+const one=(nodes,id)=>{const found=visible(nodes).filter(n=>n['resource-id']===nativeId(id));return found.length===1?found[0]:null;};
+const has=(nodes,id)=>Boolean(one(nodes,id));
+export function editInfoState(nodes,{handle,caption}={}){
+ if(nodes.some(n=>n.displayed==='true'&&n.password==='true')||!has(nodes,'layout_edit_media_info_layout')||one(nodes,'action_bar_title')?.text!=='Edit info'||one(nodes,'edit_media_username')?.text!==handle)return null;
+ const field=one(nodes,'edit_media_caption');if(!field||typeof field.text!=='string')return null;
+ if(caption!==undefined&&normalizeNativeCaption(field.text)!==normalizeNativeCaption(caption))return null;
+ return {caption:field.text};
+}
+export function editMusicRow(nodes){
+ if(!has(nodes,'m2_audio_row'))return null;
+ const title=one(nodes,'m2_audio_primary_text')?.text,artist=one(nodes,'m2_audio_secondary_text')?.text;
+ if(!title)return null;return {title,artist:artist||''};
+}
+export const sameMusic=(actual,expected)=>Boolean(actual&&actual.title===expected.title&&actual.artist===expected.artist);
+export function editAudioClip(nodes,chosen){
+ if(one(nodes,'action_bar_title')?.text!=='Add audio'||!has(nodes,'music_editor_controls_container')||one(nodes,'song_title')?.text!==chosen.title||one(nodes,'track_artist')?.text!==chosen.artist||!has(nodes,'action_bar_button_action'))return null;
+ return {title:chosen.title,artist:chosen.artist,nativeSuggestedClip:true,segmentStart:musicClipPosition(nodes)};
+}
+async function scroll(s,nodes,direction){const box=nativeBounds(one(nodes,'edit_media_scroll_view'));const x=Math.round(box.x+box.width/2),top=Math.round(box.y+50),bottom=Math.round(box.y+box.height-60);await s.adb(['shell','input','swipe',String(x),String(direction==='top'?top:bottom),String(x),String(direction==='top'?bottom:top),'400']);}
+export async function readEditMusic(s,identity){
+ for(let i=0;i<7;i++){const nodes=await s.screen();if(!editInfoState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');const row=editMusicRow(nodes);if(row)return row;await scroll(s,nodes,'bottom');}
+ throw new InterventionError('Scroll below Add product details to check Instagram music. The published feed was not uploaded again.');
+}
+export async function editPhotoProof(s,identity){
+ let previous='';
+ for(let i=0;i<9;i++){
+  const nodes=await s.screen();if(!editInfoState(nodes,identity))throw new InterventionError('The existing post caption changed. No music save was attempted.');
+  const box=nativeBounds(one(nodes,'edit_media_scroll_view')),caption=nativeBounds(one(nodes,'edit_media_caption')),height=caption.y-box.y,area={left:box.x,top:box.y,width:box.width,height},stamp=JSON.stringify(area);
+  // Anchor at the actual top, not at an arbitrary partly visible gallery.
+  // Opening audio can restore a different vertical scroll position.
+  if(height>=80&&stamp===previous){
+   let last='';
+   for(let frame=0;frame<8;frame++){
+    const pixels=await sharp(await s.screenshot()).extract(area).resize(160,120,{fit:'fill'}).removeAlpha().raw().toBuffer(),hash=digest(pixels);
+    if(hash===last)return {area,hash};last=hash;await new Promise(r=>setTimeout(r,250));
+   }
+   throw new InterventionError('The existing post thumbnails are still decoding. No music save was attempted.');
+  }
+  previous=height>=80?stamp:'';await scroll(s,nodes,'top');
+ }
+ throw new InterventionError('The existing post image preview could not be verified. No music save was attempted.');
+}
+export async function openEditInfo(s,url,handle,caption){
+ await verifyNativePost(s,url,handle,caption);
+ for(let i=0;i<7;i++){const nodes=await s.screen();if(has(nodes,'media_option_button')&&one(nodes,'row_feed_photo_profile_name')?.text===handle)break;if(!has(nodes,'row_feed_button_share'))throw new InterventionError('The exact post viewer changed before Edit.');const root=one(nodes,'action_bar_root');if(!root)throw new InterventionError('The native post bounds are unavailable.');const canvas=nativeBounds(root);await s.adb(['shell','input','swipe',String(Math.round(canvas.width/2)),String(Math.round(canvas.height*.25)),String(Math.round(canvas.width/2)),String(Math.round(canvas.height*.8)),'400']);}
+ const nodes=await s.screen();if(!has(nodes,'media_option_button')||one(nodes,'row_feed_photo_profile_name')?.text!==handle)throw new InterventionError('The exact post menu is unavailable.');
+ await s.clickId('media_option_button');await s.until(n=>visible(n).filter(x=>x['resource-id']===nativeId('control_option_text')&&x.text==='Edit').length===1,'The existing post Edit menu is unavailable.');
+ await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('control_option_text'))+' and @text="Edit" and @displayed="true"]');
+ return s.until(nodes=>editInfoState(nodes,{handle,caption}),'The existing post Edit info does not match its reviewed account and caption.');
+}
+export async function chooseEditMusic(s,chosen,identity){
+ await readEditMusic(s,identity);await s.clickId('m2_audio_row');await s.until(n=>has(n,'row_search_edit_text'),'The existing post music library did not open.');
+ await searchMusic(s,chosen.query||chosen.title+' '+chosen.artist);const track=await revealMusicResult(s,chosen);await s.click('id',track.selector);await s.until(n=>musicPlayback(n,track)!==null,'The selected song preview changed.');await s.click('id','audio_bar_select_tap_target');
+ const clip=await s.until(n=>editAudioClip(n,track),'The existing-post audio clip differs from the reviewed song.');
+ // This local Add audio Done returns to Edit info; the outer Done saves online.
+ if(!editAudioClip(await s.screen(),track))throw new InterventionError('The local audio review changed.');await s.clickId('action_bar_button_action');await s.until(n=>editInfoState(n,identity),'The local music selection did not return to Edit info.');
+ if(!sameMusic(await readEditMusic(s,identity),track))throw new InterventionError('The unsaved music row differs from the selected track.');return {...track,...clip};
+}
+export async function discardOwnedEdit(s,identity){
+ if(!editInfoState(await s.screen(),identity))throw new InterventionError('The existing post editor changed. Its draft was preserved.');
+ await s.request('/back','POST',{});
+ const next=await s.until(n=>(has(n,'row_feed_button_share')||visible(n).some(x=>/^(Discard|Discard changes|Discard edits)$/.test(x.text||'')))&&n,'The owned Edit info did not close.');
+ if(has(next,'row_feed_button_share')&&!has(next,'layout_edit_media_info_layout'))return;
+ const discard=visible(next).filter(n=>n['resource-id']===nativeId('igds_alert_dialog_primary_button')&&/^(Discard|Discard changes|Discard edits)$/.test(n.text||''));
+ if(discard.length!==1)throw new InterventionError('The edit discard confirmation changed. Close only this unsaved music edit yourself.');
+ await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('igds_alert_dialog_primary_button'))+' and @text='+xpathLiteral(discard[0].text)+' and @displayed="true"]');await s.until(n=>has(n,'row_feed_button_share')&&!has(n,'layout_edit_media_info_layout'),'The owned music rehearsal did not close.');
+}

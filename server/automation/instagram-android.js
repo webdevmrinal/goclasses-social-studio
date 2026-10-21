@@ -1,14 +1,15 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import {openEditInfo,readEditMusic,editInfoState,editPhotoProof,chooseEditMusic,discardOwnedEdit,sameMusic} from './native-edit-music.js';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
 import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,confirmNativeStoryPublication,discardStory} from './native-story.js';
-import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
+import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
-import {instagramOptions,instagramMusicEnabled,instagramHashtags} from '../../shared/instagram.js';
+import {instagramOptions,instagramMusicEnabled,instagramHashtags,musicReference} from '../../shared/instagram.js';
 import {atomicWrite,readJson} from '../config.js';
 import {finishPost,InterventionError} from './utils.js';
 
@@ -22,6 +23,7 @@ export class InstagramAndroidWorker {
     if(!chosen)throw new Error('Choose the Instagram song again from this music picker.');
     return structuredClone(chosen);
   }
+  chosenMusic(options,handle){return options.music.source==='details'?musicReference(options.music.reference):this.selection(options.music.selection,handle);}
   async open(config,signal,onProgress){
     if(this.busy)throw new InterventionError('Finish choosing Instagram music before starting a run.');
     this.busy=true;
@@ -106,7 +108,39 @@ export class InstagramAndroidWorker {
     }catch(e){this.operation=false;this.progress(e.message,'error',false);throw e;}
   }
   async cancelPicker(){if(this.opening)throw new Error('Wait for the Instagram library to open, then close it.');if(this.operation)throw new Error('Wait for the current music search to finish.');this.progress('Closing the music picker...','closing');try{await this.closePicker();}finally{await this.close();}}
-  async applyStoryMusic(s,music){
+  async returnReady(s,ctx){
+    if(ctx.signal?.aborted)return;
+    try{await ctx.step('Returning Instagram to your profile for the next post...');await s.account(ctx.config.platforms.instagram.handle);}
+    catch{try{await ctx.step('The result is confirmed. Review the Android screen before the next run.');}catch{}}
+  }
+  async runMusic(ctx){
+    const options=instagramOptions(ctx.instagram),music=this.chosenMusic(options,ctx.config.platforms.instagram.handle);
+    const source=ctx.instagramPublication?.postUrl||(ctx.mode==='TEST'?ctx.instagramTestPublication?.postUrl:undefined),url=instagramPostUrl(source);
+    if(!url)throw new InterventionError('The exact published feed link is required before editing music. No new post was uploaded.');
+    const s=await this.openForRun(ctx),handle=ctx.config.platforms.instagram.handle;let retained=false;
+    try{
+      await ctx.step('Opening only the confirmed feed post to add music...');
+      const state=await openEditInfo(s,url,handle,ctx.mode==='LIVE'?ctx.instagramCaption:undefined),identity={handle,caption:state.caption};
+      const photos=await editPhotoProof(s,identity),existing=await readEditMusic(s,identity);
+      const preparation={kind:'instagramMusic',postUrl:url,music,testExistingPost:ctx.mode==='TEST',feedAlreadyPublished:true};await ctx.recordPreparation(preparation);
+      if(!music.key&&sameMusic(existing,music)){
+        await discardOwnedEdit(s,identity);const status=ctx.mode==='LIVE'?'posted':'dry_run',publication={postUrl:url,music:{...music,inherited:true},verifiedBy:'existing_post_audio',verifiedAt:new Date().toISOString()};retained=this.retainForStory(ctx,status,publication,true);if(!retained)await this.returnReady(s,ctx);return {status,publication};
+      }
+      await ctx.step('Finding the exact song once in the existing post editor...');const chosen=await chooseEditMusic(s,music,identity);await ctx.recordPreparation({...preparation,music:chosen});let publication;
+      const status=await finishPost({...ctx,snapshot:async label=>{const nodes=await s.screen();if(editInfoState(nodes,identity))await ctx.snapshot(label,{nativeImage:await s.screenshot()});},
+        preflight:async()=>{if(JSON.stringify(await editPhotoProof(s,identity))!==JSON.stringify(photos))throw new InterventionError('The existing post images changed. No music save was attempted.');if(!sameMusic(await readEditMusic(s,identity),chosen))throw new InterventionError('The reviewed song changed. No music save was attempted.');},
+        publish:async()=>{if(!editInfoState(await s.screen(),identity))throw new InterventionError('The final Edit info screen changed.');await s.clickId('action_bar_button_action');},
+        verify:async()=>{await s.until(n=>!n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('layout_edit_media_info_layout'))&&n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('row_feed_button_share')),'The music save may have completed. Verify this existing post before retrying.');await openEditInfo(s,url,handle,identity.caption);if(!sameMusic(await readEditMusic(s,identity),chosen))throw new Error('Instagram did not confirm the saved song on this post.');await discardOwnedEdit(s,identity);publication={postUrl:url,music:chosen,verifiedBy:'existing_post_saved_audio',verifiedAt:new Date().toISOString()};}
+      });
+      if(status==='dry_run')await discardOwnedEdit(s,identity);
+      retained=this.retainForStory(ctx,status,publication,true);if(!retained)await this.returnReady(s,ctx);return {status,...(publication?{publication}:{})};
+    }finally{if(!retained)await this.close();}
+  }
+  async applyStoryMusic(s,music,{allowInherited=false}={}){
+    if(allowInherited){
+      await s.click('id','music_button');const nodes=await s.until(n=>(n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('row_search_edit_text'))||inheritedStoryAudio(n))&&n,'The inherited Story music could not be verified.');
+      const inherited=inheritedStoryAudio(nodes);if(inherited){await s.clickId('music_editor_done_button');await s.until(n=>n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('music_editor_done_button')),'The inherited audio review did not return to Story.');return {...music,...inherited,sourceVerified:true};}
+    }
     await openStoryMusicLibrary(s);
     await searchMusic(s,music.query);
     const match=await revealMusicResult(s,music);
@@ -143,14 +177,15 @@ export class InstagramAndroidWorker {
     if(status!=='posted'||!ctx.continueInstagramStory||!ctx.runId||!postUrl||ctx.signal?.aborted)return false;
     this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle,currentViewer};return true;
   }
-  async checkAccount(config,{runId,onProgress}={}){
+  async checkAccount(config,{runId,onProgress,signal}={}){
     let retained=false;
-    try{await this.open(config,undefined,onProgress);if(runId){this.preflight={runId,account:config.platforms.instagram.handle};retained=true;}}
+    try{await this.open(config,signal,onProgress);if(runId){this.preflight={runId,account:config.platforms.instagram.handle};retained=true;}}
     finally{if(!retained)await this.close();}
   }
   async run(ctx){
+    if(ctx.id==='instagramMusic')return this.runMusic(ctx);
     if(ctx.id==='instagram'&&instagramHashtags(ctx.caption).length>5)throw new InterventionError('Instagram accepts up to 5 hashtags. Edit the caption before starting Android.');
-    const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.selection(options.music.selection,ctx.config.platforms.instagram.handle):null;
+    const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.chosenMusic(options,ctx.config.platforms.instagram.handle):null;
     let url;
     if(ctx.id==='instagramStory'){
       const source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl||(ctx.mode==='TEST'?ctx.instagramTestPublication?.postUrl:undefined);
@@ -181,7 +216,7 @@ export class InstagramAndroidWorker {
         await ctx.step('Applying the reviewed shared-post card layout...');
         await placeRepost(s,options.story.layout,{hasLink:options.story.linkEnabled});
         let audio=null;
-        if(music){await ctx.step('Adding the selected Story music...');audio=await this.applyStoryMusic(s,music);}
+        if(music){await ctx.step('Adding the selected Story music...');const proof=ctx.instagramMusicPublication||ctx.instagramPublication;audio=await this.applyStoryMusic(s,music,{allowInherited:proof?.postUrl===url&&sameMusic(proof.music,music)});}
         if(options.story.linkEnabled){
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
@@ -200,6 +235,7 @@ export class InstagramAndroidWorker {
           }
         });
         if(status==='dry_run')await discardStory(s);
+        if(['posted','dry_run'].includes(status))await this.returnReady(s,ctx);
         return {status,...(publication?{publication}:{})};
       }
       if(ctx.mode==='LIVE')await ctx.step('Recording recent Instagram links to distinguish this new post from pinned posts...');
@@ -231,9 +267,11 @@ export class InstagramAndroidWorker {
           if(!publication.postUrl)throw new Error('Feed submission began, but its exact new post could not be confirmed. Verify Instagram before retrying.');
         }
       });
+      if(status==='posted'&&publication&&music)publication.music={...music,...clip};
       if(status==='dry_run')await discardPost(s,ctx.caption);
       if(status==='posted'||status==='dry_run'){await removeAlbum(s,album);album=null;}
       retained=this.retainForStory(ctx,status,publication,receiptState?.phase==='confirmed'&&receiptState?.passes===0);
+      if(!retained&&['posted','dry_run'].includes(status))await this.returnReady(s,ctx);
       return {status,...(publication?{publication}:{})};
     }catch(e){
       if(!submitted&&owned&&!ctx.signal?.aborted){

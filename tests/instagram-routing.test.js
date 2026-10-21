@@ -18,9 +18,9 @@ const selection={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',key:'123',title:'Revi
 test('explicit feed route overrides legacy music dispatch; Stories remain native',()=>{
   assert.equal(instagramMethod({}),'web');assert.equal(instagramMethod({music:{enabled:true}}),'android');
   const web=instagramOptions({postingMethod:'web',music:{enabled:true,selection}});
-  assert.equal(web.music.enabled,false);assert(!usesInstagramAndroid(web));assert(!instagramMusicEnabled(web));
+  assert.equal(web.music.enabled,true);assert(!usesInstagramAndroid(web));assert(instagramMusicEnabled(web));assert(usesInstagramAndroid(web,'instagramMusic'));
   const mixed=instagramOptions({postingMethod:'web',music:{enabled:true,selection},story:{enabled:true}});
-  assert(!usesInstagramAndroid(mixed));assert(!instagramMusicEnabled(mixed));assert(usesInstagramAndroid(mixed,'instagramStory'));assert(instagramMusicEnabled(mixed,'instagramStory'));
+  assert(!usesInstagramAndroid(mixed));assert(instagramMusicEnabled(mixed));assert(usesInstagramAndroid(mixed,'instagramStory'));assert(instagramMusicEnabled(mixed,'instagramStory'));
   const native=instagramOptions({postingMethod:'android',music:{enabled:false}});assert(usesInstagramAndroid(native));assert(!instagramMusicEnabled(native));
   assert.throws(()=>instagramOptions({postingMethod:'unknown'}),/choose Web or Android/);
 });
@@ -30,7 +30,7 @@ test('Web feed runs without touching even an unavailable Android worker; Android
   try{
     const worker={checkAccount:async()=>{checks++;throw Error('Emulator unavailable');}};
     const queue=new Queue(browser,{dataDir:dir,instagramWorker:worker,runner:async ctx=>{calls.push(ctx.id);assert.equal(ctx.instagram.postingMethod,'web');return 'dry_run';}});await queue.init();
-    const draft={selected:['instagram'],captions:{instagram:'Reviewed'},instagram:{postingMethod:'web',music:{enabled:true}}};
+    const draft={selected:['instagram'],captions:{instagram:'Reviewed'},instagram:{postingMethod:'web',music:{enabled:false}}};
     const run=await queue.start({draft,config:defaults,media:[]});await wait(()=>run.status==='completed'&&!queue.processing);
     assert.equal(checks,0);assert.deepEqual(calls,['instagram']);
     draft.instagram={postingMethod:'android',music:{enabled:false}};
@@ -99,7 +99,7 @@ test('HTTP Web-only validation ignores an unused stored song and freezes the rev
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'mrinal-route-http-'));const config=structuredClone(defaults);config.platforms.instagram.handle='ours';await fs.writeFile(path.join(dir,'config.json'),JSON.stringify(config));
   const {app}=await createApp({dataDir:dir,browser});const server=app.listen(0,'127.0.0.1');await once(server,'listening');const origin='http://127.0.0.1:'+server.address().port;
   try{
-    const draft={selected:['instagram'],mediaIds:[],captions:{instagram:'Caption'},instagram:{postingMethod:'web',music:{enabled:true,selection:{id:'obsolete'}}}};
+    const draft={selected:['instagram'],mediaIds:[],captions:{instagram:'Caption'},instagram:{postingMethod:'web',music:{enabled:false,selection:{id:'obsolete'}}}};
     const response=await fetch(origin+'/api/readiness',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(draft)});
     assert.equal(response.status,200);const data=await response.json();assert(!data.destinations.instagram.errors.some(e=>/song|Android/.test(e)));
     draft.instagram.postingMethod='invalid';const invalid=await fetch(origin+'/api/validate',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(draft)});assert.equal(invalid.status,400);assert.match((await invalid.json()).error,/choose Web or Android/);

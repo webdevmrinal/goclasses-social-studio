@@ -9,7 +9,7 @@ import { assertNoChallenge, InterventionError, NetworkError } from './automation
 import { replyBatch, validateManychatDraft, instagramPostUrl, manychatPublicationSource } from '../shared/manychat.js';
 import { verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor } from '../shared/media.js';
-import { usesInstagramAndroid } from '../shared/instagram.js';
+import { usesInstagramAndroid, instagramNeedsMusicEdit } from '../shared/instagram.js';
 import { publicationUrl } from './automation/publication.js';
 
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'];
@@ -29,7 +29,7 @@ export class Queue extends EventEmitter {
       run.status = 'interrupted'; run.confirmedLive = false;
       for (const item of run.items) {
         if (item.status === 'running' || item.status === 'awaiting_manual') {
-          item.status = item.submitting ? 'uncertain' : 'failed';
+          item.status = item.submitting ? 'uncertain' : run.killRequested ? 'skipped' : 'failed';
           item.message = item.submitting ? 'Worker restarted after publication may have begun. Verify on the platform before resolving this result.' : 'Worker restarted. Safe to retry this failed preparation.';
         } else if(item.status==='attention'&&item.startedAt&&!item.submitting){
           item.status='failed';item.message+=' Worker restarted after this preparation stopped. Retry only this failed destination.';
@@ -51,18 +51,19 @@ export class Queue extends EventEmitter {
     if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
     if (mode !== 'TEST' && mode !== 'LIVE') throw new Error('Invalid run mode.');
     if (mode === 'LIVE' && confirmation !== 'POST') throw new Error('Type POST to authorize this live run.');
-    const ordered=draft.selected.filter(id=>!['instagramStory','manychat'].includes(id)).flatMap(id=>id==='instagram'&&draft.selected.includes('instagramStory')?[id,'instagramStory']:[id]);
+    const ordered=draft.selected.filter(id=>!['instagramStory','manychat'].includes(id)&&!(id==='instagramMusic'&&draft.selected.includes('instagram')&&instagramNeedsMusicEdit(draft.instagram))).flatMap(id=>id==='instagram'?[id,...(instagramNeedsMusicEdit(draft.instagram)?['instagramMusic']:[]),...(draft.selected.includes('instagramStory')?['instagramStory']:[])]:[id]);
     if(draft.selected.includes('instagramStory')&&!draft.selected.includes('instagram'))ordered.push('instagramStory');
     if(draft.selected.includes('manychat'))ordered.push('manychat');
     const run = {
       id: randomUUID(), createdAt: new Date().toISOString(), mode, confirmedLive: mode === 'LIVE' && confirmation === 'POST',
       status: 'running', config: structuredClone(config), captions: structuredClone(draft.captions), media: structuredClone(media), retryOf,
       instagram: structuredClone(draft.instagram||{}),
-      mediaByPlatform: Object.fromEntries(draft.selected.map(id => [id, id==='instagramStory'?[]:mediaFor(draft, media, id).map(m => m.id)])),
+      mediaByPlatform: Object.fromEntries(ordered.map(id => [id, ['instagramStory','instagramMusic'].includes(id)?[]:mediaFor(draft, media, id).map(m => m.id)])),
       items: ordered.map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
     };
     if (draft.selected.includes('manychat')) run.manychat = { ...validateManychatDraft(draft.manychat, draft.captions?.manychat), replies: replyBatch(config.platforms.manychat.replyMessages, this.replyRotation.offset) };
     if (mode === 'LIVE' && run.manychat && !run.manychat.postUrl && !draft.selected.includes('instagram') && !manychatPublicationSource(sourceInstagramPublication)) throw new Error('ManyChat: select Instagram in this run, or paste the exact Instagram post URL in Compose.');
+    if(ordered.includes('instagramMusic')&&!ordered.includes('instagram')&&!instagramPostUrl(sourceInstagramPublication?.postUrl))throw new Error('Instagram music needs the exact confirmed feed post from this run.');
     if (sourceInstagramPublication) run.sourceInstagramPublication = structuredClone(sourceInstagramPublication);
     this.runs.unshift(run);
     // Keep all unresolved runs; never silently discard ambiguous publication evidence.
@@ -71,9 +72,10 @@ export class Queue extends EventEmitter {
     this.process(run).catch(error => this.emit('workerError', error));
     return run;
   }
-  async control(action) {
+  async control(action, expectedRunId) {
     const run = this.active;
     if (!run) throw new Error('There is no active run.');
+    if(expectedRunId&&run.id!==expectedRunId)throw new Error('That activity is no longer active. No other run was stopped.');
     if (action === 'pause' && run.status === 'running') run.status = 'pausing';
     else if (action === 'resume' && run.status === 'paused') run.status = 'running';
     else if (action === 'continue' && run.status === 'attention') {
@@ -86,6 +88,10 @@ export class Queue extends EventEmitter {
       run.status = run.pauseAfterManual ? 'paused' : 'running';
       delete run.pauseAfterManual;
       try { if(!usesInstagramAndroid(run.instagram,item.id))await this.snapshot(run, item, await this.browser.page(item.id), 'operator-confirmed'); } catch { /* Operator confirmation remains authoritative for this manual step. */ }
+    } else if (action === 'kill') {
+      run.status='stopping';run.confirmedLive=false;run.killRequested=true;
+      for(const item of run.items){if(['queued','attention'].includes(item.status)){item.status='skipped';item.message='Stopped before this destination started.';}if(item.status==='awaiting_manual'){item.status='uncertain';item.message='Stopped. Check the existing assisted update before retrying.';}}
+      if(this.runController?.runId===run.id)this.runController.controller.abort(new InterventionError('Stopped by operator. No further publication actions are allowed.'));
     } else if (action === 'stop') {
       run.status = 'stopping';
       for (const item of run.items) {
@@ -106,7 +112,11 @@ export class Queue extends EventEmitter {
     if (!item) throw new Error('Only an uncertain result can be resolved manually.');
     const alreadyPosted = item.status === 'posted';
     let publication;
-    if (proof && resolution === 'posted') {
+    if(id==='instagramMusic'&&resolution==='posted'){
+      const source=instagramPostUrl(run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication?.postUrl||run.sourceInstagramPublication?.postUrl);
+      if(!source||proof&&instagramPostUrl(proof.postUrl)!==source)throw new Error('Verify music only on this run’s exact published feed post.');
+      publication={postUrl:source,music:item.preparation?.music,verifiedBy:'operator_confirmation',verifiedAt:new Date().toISOString()};
+    }else if (proof && resolution === 'posted') {
       if (id === 'whatsapp') {
         const expected = run.config?.platforms.whatsapp;
         if (!expected || proof.channelUrl !== expected.channelUrl || proof.channelName !== expected.channelName || !/^[A-Za-z0-9_-]{8,80}$/.test(proof.updateId || '')) throw new Error('The WhatsApp verification record does not match this run.');
@@ -197,11 +207,12 @@ export class Queue extends EventEmitter {
   async process(run) {
     if (this.processing) return;
     this.processing = true;
+    const runController=new AbortController();this.runController={runId:run.id,controller:runController};
     try {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
-      if(nativeItem&&this.instagramWorker&&run.status!=='stopping'){
+      if(nativeItem&&nativeItem.id!=='instagramMusic'&&this.instagramWorker&&run.status!=='stopping'){
         await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
-        try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,onProgress:message=>this.log(run,nativeItem,message)});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
+        try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
@@ -231,11 +242,14 @@ export class Queue extends EventEmitter {
         await this.change();
         let page, timer, task;
         const native=usesInstagramAndroid(run.instagram,item.id),controller=new AbortController();
+        const cancel=()=>controller.abort(runController.signal.reason);runController.signal.addEventListener('abort',cancel,{once:true});if(runController.signal.aborted)cancel();
         try {
           // A TEST may rehearse a successful feed against an existing post, but
           // a failed or uncertain feed must never select an unrelated old post.
-          const feed=item.id==='instagramStory'&&run.items.find(i=>i.id==='instagram');
+          const feed=['instagramStory','instagramMusic'].includes(item.id)&&run.items.find(i=>i.id==='instagram');
           if(feed&&feed.status!=='posted'&&!(run.mode==='TEST'&&feed.status==='dry_run'))throw new InterventionError('This run\'s Instagram feed did not finish successfully. Verify or retry that feed before starting its Story. No earlier post was selected.');
+          const musicItem=item.id==='instagramStory'&&run.items.find(i=>i.id==='instagramMusic');
+          if(musicItem&&!['posted','dry_run'].includes(musicItem.status))throw new InterventionError('Verify or finish this post’s music step before sharing its Story. The feed was not posted again.');
           const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
           if(!native)page = await this.browser.page(item.id);
@@ -244,12 +258,13 @@ export class Queue extends EventEmitter {
             timer = setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page?.close().catch(() => {}); }, deadline);
           });
           task = this.runner({
-            page, id: item.id, runId:run.id, continueInstagramStory:item.id==='instagram'&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
+            page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
             mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
+            instagramMusicPublication:run.items.find(i=>i.id==='instagramMusic'&&i.status==='posted')?.publication,
             instagramTestPublication:this.testInstagramPublication(run),
-            captureInstagramPost: run.items.some(i=>i.id==='instagramStory') || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
+            captureInstagramPost: run.items.some(i=>['instagramStory','instagramMusic'].includes(i.id)) || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
             step: message => { controller.signal.throwIfAborted(); return this.log(run, item, message); }, snapshot: (label, target = page) => { controller.signal.throwIfAborted(); return this.snapshot(run, item, page, label, false, target); },
             recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = details; await this.change(); },
             markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping')throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
@@ -277,7 +292,7 @@ export class Queue extends EventEmitter {
             item.status = typeof result === 'string' ? result : result.status;
             delete item.failureMessage;delete item.recoveryMessage;
             if (result?.publication) item.publication = result.publication;
-            item.message = item.status === 'posted' ? item.id === 'manychat' ? 'Automation activated; Edit and Stop controls confirmed.' : 'Published and confirmed by platform.' : item.id === 'manychat' ? 'TEST complete Â· automation prepared; Go live was not clicked.' : 'TEST complete Â· nothing published.';
+            item.message = item.status === 'posted' ? item.id === 'manychat' ? 'Automation activated; Edit and Stop controls confirmed.' : item.id==='instagramMusic'?'Music saved and verified on the existing feed post.':'Published and confirmed by platform.' : item.id === 'manychat' ? 'TEST complete Â· automation prepared; Go live was not clicked.' : 'TEST complete Â· nothing published.';
             if (item.status === 'posted') await this.advanceReplies(run, item);
           }
           if (item.status !== 'awaiting_manual') item.finishedAt = new Date().toISOString();
@@ -287,7 +302,7 @@ export class Queue extends EventEmitter {
           if(native&&controller.signal.aborted&&task){
             // The driver must disconnect before another destination or run can
             // reuse Android. No web fallback and no repeat of a final Share.
-            await this.log(run,item,'Android timed out. Disconnecting the worker and preserving its unsent draft...');
+            await this.log(run,item,run.killRequested?'Stopping Android and preserving its unsent draft...':'Android timed out. Disconnecting the worker and preserving its unsent draft...');
             let cleanupTimer;
             const settled=await Promise.race([task.then(()=>true,()=>true),new Promise(resolve=>{cleanupTimer=setTimeout(()=>resolve(false),60000);})]);
             clearTimeout(cleanupTimer);
@@ -296,7 +311,7 @@ export class Queue extends EventEmitter {
           if (!item.submitting && page && !page.isClosed()) {
             try { await assertNoChallenge(page); } catch (challenge) { error = challenge; }
           }
-          item.status = item.submitting ? 'uncertain' : 'failed';
+          item.status = item.submitting ? 'uncertain' : run.killRequested ? 'skipped' : 'failed';
           const message = error.message.replace(/\u001b\[[0-9;]*m/g, '');
           item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
           item.finishedAt = new Date().toISOString();
@@ -314,11 +329,13 @@ export class Queue extends EventEmitter {
           if (page && !page.isClosed()) { try { await this.snapshot(run, item, page, 'error', true); } catch { /* Browser may already be gone. */ } }
           await this.log(run, item, item.message);
         }
+        runController.signal.removeEventListener('abort',cancel);
         await this.change();
       }
     } finally {
       // A pause, stop or failure at the destination boundary must not retain a native session.
       if(this.instagramWorker?.handoff||this.instagramWorker?.preflight)await this.instagramWorker.close().catch(error=>this.emit('workerError',error));
+      if(this.runController?.runId===run.id)this.runController=null;
       this.processing = false; this.emit('change', this.state());
       const pending = this.pendingKick; this.pendingKick = null;
       if (pending && this.active === pending && ['running', 'stopping'].includes(pending.status)) this.process(pending).catch(error => this.emit('workerError', error));
