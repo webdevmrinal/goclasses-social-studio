@@ -96,7 +96,7 @@ test('a failed new feed never hands an older source permalink to Story',async()=
   try{
     const queue=new Queue(browser,{dataDir:dir,runner:async ctx=>{if(ctx.id==='instagram')throw Error('Feed preparation failed');source=ctx.instagramPublication;throw Error('No new feed reference');}});
     await queue.init();const run=await queue.start({draft:{selected:['instagram','instagramStory'],captions:{instagram:'New'},instagram:options()},config:defaults,media:[],sourceInstagramPublication:{postUrl:'https://www.instagram.com/p/OLD/'}});
-    await waitFor(()=>run.status==='completed_with_errors'&&!queue.processing);assert.equal(source,undefined);
+    await waitFor(()=>run.status==='attention'&&!queue.processing);assert.equal(source,'not called');assert.deepEqual(run.items.map(item=>item.status),['attention','queued']);
   }finally{await fs.rm(dir,{recursive:true,force:true});}
 });
 

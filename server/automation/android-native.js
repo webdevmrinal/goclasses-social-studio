@@ -57,6 +57,32 @@ export async function cancelInstagramPhotoAccess(s){
 }
 export const ANDROID_UNRESPONSIVE='Instagram is not responding in Android. Its draft was preserved. Wait for it in the emulator, or choose Web in Compose for a faster feed post. Nothing was retried automatically.';
 export const ANDROID_SYSTEM_UNRESPONSIVE='Android System UI is not responding. Its screen and draft were preserved. Wait in the emulator before another Android attempt, or use Web for the feed.';
+// Only a server-reported root-accessibility timeout can be retried, and only on
+// these read-only endpoints. A transport failure could hide a completed action.
+const ROOT_ACCESSIBILITY_TIMEOUT=/Timed out after \d+ms waiting for the root AccessibilityNodeInfo in the active window\b/i;
+const ANDROID_READ_UNAVAILABLE='Android could not read the current screen after accessibility timeouts. Its unsent draft was preserved. Wait in the emulator, then try again.';
+function inspectionTimeout(){
+  const error=new InterventionError('Android could not read the current screen before its time limit. Its unsent draft was preserved. Wait in the emulator, then try again.');
+  error.code='ANDROID_READ_TIMEOUT';
+  return error;
+}
+
+const readOnlyInspection=(endpoint,method)=>(method==='GET'&&(endpoint==='/source'||/^\/element\/[^/?#]+\/attribute\/[^/?#]+$/.test(endpoint)))||(method==='POST'&&endpoint==='/elements');
+async function inspectionPause(signal,ms,deadline){
+  signal?.throwIfAborted();
+  const remaining=deadline-Date.now();
+  if(remaining>0)await delay(Math.min(ms,remaining),undefined,{signal});
+  signal?.throwIfAborted();
+}
+function controlLocator(using,value){
+  // Never include XPath text, accessibility labels, captions, passwords or codes.
+  const resource=using==='id'?value:using==='xpath'?value.match(/@resource-id\s*=\s*["']((?:com\.instagram\.android|android):id\/[a-z][a-z0-9_]{0,79})["']/)?.[1]:'';
+  if(/^(?:com\.instagram\.android|android):id\/[a-z][a-z0-9_]{0,79}$/.test(resource||''))return 'resource-id '+resource;
+  if(using==='id')return 'Android resource selector';
+  if(using==='xpath')return 'XPath selector (text and labels omitted)';
+  return 'Android control selector (text and labels omitted)';
+}
+
 export function androidAnrOwner(nodes){
   const visible=nodes.filter(n=>n.displayed==='true'&&n.package==='android');
   if(!visible.some(n=>n['resource-id']==='android:id/aerr_wait'&&n.text==='Wait')||!visible.some(n=>n['resource-id']==='android:id/aerr_close'&&n.text==='Close app'))return null;
@@ -107,21 +133,43 @@ export class AndroidSession {
     await this.request('/appium/settings','POST',{settings:ANDROID_DRIVER_SETTINGS});
     return this;
   }
-  async request(endpoint, method='GET', body) {
+  async request(endpoint, method='GET', body, {deadline=Infinity}={}) {
     if (!this.id) throw new Error('No Android inspection session.');
-    if(this.signal?.aborted && method!=='DELETE')throw new InterventionError('Android operation stopped. Its unsent draft was preserved.');
-    const response=await fetch(ANDROID_URL+'/session/'+this.id+endpoint,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:this.signal&&method!=='DELETE'?AbortSignal.any([this.signal,AbortSignal.timeout(45000)]):AbortSignal.timeout(45000)});
-    const out=await response.json();
-    if(method!=='DELETE')this.signal?.throwIfAborted();
-    if(!response.ok || out.value?.error) throw new Error('Android: '+(out.value?.message || out.value?.error || response.status));
-    return out.value;
+    const readOnly=readOnlyInspection(endpoint,method),end=Math.min(Date.now()+45000,deadline);
+    let recovering=false;
+    for(let attempt=0;attempt<3;attempt++){
+      if(this.signal?.aborted && method!=='DELETE')throw new InterventionError('Android operation stopped. Its unsent draft was preserved.');
+      const remaining=end-Date.now();
+      if(remaining<=0)throw readOnly?inspectionTimeout():new InterventionError('Android inspection reached its time limit. Its unsent draft was preserved.');
+      const timeoutSignal=AbortSignal.timeout(Math.ceil(remaining));
+      let response,out;
+      try{
+        response=await fetch(ANDROID_URL+'/session/'+this.id+endpoint,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:this.signal&&method!=='DELETE'?AbortSignal.any([this.signal,timeoutSignal]):timeoutSignal});
+        out=await response.json();
+      }catch(error){
+        if(method!=='DELETE')this.signal?.throwIfAborted();
+        if(readOnly&&timeoutSignal.aborted)throw inspectionTimeout();
+        throw error;
+      }
+      if(method!=='DELETE')this.signal?.throwIfAborted();
+      if(response.ok&&!out.value?.error)return out.value;
+      const message=out.value?.message||out.value?.error||response.status;
+      if(!readOnly||!ROOT_ACCESSIBILITY_TIMEOUT.test(String(message)))throw new Error('Android: '+message);
+      if(Date.now()>=end)throw inspectionTimeout();
+      if(attempt===2)throw new InterventionError(ANDROID_READ_UNAVAILABLE);
+      if(!recovering){
+        recovering=true;
+        await (this.onReadRecovery||this.onUnresponsive)?.('Android is briefly unable to expose its current screen. Rechecking the screen only; your draft is preserved...');
+      }
+      await inspectionPause(this.signal,250*(attempt+1),end);
+    }
   }
   async close() {
     if (!this.id) return;
     try { await this.request('','DELETE'); } finally { this.id=null; }
   }
-  async screen() {
-    let nodes=nativeNodes(await this.request('/source'));
+  async screen({deadline=Infinity}={}) {
+    let nodes=nativeNodes(await this.request('/source','GET',undefined,{deadline}));
     const anr=androidAnrOwner(nodes);
     if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait')&&!anr)throw new InterventionError('Android has an unrecognized app-not-responding dialog. Close it yourself before continuing. Its draft was preserved.');
     if(anr){
@@ -132,8 +180,8 @@ export class AndroidSession {
       // Only the verified system Wait control. Never Close app, relaunch,
       // discard a draft, or repeat Share after an unresponsive-app dialog.
       await this.click('id','android:id/aerr_wait');
-      const end=Date.now()+20000;
-      do{await delay(500);nodes=nativeNodes(await this.request('/source'));if(!androidAnrOwner(nodes))break;}while(Date.now()<end);
+      const end=Math.min(Date.now()+20000,deadline);
+      while(Date.now()<end){await inspectionPause(this.signal,500,end);if(Date.now()>=end)break;nodes=nativeNodes(await this.request('/source','GET',undefined,{deadline:end}));if(!androidAnrOwner(nodes))break;}
       if(androidAnrOwner(nodes))throw new InterventionError(message);
       if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait'))throw new InterventionError('Android has another unrecognized system dialog. Its screen and draft were preserved.');
     }
@@ -142,16 +190,32 @@ export class AndroidSession {
   }
   async until(predicate, message='Instagram is still loading.', timeout=45000) {
     const end=Date.now()+timeout;
-    while(Date.now()<end) { let nodes;try{nodes=await this.screen();}catch(e){if(!/Unable to find the active topmost window associated with (?:com\.instagram\.android|com\.google\.android\.permissioncontroller|com\.google\.android\.providers\.media\.module) package/.test(e.message))throw e;await delay(300);continue;} const value=await predicate(nodes); if(value)return value; await delay(250); }
+    while(Date.now()<end) {
+      let nodes;
+      try{nodes=await this.screen({deadline:end});}
+      catch(e){
+        this.signal?.throwIfAborted();
+        if(e instanceof InterventionError&&e.code==='ANDROID_READ_TIMEOUT'&&Date.now()>=end)throw new InterventionError(message);
+        if(!/Unable to find the active topmost window associated with (?:com\.instagram\.android|com\.google\.android\.permissioncontroller|com\.google\.android\.providers\.media\.module) package/.test(e.message))throw e;
+        await inspectionPause(this.signal,300,end);continue;
+      }
+      if(Date.now()>=end)break;
+      const value=await predicate(nodes);if(value)return value;
+      await inspectionPause(this.signal,250,end);
+    }
     throw new InterventionError(message);
   }
-  async find(using,value) {
+  async find(using,value,{deadline=Infinity}={}) {
+    const locator=controlLocator(using,value);
     // Appium prefixes unqualified IDs; native Compose widgets also use plain IDs.
     if(using==='id' && !value.includes(':')) { using='xpath'; value='//*[@resource-id='+xpathLiteral(value)+']'; }
-    let nodes=await this.request('/elements','POST',{using,value});
-    const end=Date.now()+4000;
-    while(!nodes.length&&Date.now()<end){await delay(250);nodes=await this.request('/elements','POST',{using,value});}
-    if(nodes.length!==1)throw new InterventionError('Instagram changed its interface or the requested control is ambiguous. Nothing was shared.');
+    let nodes=await this.request('/elements','POST',{using,value},{deadline});
+    const end=Math.min(Date.now()+4000,deadline);
+    while(!nodes.length&&Date.now()<end){
+      await inspectionPause(this.signal,250,end);if(Date.now()>=end)break;
+      nodes=await this.request('/elements','POST',{using,value},{deadline:end});
+    }
+    if(nodes.length!==1)throw new InterventionError('Instagram '+(nodes.length?'matched '+nodes.length+' controls':'found no controls')+' for '+locator+'. '+(nodes.length?'The selector is ambiguous.':'The requested control is unavailable.')+' Its unsent draft was preserved.');
     return nodes[0]['element-6066-11e4-a52e-4f735466cecf'];
   }
   async click(using,value) {

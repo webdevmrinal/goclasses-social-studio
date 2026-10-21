@@ -183,6 +183,8 @@ export class Queue extends EventEmitter {
   }
   testInstagramPublication(run){
     if(run.mode!=='TEST')return undefined;
+    const feed=run.items?.find(item=>item.id==='instagram');
+    if(feed&&!['posted','dry_run'].includes(feed.status))return undefined;
     const handle=run.config?.platforms?.instagram?.handle;
     for(const previous of this.runs){
       if(previous.id===run.id||!handle||previous.config?.platforms?.instagram?.handle!==handle)continue;
@@ -225,12 +227,15 @@ export class Queue extends EventEmitter {
         delete item.recoveryMessage;
         item.status = 'running'; item.startedAt = new Date().toISOString(); delete item.finishedAt;
         await this.change();
-        let page, timer, task, native=false;
-        const controller=new AbortController();
+        let page, timer, task;
+        const native=usesInstagramAndroid(run.instagram,item.id),controller=new AbortController();
         try {
+          // A TEST may rehearse a successful feed against an existing post, but
+          // a failed or uncertain feed must never select an unrelated old post.
+          const feed=item.id==='instagramStory'&&run.items.find(i=>i.id==='instagram');
+          if(feed&&feed.status!=='posted'&&!(run.mode==='TEST'&&feed.status==='dry_run'))throw new InterventionError('This run\'s Instagram feed did not finish successfully. Verify or retry that feed before starting its Story. No earlier post was selected.');
           const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
-          native=usesInstagramAndroid(run.instagram,item.id);
           if(!native)page = await this.browser.page(item.id);
           const deadline = native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
           const timeout = new Promise((_, reject) => {
@@ -293,8 +298,16 @@ export class Queue extends EventEmitter {
           const message = error.message.replace(/\u001b\[[0-9;]*m/g, '');
           item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
           item.finishedAt = new Date().toISOString();
-          if (!item.submitting && run.status !== 'stopping' && (error instanceof InterventionError || error instanceof NetworkError)) {
-            item.failureMessage=item.message;item.status = 'attention'; run.status = 'attention';
+          if (!item.submitting && run.status !== 'stopping' && (native || error instanceof InterventionError || error instanceof NetworkError)) {
+            // A native driver error can leave an unfinished editor even when
+            // its error type is generic. Stop before Story or another destination.
+            if(native){
+              item.failureMessage ||= originalError.message.replace(/\u001b\[[0-9;]*m/g, '');
+              item.message = item.failureMessage;
+              if(message!==item.message)item.recoveryMessage=message;
+              else if(!(error instanceof InterventionError)&&!(error instanceof NetworkError))item.recoveryMessage='Check the Android app for an unfinished draft before choosing Continue. No automatic retry was started.';
+            }else item.failureMessage=item.message;
+            item.status = 'attention'; run.status = 'attention';
           }
           if (page && !page.isClosed()) { try { await this.snapshot(run, item, page, 'error', true); } catch { /* Browser may already be gone. */ } }
           await this.log(run, item, item.message);

@@ -325,6 +325,7 @@ function runMessage(item) {
   if (['posted', 'dry_run', 'queued'].includes(item.status)) return '';
   if (item.status === 'uncertain') return 'May be published. Verify before retrying.';
   const text = String(item.message || '').split('\n')[0];
+  if (/^Instagram (?:found no controls|matched \d+ controls) for /.test(text)) return 'An Instagram control is not ready. Review details before retrying.';
   if (/locator\.|Timeout \d+ms|expected control/i.test(text)) return 'A platform control did not respond. Review details before retrying.';
   return text.length > 160 ? text.slice(0, 157) + '…' : text;
 }

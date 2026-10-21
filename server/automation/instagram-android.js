@@ -208,12 +208,12 @@ export class InstagramAndroidWorker {
       if(music){
         await ctx.step('Loading Instagram music for the reviewed images...');await openMusicLibrary(s);
         await ctx.step('Finding the exact selected song: '+music.title+'...');await searchMusic(s,music.query);
-        await ctx.step('Applying and verifying the selected audio clip...');clip=await applyTrack(s,music,music.durationSeconds);
+        await ctx.step('Applying and verifying the selected audio clip...');clip=await applyTrack(s,music,music.durationSeconds,ctx.step);
       }
       await ctx.step('Verifying the native caption and images'+(music?' with music':'')+'...');
       await nativeCaption(s,ctx.caption);
       const photos=await photoEvidence(s);
-      await ctx.recordPreparation({kind:'instagramAndroid',music:music?{...music,...clip}:null,images:ctx.files.length});
+      await ctx.recordPreparation({kind:'instagramAndroid',music:music?{...music,...clip}:null,images:ctx.files.length,preview:photos});
       let publication;
       const status=await finishPost({...ctx,snapshot,
         preflight:async()=>{ctx.signal?.throwIfAborted();await verifyNativeCaption(s,ctx.caption,music);if(JSON.stringify(await photoEvidence(s))!==JSON.stringify(photos))throw new InterventionError('The reviewed Android images changed.');},

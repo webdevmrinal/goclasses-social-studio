@@ -120,37 +120,56 @@ export async function searchMusic(s,query) {
   },'Instagram music search did not finish. Try a more specific title or artist.');
   return result;
 }
-export async function applyTrack(s,chosen,duration=30) {
-  const candidate=await revealMusicResult(s,chosen);let nodes;
+export function feedMusicClip(nodes,chosen){
+  const visible=nodes.filter(n=>n.displayed==='true'),unique=id=>visible.filter(n=>n['resource-id']===nativeId(id));
+  if(unique('music_editor_controls_container').length!==1||unique('bottom_sheet_done_button').length!==1||unique('song_title').length!==1||unique('track_artist').length!==1)return null;
+  if(unique('song_title')[0].text!==chosen.title||unique('track_artist')[0].text!==chosen.artist)return null;
+  const segmentStart=musicClipPosition(visible),durations=visible.filter(n=>/^\d+ second clip$/.test(n['content-desc']||''));
+  if(segmentStart===null||durations.length!==1)return null;
+  const durationSeconds=Number(durations[0]['content-desc'].match(/^\d+/)[0]);
+  if(durationSeconds<1||durationSeconds>90)return null;
+  return {durationSeconds,segmentStart,durationDescription:durations[0]['content-desc'],bounds:unique('music_editor_controls_container')[0].bounds};
+}
+export async function waitForFeedMusicClip(s,chosen){
+  let previous='';
+  return s.until(nodes=>{const clip=feedMusicClip(nodes,chosen),stamp=clip?JSON.stringify(clip):'';const stable=stamp&&stamp===previous;previous=stamp;return stable?clip:false;},'Instagram music review is still loading or does not match the selected track. Nothing was shared.');
+}
+export async function configureFeedMusicClip(s,chosen,duration=30,onProgress=async()=>{}){
+  if(![15,30].includes(duration))throw new InterventionError('Choose a 15 or 30 second music clip. Nothing was shared.');
+  await onProgress('Checking the selected song and native clip duration...');
+  let clip=await waitForFeedMusicClip(s,chosen);
+  // Native Instagram exposes the actual duration on the clip control. Avoid
+  // opening an unchanged NumberPicker, and target its semantic parent when needed.
+  if(clip.durationSeconds!==duration){
+    await onProgress('Setting the Instagram music clip to '+duration+' seconds...');
+    await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('music_editor_controls_container'))+' and @displayed="true"]//*[@content-desc='+xpathLiteral(clip.durationDescription)+' and @displayed="true"]/parent::*[@clickable="true"]');
+    const read=async()=>s.until(nodes=>{const fields=nodes.filter(n=>n.displayed==='true'&&n['resource-id']==='android:id/numberpicker_input');if(fields.length!==1||!/^\d+(?: SECONDS)?$/.test(fields[0].text||''))return false;return {seconds:parseInt(fields[0].text)};},'The Instagram clip duration picker did not load. Nothing was shared.');
+    let {seconds}=await read();
+    for(let i=0;seconds!==duration&&i<90;i++){
+      const next=seconds+(seconds<duration?1:-1);
+      await s.click('xpath','//android.widget.Button[@text='+xpathLiteral(next+' SECONDS')+' and @displayed="true"]');
+      await s.until(nodes=>{const fields=nodes.filter(n=>n.displayed==='true'&&n['resource-id']==='android:id/numberpicker_input');return fields.length===1&&parseInt(fields[0].text)===next;},'Instagram did not confirm the requested clip duration. Nothing was shared.');
+      ({seconds}=await read());
+    }
+    if(seconds!==duration)throw new InterventionError('The requested music duration could not be set. Nothing was shared.');
+    await s.clickId('music_duration_picker_done_button');
+    clip=await waitForFeedMusicClip(s,chosen);
+    if(clip.durationSeconds!==duration)throw new InterventionError('The reviewed music duration changed. Nothing was shared.');
+  }
+  await onProgress('Confirming the song and returning to the photo editor...');
+  await s.clickId('bottom_sheet_done_button');
+  await s.until(nodes=>present(nodes,'media_thumbnail_tray_button')&&present(nodes,'audio_pill_empty_background')&&!present(nodes,'music_editor_controls_container'),'Instagram did not finish applying the verified music clip. Nothing was shared.');
+  return {durationSeconds:clip.durationSeconds,segmentStart:clip.segmentStart};
+}
+export async function applyTrack(s,chosen,duration=30,onProgress){
+  if(![15,30].includes(duration))throw new InterventionError('Choose a 15 or 30 second music clip. Nothing was shared.');
+  const candidate=await revealMusicResult(s,chosen);
   await s.click('id',candidate.selector);
   await s.until(nodes=>musicPlayback(nodes,chosen)!==null,'Instagram track preview is still loading.');
   await s.click('id','audio_bar_select_tap_target');
   await s.until(nodes=>present(nodes,'audio_pill_empty_background')&&present(nodes,'media_thumbnail_tray_button'),'Instagram did not apply the chosen song.');
   await s.clickId('audio_pill_empty_background');
-  nodes=await s.until(nodes=>present(nodes,'music_editor_controls_container')&&nodes,'Instagram music clip editor is still loading.');
-  if(nodes.find(n=>n['resource-id']===nativeId('song_title'))?.text!==chosen.title||nodes.find(n=>n['resource-id']===nativeId('track_artist'))?.text!==chosen.artist)throw new InterventionError('The applied song does not match the reviewed title and artist.');
-  const seek=nodes.find(n=>n.tag==='android.widget.SeekBar'&&n['content-desc']?.startsWith('Select the part of the audio track'));
-  if(!seek)throw new InterventionError('Instagram did not expose the clip position for verification.');
-  const sb=nativeBounds(seek);
-  const durationControl=nodes.find(n=>n.tag==='android.view.View'&&n.clickable==='true'&&n.displayed==='true'&&nativeBounds(n).x<sb.x&&Math.abs(nativeBounds(n).y-sb.y)<25&&nativeBounds(n).width<130);
-  if(!durationControl)throw new InterventionError('Instagram clip duration control is unavailable.');
-  await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('music_editor_controls_container'))+']//android.view.View[@bounds='+xpathLiteral(durationControl.bounds)+']');
-  const read=async()=>+(await s.until(nodes=>nodes.find(n=>n['resource-id']==='android:id/numberpicker_input')?.text,'The duration picker did not open.')).match(/^\d+/)?.[0];
-  let seconds=await read();
-  if(![15,30].includes(duration))throw new Error('Choose a 15 or 30 second music clip.');
-  for(let i=0;seconds!==duration&&i<90;i++){
-    const next=seconds+(seconds<duration?1:-1);
-    await s.click('xpath','//android.widget.Button[@text='+xpathLiteral(next+' SECONDS')+']');
-    await s.until(nodes=>nodes.some(n=>n['resource-id']==='android:id/numberpicker_input'&&parseInt(n.text)===next),'Instagram did not change the clip duration.');
-    seconds=await read();
-  }
-  if(seconds!==duration)throw new InterventionError('The requested music duration could not be set.');
-  await s.clickId('music_duration_picker_done_button');
-  nodes=await s.until(nodes=>present(nodes,'music_editor_controls_container')&&nodes,'The music clip editor did not return.');
-  const segmentStart=nodes.find(n=>n.tag==='android.widget.SeekBar')?.text;
-  if(!/^\d+(?:\.\d+)?$/.test(segmentStart||''))throw new InterventionError('The music clip position could not be verified.');
-  await s.clickId('bottom_sheet_done_button');
-  return {durationSeconds:seconds,segmentStart};
+  return configureFeedMusicClip(s,chosen,duration,onProgress);
 }
 export const normalizeNativeCaption=value=>String(value??'').replace(/\r\n?/g,'\n').normalize('NFC').trim();
 export function captionField(nodes){const fields=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('caption_input_text_view'));return fields.length===1?fields[0]:null;}
@@ -167,12 +186,48 @@ export async function nativeCaption(s,caption) {
   nodes=await s.until(nodes=>normalizeNativeCaption(captionField(nodes)?.text)===normalizeNativeCaption(caption)&&nodes,'The Android caption does not match the reviewed draft. Nothing was shared.',8000);
   if(nodes.some(n=>n['resource-id']===nativeId('next_button_textview')&&n.text==='OK'))await s.clickId('next_button_textview');
   await s.until(nodes=>present(nodes,'share_footer_button'),'Instagram final review did not load.');
+  // Caption editing can leave a fractional scroll offset. Capture all image
+  // baselines at the same confirmed top position used after music review.
+  await nativeReviewTop(s,await s.screen(),{restoreStart:true});
 }
-export async function verifyNativeCaption(s,caption,music) {
-  const nodes=await s.screen();
-  const normalize=normalizeNativeCaption;
-  if(!present(nodes,'share_footer_button')||normalize(captionField(nodes)?.text)!==normalize(caption))throw new InterventionError('The Android post or caption changed after review. Nothing was shared.');
-  if(music&&(nodes.find(n=>n['resource-id']===nativeId('music_track_title'))?.text!==music.title||nodes.find(n=>n['resource-id']===nativeId('music_track_subtitle'))?.text!==music.artist))throw new InterventionError('The reviewed Instagram music changed.');
+const reviewOverlay=nodes=>['music_editor_controls_container','music_editor_done_button','row_search_edit_text'].some(id=>present(nodes,id));
+async function scrollPostReview(s,nodes,direction){
+  const views=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('scroll_view'));
+  if(!present(nodes,'share_footer_button')||reviewOverlay(nodes)||views.length!==1)throw new InterventionError('The native post review changed. Nothing was shared.');
+  const elementId=await s.find('xpath','//*[@resource-id='+xpathLiteral(nativeId('scroll_view'))+' and @displayed="true"]');
+  const canScrollMore=await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{elementId,direction,percent:.7}]});
+  if(typeof canScrollMore!=='boolean')throw new InterventionError('Instagram did not confirm the review scroll position. Nothing was shared.');
+  return {nodes:await s.until(nodes=>present(nodes,'share_footer_button')&&nodes,'The native review is still scrolling. Nothing was shared.'),canScrollMore};
+}
+async function nativeReviewTop(s,nodes,{restoreStart=false}={}){
+  let atStart=!restoreStart;
+  for(let attempt=0;attempt<8;attempt++){
+    if(reviewOverlay(nodes))throw new InterventionError('The native post review changed. Nothing was shared.');
+    if(atStart&&present(nodes,'share_footer_button')&&captionField(nodes)&&present(nodes,'photo_media_preview_image_view'))return nodes;
+    const scrolled=await scrollPostReview(s,nodes,'up');nodes=scrolled.nodes;atStart=scrolled.canScrollMore===false;
+  }
+  if(atStart&&present(nodes,'share_footer_button')&&captionField(nodes)&&present(nodes,'photo_media_preview_image_view'))return nodes;
+  throw new InterventionError('Instagram did not restore the image and caption review. Nothing was shared.');
+}
+export async function verifyNativeCaption(s,caption,music){
+  let nodes=await nativeReviewTop(s,await s.screen());
+  const matches=nodes=>present(nodes,'share_footer_button')&&normalizeNativeCaption(captionField(nodes)?.text)===normalizeNativeCaption(caption);
+  if(!matches(nodes))throw new InterventionError('The Android post or caption changed after review. Nothing was shared.');
+  if(music){
+    let confirmed=false,didScroll=false;
+    for(let attempt=0;attempt<8;attempt++){
+      const titles=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('music_track_title')),artists=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('music_track_subtitle'));
+      if(titles.length&&artists.length){
+        if(titles.length!==1||artists.length!==1||titles[0].text!==music.title||artists[0].text!==music.artist)throw new InterventionError('The reviewed Instagram music changed. Nothing was shared.');
+        confirmed=true;break;
+      }
+      nodes=(await scrollPostReview(s,nodes,'down')).nodes;didScroll=true;
+    }
+    if(!confirmed)throw new InterventionError('Instagram did not expose the selected song below the caption. Nothing was shared.');
+    // Restore the same media/caption viewport before the final image hash check.
+    nodes=await nativeReviewTop(s,nodes,{restoreStart:didScroll});
+    if(!matches(nodes))throw new InterventionError('The Android caption changed during music review. Nothing was shared.');
+  }
 }
 export async function discardPost(s,caption) {
   for(let i=0;i<14;i++){

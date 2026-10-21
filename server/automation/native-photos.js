@@ -79,7 +79,7 @@ export async function selectAlbumPhotos(s,album) {
     if(!toggle)throw new InterventionError('Instagram carousel selection is unavailable.');
     for(let attempt=0;attempt<2&&toggle.checked!=='true';attempt++){
       await s.clickId('multi_select_slide_button_alt');
-      try{await s.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('multi_select_slide_button_alt')&&n.checked==='true'),'Carousel control did not switch yet.',3500);}catch(e){if(e.message!=='Carousel control did not switch yet.')throw e;}
+      try{await s.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('multi_select_slide_button_alt')&&n.checked==='true'),'Carousel control did not switch yet.',15000);}catch(e){if(e.message!=='Carousel control did not switch yet.')throw e;}
       toggle=(await s.screen()).find(n=>n['resource-id']===nativeId('multi_select_slide_button_alt'))||{};
     }
     if(toggle.checked!=='true')throw new InterventionError('Instagram did not enable carousel selection.');
@@ -90,7 +90,7 @@ export async function selectAlbumPhotos(s,album) {
   for(let index=0;index<files.length;index++){
     let chosen=false;
     for(let attempt=0;attempt<8&&!chosen;attempt++){
-      const nodes=await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('gallery_folder_menu_tv')&&n.text===album.folder)&&nodes,'Instagram left the reviewed upload album. Nothing was shared.',5000);
+      const nodes=await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('gallery_folder_menu_tv')&&n.text===album.folder)&&nodes,'Instagram left the reviewed upload album. Nothing was shared.',15000);
       const thumbs=nodes.filter(n=>visible(n)&&n['resource-id']===nativeId('gallery_grid_item_thumbnail'));
       const screenshot=await s.screenshot(),scores=[];
       for(const node of thumbs)scores.push({node,score:await previewScore(screenshot,node,files[index].bytes)});
@@ -114,10 +114,20 @@ export async function selectAlbumPhotos(s,album) {
   // Large carousels can decode slowly on the dedicated low-memory emulator.
   await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('media_thumbnail_tray_button')),'Instagram photo editor is still loading.',90000);
 }
-export async function photoEvidence(s) {
-  const nodes=(await s.screen()).filter(n=>visible(n)&&n['resource-id']===nativeId('photo_media_preview_image_view'));
-  const screenshot=await s.screenshot(),pictures=[];
-  for(const node of nodes){const b=nativeBounds(node);if(b.width&&b.height)pictures.push({bounds:node.bounds,hash:digest(await sharp(screenshot).extract({left:b.x,top:b.y,width:b.width,height:b.height}).raw().toBuffer())});}
+export async function photoEvidence(s){
+  const nodes=await s.screen(),viewports=nodes.filter(n=>visible(n)&&n['resource-id']===nativeId('scroll_view'));
+  if(viewports.length!==1)throw new InterventionError('The native image review viewport is unavailable or ambiguous. Nothing was shared.');
+  const viewport=nativeBounds(viewports[0]),screenshot=await s.screenshot(),info=await sharp(screenshot).metadata(),pictures=[];
+  // Android draws its fading scrollbar over the clipped carousel thumbnail at
+  // the viewport edge. Exclude only that measured 4dp UI gutter (6px at 540px),
+  // retaining exact hashes of all remaining visible image pixels.
+  const gutter=Math.max(1,Math.ceil(info.width/90));
+  if(viewport.width<=gutter*2)throw new InterventionError('The native image review is too small to verify. Nothing was shared.');
+  for(const node of nodes.filter(n=>visible(n)&&n['resource-id']===nativeId('photo_media_preview_image_view'))){
+    const b=nativeBounds(node),left=Math.max(b.x,viewport.x+gutter),top=Math.max(b.y,viewport.y),right=Math.min(b.x+b.width,viewport.x+viewport.width-gutter),bottom=Math.min(b.y+b.height,viewport.y+viewport.height);
+    if(right<=left||bottom<=top)continue;
+    pictures.push({bounds:node.bounds,contentBounds:'['+left+','+top+']['+right+','+bottom+']',hash:digest(await sharp(screenshot).extract({left,top,width:right-left,height:bottom-top}).raw().toBuffer())});
+  }
   if(!pictures.length)throw new InterventionError('The native Instagram image preview is unavailable.');
   return pictures;
 }
