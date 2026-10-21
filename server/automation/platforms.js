@@ -208,6 +208,14 @@ async function instagram(ctx) {
   return publication ? { status: result, publication } : result;
 }
 
+// A text-only draft must not reuse a restored attachment from the platform's composer.
+// Use attachment preview selectors rather than all composer images.
+async function verifyTextOnlyComposer(composer, previews, name) {
+  const hasPreview = await previews.evaluateAll(elements => elements.some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden'));
+  const hasFiles = await composer.locator('input[type="file"]').evaluateAll(inputs => inputs.some(input => input.files?.length));
+  if (hasPreview || hasFiles) throw new Error(`${name}: the text-only composer still has attached media. Remove it in the worker and retry preparation. Nothing was published.`);
+}
+
 async function linkedin(ctx) {
   const { page, files, caption, config, step, snapshot } = ctx;
   const expected = config.platforms.linkedin;
@@ -221,15 +229,17 @@ async function linkedin(ctx) {
   await dialog.waitFor({ state: 'visible', timeout: 30000 });
   // Require an exact company identity inside the composer before any content is inserted.
   await dialog.getByText(config.platforms.linkedin.companyName, { exact: true }).first().waitFor({ state: 'visible' });
-  const addMedia = dialog.getByRole('button', { name: /add media|add a photo|add photos|add an image/i });
-  await uploadImages(page, files, step, { trigger: addMedia });
-  const mediaDialog = page.getByRole('dialog', { name: 'Editor', exact: true });
-  await waitForImages(page, mediaDialog.getByRole('img', { name: /^Preview of / }));
-  if (files.length > 1) await waitForImages(page, mediaDialog.locator('img:not([alt^="Preview of "])'), files.length);
-  await mediaDialog.getByRole('button', { name: 'Next', exact: true }).click();
-  if (files.length === 1) await waitForImages(page, dialog.getByRole('img', { name: 'Image preview', exact: true }));
-  else await waitForImages(page, dialog.locator('img[src^="data:image"],img[src^="blob:"]'), files.length);
-  await snapshot('images-uploaded');
+  if (files.length) {
+    const addMedia = dialog.getByRole('button', { name: /add media|add a photo|add photos|add an image/i });
+    await uploadImages(page, files, step, { trigger: addMedia });
+    const mediaDialog = page.getByRole('dialog', { name: 'Editor', exact: true });
+    await waitForImages(page, mediaDialog.getByRole('img', { name: /^Preview of / }));
+    if (files.length > 1) await waitForImages(page, mediaDialog.locator('img:not([alt^="Preview of "])'), files.length);
+    await mediaDialog.getByRole('button', { name: 'Next', exact: true }).click();
+    if (files.length === 1) await waitForImages(page, dialog.getByRole('img', { name: 'Image preview', exact: true }));
+    else await waitForImages(page, dialog.locator('img[src^="data:image"],img[src^="blob:"]'), files.length);
+    await snapshot('images-uploaded');
+  }
   await step('Adding the caption…');
   const editor = dialog.getByRole('textbox', { name: 'Text editor for creating content', exact: true });
   await pasteCaption(page, editor, caption);
@@ -237,7 +247,11 @@ async function linkedin(ctx) {
   const post = dialog.getByRole('button', { name: 'Post', exact: true });
   await preparedButton(page, post);
   const result = await finishPost({ ...ctx,
-    preflight: async () => { await verifyCaption(editor, caption); baseline = [...new Set([...baseline, ...await publicationBaseline(page, 'linkedin', expected)])]; },
+    preflight: async () => {
+      await verifyCaption(editor, caption);
+      if (!files.length) await verifyTextOnlyComposer(dialog, dialog.locator('img[alt="Image preview"],img[alt^="Preview of "],img[src^="data:image"],img[src^="blob:"]'), 'LinkedIn');
+      baseline = [...new Set([...baseline, ...await publicationBaseline(page, 'linkedin', expected)])];
+    },
     publish: () => post.click(),
     verify: async () => { publication = await confirmPublication({ page, id: 'linkedin', expected, caption, baseline, imageCount: files.length }); }
   });
@@ -251,9 +265,11 @@ async function x(ctx) {
   await assertNoChallenge(page);
   const dialog = page.getByRole('dialog').filter({ has: page.getByTestId('tweetTextarea_0') }).last();
   await dialog.waitFor({ state: 'visible', timeout: 60000 });
-  await uploadImages(page, files, step, { input: dialog.locator('input[type="file"][accept*="image"]') });
-  await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length);
-  await snapshot('images-uploaded');
+  if (files.length) {
+    await uploadImages(page, files, step, { input: dialog.locator('input[type="file"][accept*="image"]') });
+    await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length);
+    await snapshot('images-uploaded');
+  }
   await step('Adding the caption…');
   const editor = dialog.getByTestId('tweetTextarea_0');
   await pasteCaption(page, editor, caption);
@@ -261,7 +277,12 @@ async function x(ctx) {
   const post = dialog.getByTestId('tweetButton');
   let submission;
   const result = await finishPost({ ...ctx,
-    preflight: async () => { await verifyCaption(editor, caption); await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length); submission = await prepareXSubmit(page, dialog, post); },
+    preflight: async () => {
+      await verifyCaption(editor, caption);
+      if (files.length) await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length);
+      else await verifyTextOnlyComposer(dialog, dialog.getByTestId('attachments'), 'X');
+      submission = await prepareXSubmit(page, dialog, post);
+    },
     publish: () => submission.publish(),
     verify: () => page.getByText(/your post was sent/i).waitFor({ timeout: 30000 })
   });
@@ -278,11 +299,13 @@ async function youtube(ctx) {
   await entry.click();
   const composer = page.locator('ytd-backstage-post-dialog-renderer').filter({ has: page.locator('#contenteditable-root[contenteditable="true"]').filter({ visible: true }) });
   await composer.getByText(ctx.config.platforms[ctx.id].channelName, { exact: true }).first().waitFor({ state: 'visible' });
-  await composer.getByRole('button', { name: 'Add an image', exact: true }).click();
-  const media = composer.locator('ytd-backstage-multi-image-select-renderer');
-  await uploadImages(page, files, step, { input: media.locator('input[type="file"][multiple]') });
-  await waitForImages(page, media.locator('img'), files.length);
-  await snapshot('images-uploaded', composer);
+  if (files.length) {
+    await composer.getByRole('button', { name: 'Add an image', exact: true }).click();
+    const media = composer.locator('ytd-backstage-multi-image-select-renderer');
+    await uploadImages(page, files, step, { input: media.locator('input[type="file"][multiple]') });
+    await waitForImages(page, media.locator('img'), files.length);
+    await snapshot('images-uploaded', composer);
+  }
   await step('Adding the caption…');
   const editor = composer.locator('#contenteditable-root[contenteditable="true"]').filter({ visible: true });
   await pasteCaption(page, editor, caption);
@@ -290,7 +313,11 @@ async function youtube(ctx) {
   const post = composer.getByRole('button', { name: 'Post', exact: true });
   await preparedButton(page, post);
   const result = await finishPost({ ...ctx,
-    preflight: async () => { await verifyCaption(editor, caption); baseline = [...new Set([...baseline, ...await publicationBaseline(page, ctx.id, expected)])]; },
+    preflight: async () => {
+      await verifyCaption(editor, caption);
+      if (!files.length) await verifyTextOnlyComposer(composer, composer.locator('ytd-backstage-multi-image-select-renderer img,ytd-backstage-image-renderer,ytd-post-multi-image-renderer'), 'YouTube');
+      baseline = [...new Set([...baseline, ...await publicationBaseline(page, ctx.id, expected)])];
+    },
     snapshot: label => snapshot(label, label === 'published' && publication ? page.locator('ytd-backstage-post-renderer').filter({ has: page.locator(`#published-time-text a[href*="${new URL(publication.postUrl).pathname}"]`) }) : composer),
     publish: () => post.click(),
     verify: async () => { publication = await confirmPublication({ page, id: ctx.id, expected, caption, baseline, imageCount: files.length }); }

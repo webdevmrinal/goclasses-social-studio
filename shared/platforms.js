@@ -3,10 +3,10 @@ import { mediaFor, selectionErrors } from './media.js';
 import { INSTAGRAM_STORY, instagramOptions, storyErrors, instagramHashtags } from './instagram.js';
 export const PLATFORMS = [
   { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Feed post', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
-  { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company photo gallery', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10 },
-  { id: 'x', delimiter: 'X', name: 'X', detail: 'Timeline post', color: '#25272b', icon: 'x', limit: 280, maxImages: 4 },
-  { id: 'youtubeDA', delimiter: 'YOUTUBE_DA', name: 'YouTube · GATE DA', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10 },
-  { id: 'youtubeCS', delimiter: 'YOUTUBE_CS', name: 'YouTube · GATE CS', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10 },
+  { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company photo gallery', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10, textOnly: true },
+  { id: 'x', delimiter: 'X', name: 'X', detail: 'Timeline post', color: '#25272b', icon: 'x', limit: 280, maxImages: 4, textOnly: true },
+  { id: 'youtubeDA', delimiter: 'YOUTUBE_DA', name: 'YouTube · GATE DA', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10, textOnly: true },
+  { id: 'youtubeCS', delimiter: 'YOUTUBE_CS', name: 'YouTube · GATE CS', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10, textOnly: true },
   { id: 'manychat', delimiter: 'MANYCHAT', name: 'ManyChat', detail: 'Instagram comment → DM', color: '#168b78', icon: 'message', limit: 1000, maxImages: 10 },
   { id: 'whatsapp', delimiter: 'WHATSAPP', name: 'WhatsApp Channel', detail: 'Channel update · 1 image', color: '#138b63', icon: 'whatsapp', limit: 1024, maxImages: 1, optionalImport: true, textOnly: true },
   { id: 'telegram', delimiter: 'TELEGRAM', name: 'Telegram Channel', detail: 'Channel post · photo album', color: '#2488b8', icon: 'telegram', limit: 4096, maxImages: 10, optionalImport: true, textOnly: true }

@@ -23,7 +23,8 @@ test('five shared images become independent ordered selections without truncatio
   assert.deepEqual(mediaFor(current, media, 'instagram'), media);
   delete current.mediaByPlatform; assert.equal(validateDraft(current, media).filter(e => /or fewer/.test(e)).length, 1);
   current.mediaByPlatform = { whatsapp: [], x: ['0'] }; assert.deepEqual(validateDraft(current, media), []);
-  current.mediaByPlatform.x = []; assert(validateDraft(current, media).some(e => /X: add at least one/.test(e)));
+  current.mediaByPlatform.x = []; assert.deepEqual(validateDraft(current, media), []);
+  current.mediaByPlatform.instagram = []; assert(validateDraft(current, media).some(e => /Instagram: add at least one/.test(e)));
 });
 test('invalid, duplicate and out-of-library image assignments cannot reach an adapter', () => {
   for (const ids of [['0', '0'], ['missing'], 'not-an-array']) {

@@ -69,7 +69,7 @@ try {
   assert.equal(await page.locator('#caption-instagram').inputValue(), 'A fresh chapter starts here. ✨\n\nBuild your GATE preparation with GO Classes.\nहिन्दी captions work, too.\n\n#GOClasses #GATE');
   const tagged = Buffer.concat([image.subarray(0, 33), pngChunk('caBX', Buffer.from('c2pa ChatGPT gpt-image trainedAlgorithmicMedia')), image.subarray(33)]);
   await page.locator('#file-input').setInputFiles({ name: 'origin-test.png', mimeType: 'image/png', buffer: tagged });
-  await page.locator('.asset').nth(1).locator('[data-metadata]').filter({ hasText: 'Origin metadata' }).waitFor();
+  await page.locator('.asset').nth(1).locator('.metadata-chip.origin').waitFor();
   await page.locator('.asset').nth(1).locator('[data-metadata]').click();
   await page.getByRole('heading', { name: 'Image metadata report', exact: true }).waitFor();
   assert((await page.locator('#modal').innerText()).includes('ChatGPT'));
@@ -77,7 +77,7 @@ try {
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await imageOptions(page.locator('.asset').nth(1));
   await page.locator('.asset').nth(1).locator('[data-clean-media]').click();
-  await page.getByText('Cleaned', { exact: true }).waitFor();
+  await page.locator('.asset').nth(1).locator('.metadata-chip').filter({ hasText: /^\s*Clean\s*$/ }).waitFor();
   await page.locator('.asset').nth(1).locator('[data-metadata]').click();
   await page.getByRole('heading', { name: 'Image metadata report', exact: true }).waitFor();
   assert((await page.locator('#modal').innerText()).includes('Identical decoded pixels'));
@@ -85,9 +85,9 @@ try {
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await imageOptions(page.locator('.asset').nth(1));
   await page.locator('.asset').nth(1).locator('[data-restore-media]').click();
-  await page.getByRole('button', { name: 'Origin metadata', exact: true }).waitFor();
+  await page.locator('.asset').nth(1).locator('.metadata-chip.origin').waitFor();
   await page.getByRole('button', { name: 'Undo image change', exact: true }).click();
-  await page.getByText('Cleaned', { exact: true }).waitFor();
+  await page.locator('.asset').nth(1).locator('.metadata-chip').filter({ hasText: /^\s*Clean\s*$/ }).waitFor();
   const orderBefore = await page.locator('.asset').evaluateAll(els => els.map(el => el.dataset.assetId));
   await page.locator('.asset').first().scrollIntoViewIfNeeded();
   const grip = await page.locator('.asset').nth(1).locator('[data-drag-media]').boundingBox();
