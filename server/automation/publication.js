@@ -79,7 +79,7 @@ export async function publicationBaseline(page, id, expected) {
 export async function confirmPublication({ page, id, expected, caption, baseline, imageCount = 0, timeout = 45000, signal }) {
   const previous = new Set(baseline), end = Date.now() + timeout;
   const refreshAfter = Date.now() + Math.min(5000, Math.max(250, timeout / 3));
-  let stable, repeats = 0, refreshed = false, observer = page, probe;
+  let stable, repeats = 0, probeLoads = 0, nextProbeAt = refreshAfter, observer = page, probe;
   const abort=()=>probe?.close().catch(()=>{});signal?.addEventListener('abort',abort,{once:true});
   try{do {
     signal?.throwIfAborted();
@@ -102,12 +102,16 @@ export async function confirmPublication({ page, id, expected, caption, baseline
       const [key, proof] = [...candidates][0]; repeats = key === stable ? repeats + 1 : 1; stable = key;
       if (repeats >= 3) return { ...proof, verifiedAt: new Date().toISOString() };
     } else { repeats = 0; stable = undefined; }
-    if (id.startsWith('youtube') && !candidates.size && !refreshed && Date.now() >= refreshAfter && Date.now() < end) {
+    if (id.startsWith('youtube') && !candidates.size && probeLoads < 3 && Date.now() >= nextProbeAt && Date.now() < end && (!probe || end-Date.now() > 750)) {
       const feedUrl = `https://www.youtube.com/channel/${encodeURIComponent(expected.channelId)}/posts`;
       // Observe a fresh feed in an owned tab. YouTube leaves its empty inline
       // composer visible after Post; never discard that or a later human draft.
-      signal?.throwIfAborted();refreshed=true;
-      probe=await page.context().newPage();observer=probe;
+      signal?.throwIfAborted();
+      // The first fresh feed can still be stale while YouTube propagates a post.
+      // Revisit only our owned observation tab; never touch the original editor.
+      if(probe&&await probe.locator('[contenteditable="true"],textarea').evaluateAll(nodes=>nodes.some(node=>(node.value??node.textContent??'').trim()))){nextProbeAt=Infinity;continue;}
+      if(!probe)probe=await page.context().newPage();observer=probe;
+      probeLoads++;nextProbeAt=Date.now()+Math.min(10000,Math.max(750,timeout/5));
       signal?.throwIfAborted();
       try{await probe.goto(feedUrl,{waitUntil:'domcontentloaded',timeout:Math.max(1,Math.min(15000,end-Date.now()))});}
       catch{signal?.throwIfAborted();throw new Error('YouTube publication may have occurred, but the read-only feed refresh did not complete. Verify the outcome before retrying.');}

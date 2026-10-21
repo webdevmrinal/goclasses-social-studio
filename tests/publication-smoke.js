@@ -25,7 +25,7 @@ async function fixture(id, options, check) {
     if (route.request().resourceType() !== 'document') return route.abort();
     loads++;
     if (options.failRefresh && loads > 1) return route.abort();
-    const shown = options.staleUntilRefresh && loads === 1 ? { ...options, postId: 'UgkxOld', changedCaption: true } : options;
+    const shown = options.staleUntilRefresh && loads <= (options.staleLoads || 1) ? { ...options, postId: 'UgkxOld', changedCaption: true } : options;
     return route.fulfill({ contentType: 'text/html; charset=utf-8', body: markup(id, shown) });
   });
   const expected = id === 'linkedin' ? expectedLi : expectedYt;
@@ -62,11 +62,17 @@ try {
     const proof=await confirmPublication({page,id:'youtubeDA',expected,caption,baseline:[],imageCount:1,timeout:2200});assert.equal(proof.postUrl,'https://www.youtube.com/post/UgkxNew');
     assert.equal(loads(),2);assert.equal(page.context().pages().length,1,'The owned observation tab was closed; original draft preserved'); assert.equal(await page.locator('[contenteditable="true"]').textContent(), Object.hasOwn(pending, 'draft') ? pending.draft : 'Unsent comment draft');
   });
+  await fixture('youtubeDA',{staleUntilRefresh:true,staleLoads:2},async(page,expected,loads)=>{
+    const proof=await confirmPublication({page,id:'youtubeDA',expected,caption,baseline:['https://www.youtube.com/post/UgkxOld'],imageCount:1,timeout:4500});assert.equal(proof.postUrl,'https://www.youtube.com/post/UgkxNew');assert.equal(loads(),3,'A stale first observation gets a bounded later fresh read');assert.equal(page.context().pages().length,1,'Only owned observer tabs were closed');
+  });
+  await fixture('youtubeDA',{staleUntilRefresh:true,staleLoads:3,draft:'Saved unsent draft'},async(page,expected,loads)=>{
+    await assert.rejects(confirmPublication({page,id:'youtubeDA',expected,caption,baseline:[],imageCount:1,timeout:3000}),/not confirmed/);assert.equal(loads(),2,'Never refresh an observer containing an unsent draft');assert.equal(await page.locator('[contenteditable="true"]').textContent(),'Saved unsent draft');
+  });
   await fixture('youtubeDA', { wrongChannel: true }, async (page, expected, loads) => {
     await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /configured YouTube channel/); assert.equal(loads(), 1, 'Wrong-channel evidence must fail before navigation');
   });
   await fixture('youtubeDA', { staleUntilRefresh: true, failRefresh: true }, async (page, expected, loads) => {
     await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1600 }), /publication may have occurred.*read-only feed refresh did not complete/); assert.equal(loads(), 2);
   });
-  console.log('Publication fixtures passed: LinkedIn receipts and feed proof; exact YouTube authors, captions, links and media; one guarded stale-feed refresh; preserved baseline, ambiguous posts and pending drafts; wrong-channel refusal and uncertain refresh failure. No social publication controls were clicked.');
+  console.log('Publication fixtures passed: LinkedIn receipts and feed proof; exact YouTube authors, captions, links and media; bounded read-only stale-feed refreshes; preserved baseline, ambiguous posts and pending drafts; wrong-channel refusal and uncertain refresh failure. No social publication controls were clicked.');
 } finally { await browser.close(); }
