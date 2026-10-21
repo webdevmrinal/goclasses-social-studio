@@ -25,11 +25,24 @@ export function editAudioClip(nodes,chosen){
  return {title:chosen.title,artist:chosen.artist,nativeSuggestedClip:true,segmentStart:musicClipPosition(nodes)};
 }
 async function scroll(s,nodes,direction){const box=nativeBounds(one(nodes,'edit_media_scroll_view'));const x=Math.round(box.x+box.width/2),top=Math.round(box.y+50),bottom=Math.round(box.y+box.height-60);await s.adb(['shell','input','swipe',String(x),String(direction==='top'?top:bottom),String(x),String(direction==='top'?bottom:top),'400']);}
-export async function readEditMusic(s,identity){
- for(let i=0;i<7;i++){const nodes=await s.screen();if(!editInfoState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');const row=editMusicRow(nodes);if(row)return row;await scroll(s,nodes,'bottom');}
+function editScrollState(nodes,identity){
+ if(nodes.some(n=>n.displayed==='true'&&n.password==='true')||!has(nodes,'layout_edit_media_info_layout')||one(nodes,'action_bar_title')?.text!=='Edit info'||one(nodes,'edit_media_username')?.text!==identity.handle||!has(nodes,'edit_media_scroll_view'))return false;
+ const fields=visible(nodes).filter(n=>n['resource-id']===nativeId('edit_media_caption'));
+ return fields.length===0||fields.length===1&&(identity.caption===undefined||normalizeNativeCaption(fields[0].text)===normalizeNativeCaption(identity.caption));
+}
+// Instagram removes scrolled-off caption nodes from accessibility. Scroll only
+// within the same account/editor, then require the complete caption again.
+export async function anchorEditInfo(s,identity){
+ for(let i=0;i<8;i++){const nodes=await s.screen();if(editInfoState(nodes,identity))return nodes;if(!editScrollState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');await scroll(s,nodes,'top');}
+ throw new InterventionError('The complete existing-post caption could not be verified. No music save was attempted.');
+}
+export async function readEditMusic(s,identity,{leaveAtRow=false}={}){
+ await anchorEditInfo(s,identity);
+ for(let i=0;i<7;i++){const nodes=await s.screen();if(!editScrollState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');const row=editMusicRow(nodes);if(row){if(!leaveAtRow)await anchorEditInfo(s,identity);return row;}await scroll(s,nodes,'bottom');}
  throw new InterventionError('Scroll below Add product details to check Instagram music. The published feed was not uploaded again.');
 }
 export async function editPhotoProof(s,identity){
+ await anchorEditInfo(s,identity);
  let previous='';
  for(let i=0;i<9;i++){
   const nodes=await s.screen();if(!editInfoState(nodes,identity))throw new InterventionError('The existing post caption changed. No music save was attempted.');
@@ -57,14 +70,15 @@ export async function openEditInfo(s,url,handle,caption){
  return s.until(nodes=>editInfoState(nodes,{handle,caption}),'The existing post Edit info does not match its reviewed account and caption.');
 }
 export async function chooseEditMusic(s,chosen,identity){
- await readEditMusic(s,identity);await s.clickId('m2_audio_row');await s.until(n=>has(n,'row_search_edit_text'),'The existing post music library did not open.');
+ await readEditMusic(s,identity,{leaveAtRow:true});await s.clickId('m2_audio_row');await s.until(n=>has(n,'row_search_edit_text'),'The existing post music library did not open.');
  await searchMusic(s,chosen.query||chosen.title+' '+chosen.artist);const track=await revealMusicResult(s,chosen);await s.click('id',track.selector);await s.until(n=>musicPlayback(n,track)!==null,'The selected song preview changed.');await s.click('id','audio_bar_select_tap_target');
  const clip=await s.until(n=>editAudioClip(n,track),'The existing-post audio clip differs from the reviewed song.');
  // This local Add audio Done returns to Edit info; the outer Done saves online.
- if(!editAudioClip(await s.screen(),track))throw new InterventionError('The local audio review changed.');await s.clickId('action_bar_button_action');await s.until(n=>editInfoState(n,identity),'The local music selection did not return to Edit info.');
+ if(!editAudioClip(await s.screen(),track))throw new InterventionError('The local audio review changed.');await s.clickId('action_bar_button_action');await s.until(n=>editScrollState(n,identity),'The local music selection did not return to Edit info.');
  if(!sameMusic(await readEditMusic(s,identity),track))throw new InterventionError('The unsaved music row differs from the selected track.');return {...track,...clip};
 }
 export async function discardOwnedEdit(s,identity){
+ await anchorEditInfo(s,identity);
  if(!editInfoState(await s.screen(),identity))throw new InterventionError('The existing post editor changed. Its draft was preserved.');
  await s.request('/back','POST',{});
  const next=await s.until(n=>(has(n,'row_feed_button_share')||visible(n).some(x=>/^(Discard|Discard changes|Discard edits)$/.test(x.text||'')))&&n,'The owned Edit info did not close.');
