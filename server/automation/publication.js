@@ -76,13 +76,15 @@ export async function publicationBaseline(page, id, expected) {
   return [...new Set([...records, ...receipts].map(row => publicationUrl(id, row.url)).filter(Boolean))];
 }
 
-export async function confirmPublication({ page, id, expected, caption, baseline, imageCount = 0, timeout = 45000 }) {
+export async function confirmPublication({ page, id, expected, caption, baseline, imageCount = 0, timeout = 45000, signal }) {
   const previous = new Set(baseline), end = Date.now() + timeout;
   const refreshAfter = Date.now() + Math.min(5000, Math.max(250, timeout / 3));
-  let stable, repeats = 0, refreshed = false, preservedDraft = false;
-  do {
-    await assertNoChallenge(page);
-    const { records, receipts } = await publicationRecords(page, id, expected);
+  let stable, repeats = 0, refreshed = false, observer = page, probe;
+  const abort=()=>probe?.close().catch(()=>{});signal?.addEventListener('abort',abort,{once:true});
+  try{do {
+    signal?.throwIfAborted();
+    await assertNoChallenge(observer);
+    const { records, receipts } = await publicationRecords(observer, id, expected);
     const candidates = new Map();
     for (const receipt of receipts) {
       const url = publicationUrl(id, receipt.url);
@@ -102,26 +104,17 @@ export async function confirmPublication({ page, id, expected, caption, baseline
     } else { repeats = 0; stable = undefined; }
     if (id.startsWith('youtube') && !candidates.size && !refreshed && Date.now() >= refreshAfter && Date.now() < end) {
       const feedUrl = `https://www.youtube.com/channel/${encodeURIComponent(expected.channelId)}/posts`;
-      if (page.url() === feedUrl) {
-        const hasDraft = await page.evaluate(() => {
-          const shown = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
-          return [...document.querySelectorAll('[contenteditable="true"]')].some(el => shown(el) && (el.textContent.trim() || el.closest('ytd-backstage-post-dialog-renderer')))
-            || [...document.querySelectorAll('[role="dialog"],tp-yt-paper-dialog[opened]')].some(shown)
-            || [...document.querySelectorAll('textarea')].some(el => shown(el) && el.value.trim());
-        });
-        preservedDraft = hasDraft;
-        if (!hasDraft) {
-          // YouTube can leave the pre-submit feed unchanged after accepting a
-          // post. Refresh observation once; keep the original baseline and
-          // never navigate away from a pending or changed human composer.
-          refreshed = true;
-          try { await page.goto(feedUrl, { waitUntil: 'domcontentloaded', timeout: Math.max(1, Math.min(15000, end - Date.now())) }); }
-          catch { throw new Error('YouTube publication may have occurred, but the read-only feed refresh did not complete. Verify the outcome before retrying.'); }
-          continue;
-        }
-      }
+      // Observe a fresh feed in an owned tab. YouTube leaves its empty inline
+      // composer visible after Post; never discard that or a later human draft.
+      signal?.throwIfAborted();refreshed=true;
+      probe=await page.context().newPage();observer=probe;
+      signal?.throwIfAborted();
+      try{await probe.goto(feedUrl,{waitUntil:'domcontentloaded',timeout:Math.max(1,Math.min(15000,end-Date.now()))});}
+      catch{signal?.throwIfAborted();throw new Error('YouTube publication may have occurred, but the read-only feed refresh did not complete. Verify the outcome before retrying.');}
+      continue;
     }
     await wait(250);
   } while (Date.now() < end);
-  throw new Error(`${id === 'linkedin' ? 'LinkedIn' : 'YouTube'} has not confirmed one new matching published post. Verify the outcome before retrying.${preservedDraft && !refreshed ? ' A visible draft was preserved without refreshing the page.' : ''}`);
+  throw new Error(`${id === 'linkedin' ? 'LinkedIn' : 'YouTube'} has not confirmed one new matching published post. Verify the outcome before retrying.`);
+  }finally{signal?.removeEventListener('abort',abort);if(probe)await probe.close().catch(()=>{});}
 }

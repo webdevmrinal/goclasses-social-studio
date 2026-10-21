@@ -20,8 +20,8 @@ function markup(id, options = {}) {
 }
 const browser = await chromium.launch({ headless: true });
 async function fixture(id, options, check) {
-  const page = await browser.newPage(); let loads = 0;
-  await page.route('**/*', route => {
+  const context=await browser.newContext(),page=await context.newPage(); let loads=0;
+  await page.context().route('**/*', route => {
     if (route.request().resourceType() !== 'document') return route.abort();
     loads++;
     if (options.failRefresh && loads > 1) return route.abort();
@@ -30,9 +30,9 @@ async function fixture(id, options, check) {
   });
   const expected = id === 'linkedin' ? expectedLi : expectedYt;
   // This guard is installed on every navigation, including a read-only refresh.
-  await page.addInitScript(() => { window.postClicks = 0; document.addEventListener('click', event => { if (/^(Post|Send|Share)$/.test(event.target.textContent)) { window.postClicks++; throw Error('No posting during verification'); } }); });
+  await page.context().addInitScript(() => { window.postClicks = 0; document.addEventListener('click', event => { if (/^(Post|Send|Share)$/.test(event.target.textContent)) { window.postClicks++; throw Error('No posting during verification'); } }); });
   await page.goto(id === 'linkedin' ? expected.companyPageUrl : `https://www.youtube.com/channel/${options.wrongChannel ? 'UCWrongChannel' : expected.channelId}/posts`);
-  try { await check(page, expected, () => loads); if (!options.failRefresh) assert.equal(await page.evaluate(() => window.postClicks), 0); } finally { await page.close(); }
+  try { await check(page, expected, () => loads); if (!options.failRefresh) assert.equal(await page.evaluate(() => window.postClicks), 0); } finally { await context.close(); }
 }
 const confirm = (page, id, expected, baseline = []) => confirmPublication({ page, id, expected, caption, baseline, imageCount: 1, timeout: 1600 });
 const refuses = (page, id, expected, baseline = []) => assert.rejects(confirmPublication({ page, id, expected, caption, baseline, imageCount: 1, timeout: 100 }), /not confirmed/);
@@ -59,8 +59,8 @@ try {
     await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /not confirmed/); assert.equal(loads(), 1, 'Ambiguous matching candidates must not trigger refresh');
   });
   for (const pending of [{ draft: 'Human unsent draft' }, { draft: '' }, { commentDraft: true }]) await fixture('youtubeDA', { staleUntilRefresh: true, ...pending }, async (page, expected, loads) => {
-    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /visible draft was preserved/);
-    assert.equal(loads(), 1); assert.equal(await page.locator('[contenteditable="true"]').textContent(), Object.hasOwn(pending, 'draft') ? pending.draft : 'Unsent comment draft');
+    const proof=await confirmPublication({page,id:'youtubeDA',expected,caption,baseline:[],imageCount:1,timeout:2200});assert.equal(proof.postUrl,'https://www.youtube.com/post/UgkxNew');
+    assert.equal(loads(),2);assert.equal(page.context().pages().length,1,'The owned observation tab was closed; original draft preserved'); assert.equal(await page.locator('[contenteditable="true"]').textContent(), Object.hasOwn(pending, 'draft') ? pending.draft : 'Unsent comment draft');
   });
   await fixture('youtubeDA', { wrongChannel: true }, async (page, expected, loads) => {
     await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /configured YouTube channel/); assert.equal(loads(), 1, 'Wrong-channel evidence must fail before navigation');

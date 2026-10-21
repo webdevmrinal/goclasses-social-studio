@@ -253,7 +253,7 @@ async function linkedin(ctx) {
       baseline = [...new Set([...baseline, ...await publicationBaseline(page, 'linkedin', expected)])];
     },
     publish: () => post.click(),
-    verify: async () => { publication = await confirmPublication({ page, id: 'linkedin', expected, caption, baseline, imageCount: files.length }); }
+    verify: async () => { publication = await confirmPublication({ page, id: 'linkedin', expected, caption, baseline, imageCount: files.length, signal:ctx.signal }); }
   });
   await page.close().catch(() => {});
   return publication ? { status: result, publication } : result;
