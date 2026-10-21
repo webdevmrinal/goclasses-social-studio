@@ -25,7 +25,7 @@ function fixture() {
   </div><div id="picker" hidden><h1>Pick any post or reel to automate</h1></div>
   <div id="link-editor" hidden><label>Button label<input id="label"></label><label>Link<input id="url"></label><button id="delete" onclick="editing.remove();document.querySelector('#link-editor').hidden=true">Delete link</button><button onclick="saveLink()">Save</button></div>
   <script>
-  const posts=${JSON.stringify(posts)},picture=${JSON.stringify(picture)};let editing=null;window.activations=0;window.selected='';
+  const posts=${JSON.stringify(pickerPosts)},picture=${JSON.stringify(picture)};let editing=null;window.activations=0;window.selected='';
   for(const post of posts){const card=document.createElement('div');card.setAttribute('role','button');const img=new Image();img.src=picture;img.alt=post.caption;const link=document.createElement('a');link.href=post.url;link.textContent='View On Instagram';card.append(img,link);card.onclick=()=>{window.selected=post.url;document.querySelector('#picker').hidden=true};document.querySelector('#picker').append(card)}
   function editLink(element){editing=element;document.querySelector('#link-editor').hidden=false;document.querySelector('#label').value=element?.textContent||'';document.querySelector('#url').value=element?.dataset.title||'';document.querySelector('#delete').hidden=!element}
   function saveLink(){if(editing)editing.remove();const element=document.createElement('div');element.dataset.title=document.querySelector('#url').value;const label=document.createElement('span');label.textContent=document.querySelector('#label').value;element.append(label);element.onclick=()=>editLink(element);document.querySelector('#buttons').append(element);document.querySelector('#link-editor').hidden=true}
@@ -34,7 +34,7 @@ function fixture() {
 }
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();
-let activations = 0, freshProfile = false;
+let activations = 0, freshProfile = false, pickerPosts = posts;
 await context.exposeBinding('testActivation', () => { activations++; });
 await context.route('**/*', route => {
   const url = new URL(route.request().url());
@@ -73,5 +73,17 @@ try {
   await assert.rejects(run({ mode: 'LIVE', instagramPublication: publication, instagramCaption: caption }), /explicit confirmation/);assert.equal(activations, 0);
   const liveFixture = await run({ mode: 'LIVE', confirmedLive: true, instagramPublication: publication, instagramCaption: caption });
   assert.equal(liveFixture.prepared.postUrl, posts[2].url); assert.equal(liveFixture.result.status, 'posted'); assert.equal(activations, 1, 'Only a confirmed LIVE run clicks the local fixture button');
-  console.log('ManyChat browser fixtures passed: saved-draft prompt, exact post and caption binding, pinned posts, reply fields, stale-link removal, optional links, TEST guard, and Edit/Stop activation confirmation.');
+  const exactProof = { postUrl: posts[2].url, verifiedBy: 'operator_confirmation' };
+  pickerPosts = posts.map(post => post.url === exactProof.postUrl ? { ...post, caption: 'Generated picker description' } : post);
+  const recovered = await run({ mode: 'LIVE', confirmedLive: true, instagramPublication: exactProof, instagramCaption: caption });
+  assert.equal(recovered.result.status, 'posted'); assert.equal(recovered.prepared.postUrl, exactProof.postUrl); assert.equal(activations, 2, 'An exact confirmed source works without a candidates array or picker alt-caption equality');
+  pickerPosts = posts;
+  for (const instagramPublication of [[posts[2].url], { candidates: posts[2].url }, { postUrl: 'https://evil.example/p/NEW/', candidates: [posts[2].url] }]) await assert.rejects(run({ mode: 'LIVE', confirmedLive: true, instagramPublication, instagramCaption: caption }), /verified Instagram post/);
+  await assert.rejects(run({ mode: 'LIVE', confirmedLive: true, instagramPublication: { candidates: [posts[2].url] }, instagramCaption: 'A different reviewed caption' }), /intended Instagram post/);
+  await assert.rejects(run({ mode: 'LIVE', confirmedLive: true, instagramPublication: { postUrl: 'https://www.instagram.com/p/MISSING/', candidates: [posts[2].url] }, instagramCaption: caption }), /intended Instagram post/);
+  pickerPosts = [...posts, { ...posts[2] }];
+  await assert.rejects(run({ mode: 'LIVE', confirmedLive: true, instagramPublication: exactProof, instagramCaption: caption }), /intended Instagram post/);
+  await assert.rejects(run({ manychat: { postUrl: posts[2].url, links: [], replies: replyBatch() } }), /intended Instagram post/);
+  pickerPosts = posts; assert.equal(activations, 2, 'Malformed, missing, caption-mismatched and duplicate references never activate');
+  console.log('ManyChat browser fixtures passed: saved-draft prompt, exact post and caption binding, pinned posts, reply fields, stale-link removal, optional links, exact proof without candidates, malformed/duplicate source rejection, TEST guard, and Edit/Stop activation confirmation.');
 } finally { await browser.close(); }

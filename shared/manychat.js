@@ -100,11 +100,39 @@ export function validateManychatDraft(value = {}, caption = '') {
   });
   return { postUrl, links: checked };
 }
+// Proof URLs come from a confirmed run, never from profile-grid relative links.
+const manychatNativeUrl = (value, picker = false) => {
+  if (typeof value !== 'string' || /[\\\u0000-\u0020]/u.test(value)) return null;
+  const pattern = picker
+    ? /^https:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(?:p|reel)\/[A-Za-z0-9_-]+\/?(?:[?#][^\s\\]*)?$/i
+    : /^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\/[A-Za-z0-9_-]+\/?(?:[?#][^\s\\]*)?$/i;
+  return pattern.test(value) ? instagramPostUrl(value) : null;
+};
+const manychatProofUrl = value => manychatNativeUrl(value);
+const manychatCardUrl = value => manychatNativeUrl(value, true);
+export function manychatPublicationSource(publication) {
+  if (!publication || typeof publication !== 'object' || Array.isArray(publication)) return null;
+  const exact = Object.hasOwn(publication, 'postUrl');
+  const postUrl = exact ? manychatProofUrl(publication.postUrl) : null;
+  if (exact && !postUrl) return null;
+  let candidates = [];
+  if (Object.hasOwn(publication, 'candidates')) {
+    if (!Array.isArray(publication.candidates)) return null;
+    candidates = Array.from(publication.candidates, manychatProofUrl);
+    if (candidates.some(url => !url)) return null;
+    candidates = [...new Set(candidates)];
+  }
+  return postUrl || candidates.length ? { postUrl, candidates } : null;
+}
 export function selectPostCard(cards, { postUrl, publication, caption, mode }) {
-  if (postUrl) return cards.find(card => instagramPostUrl(card.url) === postUrl) || null;
+  const unique = predicate => { const matches = cards.filter(predicate); return matches.length === 1 ? matches[0] : null; };
+  if (postUrl) { const exact = manychatProofUrl(postUrl); return exact ? unique(card => manychatCardUrl(card.url) === exact) : null; }
   if (mode !== 'LIVE') return cards[0] || null;
-  if (!publication?.candidates?.length) return null;
-  const candidates = new Set(publication.candidates.map(instagramPostUrl).filter(Boolean));
-  const matches = cards.filter(card => candidates.has(instagramPostUrl(card.url)) && normalizePostCaption(card.caption) === normalizePostCaption(caption));
-  return matches.length === 1 ? matches[0] : null;
+  const source = manychatPublicationSource(publication);
+  if (!source) return null;
+  if (source.postUrl) return unique(card => manychatCardUrl(card.url) === source.postUrl);
+  const expectedCaption = typeof caption === 'string' ? normalizePostCaption(caption) : '';
+  if (!expectedCaption) return null;
+  const candidates = new Set(source.candidates);
+  return unique(card => candidates.has(manychatCardUrl(card.url)) && normalizePostCaption(card.caption) === expectedCaption);
 }

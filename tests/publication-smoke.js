@@ -15,17 +15,24 @@ function markup(id, options = {}) {
   }
   const url = options.changedLink ? 'https://example.com/wrong' : 'https://example.com/apply?course=CS&n=2';
   const card = postId => `<ytd-backstage-post-renderer style="display:block"><a id="author-text" href="/@${options.wrongAuthor ? 'AnotherChannel' : 'GOClassesforGATEDA'}">GO Classes for GATE DA</a><div id="published-time-text"><a href="/post/${postId}">0 seconds ago</a></div><div id="content-text">💼 IRCON ${options.changedCaption ? 'changed' : 'update'}<br><br>Apply: <a href="https://www.youtube.com/redirect?q=${esc(encodeURIComponent(url))}&amp;event=backstage_event">https://example.com/app...</a><br>#CareerAlerts</div>${options.noImage ? '' : '<ytd-backstage-image-renderer><img src="/photo.png"></ytd-backstage-image-renderer>'}</ytd-backstage-post-renderer>`;
-  return '<!doctype html>' + card('UgkxNew') + (options.ambiguous ? card('UgkxAnotherNew') : '');
+  const draft = Object.hasOwn(options, 'draft') ? `<ytd-backstage-post-dialog-renderer style="display:block"><div contenteditable="true">${esc(options.draft)}</div></ytd-backstage-post-dialog-renderer>` : options.commentDraft ? '<div contenteditable="true">Unsent comment draft</div>' : '';
+  return '<!doctype html>' + card(options.postId || 'UgkxNew') + (options.ambiguous ? card('UgkxAnotherNew') : '') + draft;
 }
 const browser = await chromium.launch({ headless: true });
 async function fixture(id, options, check) {
-  const page = await browser.newPage();
-  await page.route('**/*', route => route.request().resourceType() === 'document' ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: markup(id, options) }) : route.abort());
+  const page = await browser.newPage(); let loads = 0;
+  await page.route('**/*', route => {
+    if (route.request().resourceType() !== 'document') return route.abort();
+    loads++;
+    if (options.failRefresh && loads > 1) return route.abort();
+    const shown = options.staleUntilRefresh && loads === 1 ? { ...options, postId: 'UgkxOld', changedCaption: true } : options;
+    return route.fulfill({ contentType: 'text/html; charset=utf-8', body: markup(id, shown) });
+  });
   const expected = id === 'linkedin' ? expectedLi : expectedYt;
-  await page.goto(id === 'linkedin' ? expected.companyPageUrl : `https://www.youtube.com/channel/${expected.channelId}/posts`);
-  // Any accidental publication click would fail this fixture immediately.
-  await page.evaluate(() => { window.postClicks = 0; document.addEventListener('click', event => { if (/^(Post|Send|Share)$/.test(event.target.textContent)) { window.postClicks++; throw Error('No posting during verification'); } }); });
-  try { await check(page, expected); assert.equal(await page.evaluate(() => window.postClicks), 0); } finally { await page.close(); }
+  // This guard is installed on every navigation, including a read-only refresh.
+  await page.addInitScript(() => { window.postClicks = 0; document.addEventListener('click', event => { if (/^(Post|Send|Share)$/.test(event.target.textContent)) { window.postClicks++; throw Error('No posting during verification'); } }); });
+  await page.goto(id === 'linkedin' ? expected.companyPageUrl : `https://www.youtube.com/channel/${options.wrongChannel ? 'UCWrongChannel' : expected.channelId}/posts`);
+  try { await check(page, expected, () => loads); if (!options.failRefresh) assert.equal(await page.evaluate(() => window.postClicks), 0); } finally { await page.close(); }
 }
 const confirm = (page, id, expected, baseline = []) => confirmPublication({ page, id, expected, caption, baseline, imageCount: 1, timeout: 1600 });
 const refuses = (page, id, expected, baseline = []) => assert.rejects(confirmPublication({ page, id, expected, caption, baseline, imageCount: 1, timeout: 100 }), /not confirmed/);
@@ -36,5 +43,30 @@ try {
   for (const options of [{ feed: true, wrongAuthor: true }, { feed: true, noImage: true }]) await fixture('linkedin', options, (page, expected) => refuses(page, 'linkedin', expected));
   await fixture('youtubeDA', {}, async (page, expected) => { const proof = await confirm(page, 'youtubeDA', expected); assert.equal(proof.postUrl, 'https://www.youtube.com/post/UgkxNew'); const baseline = await publicationBaseline(page, 'youtubeDA', expected); await refuses(page, 'youtubeDA', expected, baseline); });
   for (const options of [{ wrongAuthor: true }, { changedCaption: true }, { changedLink: true }, { noImage: true }, { ambiguous: true }]) await fixture('youtubeDA', options, (page, expected) => refuses(page, 'youtubeDA', expected));
-  console.log('Publication fixtures passed: hidden LinkedIn success heading, visible company receipt, fallback feed proof, shortened LinkedIn links/hashtags, expanded YouTube redirect links, wrong authors, changed captions/URLs, missing media, baseline exclusion and ambiguous posts. No social publication controls were clicked.');
+  await fixture('youtubeDA', { staleUntilRefresh: true }, async (page, expected, loads) => {
+    const proof = await confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: ['https://www.youtube.com/post/UgkxOld'], imageCount: 1, timeout: 2200 });
+    assert.equal(proof.postUrl, 'https://www.youtube.com/post/UgkxNew'); assert.equal(loads(), 2, 'One stale-feed refresh discovers the accepted post');
+    assert.equal(page.url(), `https://www.youtube.com/channel/${expected.channelId}/posts`);
+  });
+  await fixture('youtubeDA', { staleUntilRefresh: true }, async (page, expected, loads) => {
+    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: ['https://www.youtube.com/post/UgkxNew'], imageCount: 1, timeout: 1300 }), /not confirmed/);
+    assert.equal(loads(), 2, 'The original baseline survives the single refresh');
+  });
+  for (const options of [{ staleUntilRefresh: true, wrongAuthor: true }, { staleUntilRefresh: true, noImage: true }]) await fixture('youtubeDA', options, async (page, expected, loads) => {
+    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1300 }), /not confirmed/); assert.equal(loads(), 2);
+  });
+  await fixture('youtubeDA', { ambiguous: true }, async (page, expected, loads) => {
+    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /not confirmed/); assert.equal(loads(), 1, 'Ambiguous matching candidates must not trigger refresh');
+  });
+  for (const pending of [{ draft: 'Human unsent draft' }, { draft: '' }, { commentDraft: true }]) await fixture('youtubeDA', { staleUntilRefresh: true, ...pending }, async (page, expected, loads) => {
+    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /visible draft was preserved/);
+    assert.equal(loads(), 1); assert.equal(await page.locator('[contenteditable="true"]').textContent(), Object.hasOwn(pending, 'draft') ? pending.draft : 'Unsent comment draft');
+  });
+  await fixture('youtubeDA', { wrongChannel: true }, async (page, expected, loads) => {
+    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1000 }), /configured YouTube channel/); assert.equal(loads(), 1, 'Wrong-channel evidence must fail before navigation');
+  });
+  await fixture('youtubeDA', { staleUntilRefresh: true, failRefresh: true }, async (page, expected, loads) => {
+    await assert.rejects(confirmPublication({ page, id: 'youtubeDA', expected, caption, baseline: [], imageCount: 1, timeout: 1600 }), /publication may have occurred.*read-only feed refresh did not complete/); assert.equal(loads(), 2);
+  });
+  console.log('Publication fixtures passed: LinkedIn receipts and feed proof; exact YouTube authors, captions, links and media; one guarded stale-feed refresh; preserved baseline, ambiguous posts and pending drafts; wrong-channel refusal and uncertain refresh failure. No social publication controls were clicked.');
 } finally { await browser.close(); }

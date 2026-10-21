@@ -142,7 +142,10 @@ export async function telegramRecords(page, peerId) {
     body?.querySelectorAll('.time,reactions-element,.reactions,.clearfix').forEach(e => e.remove());
     const text = n => n.nodeType === Node.TEXT_NODE ? n.textContent : n.nodeName === 'IMG' ? n.getAttribute('alt') || '' : n.nodeName === 'BR' ? '\n' : [...n.childNodes].map(text).join('');
     const count = e.querySelectorAll('.album-item[data-mid]').length || (e.classList.contains('photo') ? 1 : 0);
-    return { mid: e.dataset.mid, timestamp: Number(e.dataset.timestamp), text: body ? text(body) : '', count, pending: /is-sending|is-pending|is-error|is-failed/.test(e.className) || !!e.querySelector('.time-icon-clock,.time-icon-sending,.time-icon-error'), native: !!e.querySelector('.time-inner[title]') && Number(e.dataset.mid) > 0 };
+    // Web K gives optimistic posts fractional IDs even after its sending
+    // indicator disappears. Only the integer server ID can expose a permalink.
+    const serverId = /^[1-9][0-9]*$/.test(e.dataset.mid || '') && Number.isSafeInteger(Number(e.dataset.mid));
+    return { mid: e.dataset.mid, timestamp: Number(e.dataset.timestamp), text: body ? text(body) : '', count, pending: /is-sending|is-pending|is-error|is-failed/.test(e.className) || !!e.querySelector('.time-icon-clock,.time-icon-sending,.time-icon-error'), native: !!e.querySelector('.time-inner[title]') && serverId };
   }), peerId);
 }
 export async function confirmTelegramPublication({ page, expected, channel, caption, baseline, imageCount, startedAt, verifyContext = async () => {}, timeout = 60000 }) {

@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
-import { manychatBuilderUrl, instagramPostUrl, selectPostCard, replyBatch, DEFAULT_OPENING_DM } from '../../shared/manychat.js';
+import { manychatBuilderUrl, instagramPostUrl, manychatPublicationSource, selectPostCard, replyBatch, DEFAULT_OPENING_DM } from '../../shared/manychat.js';
 import { navigate, firstVisible, waitUntilReady, pasteCaption, verifyCaption, preparedButton, finishPost, InterventionError } from './utils.js';
 
 const test = (page, name) => page.locator(`[data-test-id="${name}"]`);
@@ -8,7 +8,7 @@ const section = (page, name) => page.getByRole('region').filter({ has: page.getB
 export async function prepareManychat(ctx) {
   const { page, config, caption, mode, step, snapshot } = ctx;
   const options = ctx.manychat || { postUrl: '', links: [], replies: replyBatch(config.platforms.manychat.replyMessages) };
-  if (mode === 'LIVE' && !options.postUrl && !ctx.instagramPublication?.candidates?.length) throw new InterventionError('ManyChat needs the verified Instagram post from this run. Publish Instagram first, or stop and start a ManyChat-only run with its exact post URL in Compose.');
+  if (mode === 'LIVE' && !options.postUrl && !manychatPublicationSource(ctx.instagramPublication)) throw new InterventionError('ManyChat needs the verified Instagram post from this run. Publish Instagram first, or stop and start a ManyChat-only run with its exact post URL in Compose.');
   await navigate(page, manychatBuilderUrl(config.platforms.manychat.flowUrl), step);
   const draftPrompt = page.getByText('Continue or start fresh?', { exact: true });
   const entry = await firstVisible([page.getByRole('heading', { name: 'When someone comments on', exact: true }), draftPrompt], 60000);

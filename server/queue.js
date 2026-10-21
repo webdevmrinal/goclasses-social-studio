@@ -6,7 +6,7 @@ import path from 'node:path';
 import { atomicWrite, readJson, DATA } from './config.js';
 import { automate, checkLogin } from './automation/platforms.js';
 import { assertNoChallenge, InterventionError, NetworkError } from './automation/utils.js';
-import { replyBatch, validateManychatDraft, instagramPostUrl } from '../shared/manychat.js';
+import { replyBatch, validateManychatDraft, instagramPostUrl, manychatPublicationSource } from '../shared/manychat.js';
 import { verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor } from '../shared/media.js';
 import { usesInstagramAndroid } from '../shared/instagram.js';
@@ -62,7 +62,7 @@ export class Queue extends EventEmitter {
       items: ordered.map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
     };
     if (draft.selected.includes('manychat')) run.manychat = { ...validateManychatDraft(draft.manychat, draft.captions?.manychat), replies: replyBatch(config.platforms.manychat.replyMessages, this.replyRotation.offset) };
-    if (mode === 'LIVE' && run.manychat && !run.manychat.postUrl && !draft.selected.includes('instagram') && !sourceInstagramPublication?.candidates?.length) throw new Error('ManyChat: select Instagram in this run, or paste the exact Instagram post URL in Compose.');
+    if (mode === 'LIVE' && run.manychat && !run.manychat.postUrl && !draft.selected.includes('instagram') && !manychatPublicationSource(sourceInstagramPublication)) throw new Error('ManyChat: select Instagram in this run, or paste the exact Instagram post URL in Compose.');
     if (sourceInstagramPublication) run.sourceInstagramPublication = structuredClone(sourceInstagramPublication);
     this.runs.unshift(run);
     // Keep all unresolved runs; never silently discard ambiguous publication evidence.

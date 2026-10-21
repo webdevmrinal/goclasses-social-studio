@@ -78,7 +78,8 @@ export async function publicationBaseline(page, id, expected) {
 
 export async function confirmPublication({ page, id, expected, caption, baseline, imageCount = 0, timeout = 45000 }) {
   const previous = new Set(baseline), end = Date.now() + timeout;
-  let stable, repeats = 0;
+  const refreshAfter = Date.now() + Math.min(5000, Math.max(250, timeout / 3));
+  let stable, repeats = 0, refreshed = false, preservedDraft = false;
   do {
     await assertNoChallenge(page);
     const { records, receipts } = await publicationRecords(page, id, expected);
@@ -99,7 +100,28 @@ export async function confirmPublication({ page, id, expected, caption, baseline
       const [key, proof] = [...candidates][0]; repeats = key === stable ? repeats + 1 : 1; stable = key;
       if (repeats >= 3) return { ...proof, verifiedAt: new Date().toISOString() };
     } else { repeats = 0; stable = undefined; }
+    if (id.startsWith('youtube') && !candidates.size && !refreshed && Date.now() >= refreshAfter && Date.now() < end) {
+      const feedUrl = `https://www.youtube.com/channel/${encodeURIComponent(expected.channelId)}/posts`;
+      if (page.url() === feedUrl) {
+        const hasDraft = await page.evaluate(() => {
+          const shown = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+          return [...document.querySelectorAll('[contenteditable="true"]')].some(el => shown(el) && (el.textContent.trim() || el.closest('ytd-backstage-post-dialog-renderer')))
+            || [...document.querySelectorAll('[role="dialog"],tp-yt-paper-dialog[opened]')].some(shown)
+            || [...document.querySelectorAll('textarea')].some(el => shown(el) && el.value.trim());
+        });
+        preservedDraft = hasDraft;
+        if (!hasDraft) {
+          // YouTube can leave the pre-submit feed unchanged after accepting a
+          // post. Refresh observation once; keep the original baseline and
+          // never navigate away from a pending or changed human composer.
+          refreshed = true;
+          try { await page.goto(feedUrl, { waitUntil: 'domcontentloaded', timeout: Math.max(1, Math.min(15000, end - Date.now())) }); }
+          catch { throw new Error('YouTube publication may have occurred, but the read-only feed refresh did not complete. Verify the outcome before retrying.'); }
+          continue;
+        }
+      }
+    }
     await wait(250);
   } while (Date.now() < end);
-  throw new Error(`${id === 'linkedin' ? 'LinkedIn' : 'YouTube'} has not confirmed one new matching published post. Verify the outcome before retrying.`);
+  throw new Error(`${id === 'linkedin' ? 'LinkedIn' : 'YouTube'} has not confirmed one new matching published post. Verify the outcome before retrying.${preservedDraft && !refreshed ? ' A visible draft was preserved without refreshing the page.' : ''}`);
 }

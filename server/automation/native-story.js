@@ -71,6 +71,55 @@ export async function storyAudienceEvidence(s) {
   const b=nativeBounds(canvas),image=await sharp(await s.screenshot()).extract({left:b.x,top:b.y,width:b.width,height:b.height}).raw().toBuffer();
   return {destinations:['instagram','facebook'],bounds:canvas.bounds,hash:digest(image)};
 }
+const storyCompletionDoneAttempts=new WeakMap();
+const storyReceiptEditors=new Set(['share_story_button','story_share_controls_action_bar','music_editor_done_button','music_editor_controls_container','link_sticker_list_web_url_edit_text','caption_input_text_view','new_post_title'].map(nativeId));
+const storyToast=/^(Your story has been shared|Added to your story|Story shared)$/i;
+const ownVisible=nodes=>nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android');
+function completionDone(nodes){
+ const controls=ownVisible(nodes).filter(n=>n['resource-id']===nativeId('send_button'));
+ if(controls.length!==1)return null;
+ const control=controls[0];
+ if((control.class||control.tag)!=='android.widget.Button'||control['content-desc']!=='Done'||!['','Done'].includes(control.text||'')||control.enabled!=='true'||control.clickable!=='true')return null;
+ try{const b=nativeBounds(control);if(b.width<=0||b.height<=0)return null;}catch{return null;}
+ return control;
+}
+// Used only after this worker's reviewed final Share. The observed aftermath
+// acknowledges Instagram acceptance; it does not independently verify Facebook.
+export function nativeStoryPublicationEvidence(nodes){
+ const current=ownVisible(nodes);
+ if(nodes.some(n=>n.displayed==='true'&&n.password==='true')||current.some(n=>storyReceiptEditors.has(n['resource-id'])))return null;
+ if(current.some(n=>storyToast.test(n.text||'')))return {verifiedBy:'native_story_toast',instagramAccepted:true,acknowledgement:'story_shared_toast'};
+ const exact=(id,text,description)=>{const matches=current.filter(n=>n['resource-id']===nativeId(id));return matches.length===1&&matches[0].text===text&&(description===undefined||matches[0]['content-desc']===description);};
+ if(!exact('title_text_view','Also share to')||!exact('title','Also share to','Also share to'))return null;
+ if(current.filter(n=>n['resource-id']===nativeId('direct_recipient_add_to_highlights_row')).length!==1||!exact('add_to_highlights_label','Add to highlights')||!completionDone(current))return null;
+ return {verifiedBy:'native_story_completion_sheet',instagramAccepted:true,acknowledgement:'also_share_to_done'};
+}
+export async function confirmNativeStoryPublication(s,{onDiagnostic,timeout=30000}={}){
+ s.signal?.throwIfAborted();
+ const report=async details=>{await onDiagnostic?.(details);s.signal?.throwIfAborted();};
+ await report({phase:'waiting_for_acknowledgement'});
+ const evidence=await s.until(nodes=>nativeStoryPublicationEvidence(nodes),'Story submission began. Check Instagram before retrying; no duplicate send was attempted.',timeout);
+ const receipt={...evidence,verifiedAt:new Date().toISOString(),completionDismissed:false};
+ await report({phase:'acknowledged',...receipt});
+ if(evidence.verifiedBy!=='native_story_completion_sheet')return receipt;
+ try{
+  // Revalidate the whole sheet before its one non-publishing Done action. Never
+  // address recipient Send controls, even though this Done reuses send_button.
+  const nodes=await s.screen(),current=nativeStoryPublicationEvidence(nodes),control=completionDone(nodes),session=s.id??null;
+  if(current?.verifiedBy!=='native_story_completion_sheet'||!control||storyCompletionDoneAttempts.get(s)===session){await report({phase:'completion_pending',...receipt});return receipt;}
+  s.signal?.throwIfAborted();storyCompletionDoneAttempts.set(s,session);
+  await s.click('xpath','//android.widget.Button[@package="com.instagram.android" and @content-desc="Done" and @bounds='+xpathLiteral(control.bounds)+' and @displayed="true" and @enabled="true"]');
+  await s.until(next=>!ownVisible(next).some(n=>n['resource-id']===nativeId('title_text_view')&&n.text==='Also share to'||n['resource-id']===nativeId('send_button')&&n['content-desc']==='Done'),'The acknowledged Story completion sheet did not close.',10000);
+  receipt.completionDismissed=true;
+  await report({phase:'completion_dismissed',...receipt});
+ }catch(error){
+  s.signal?.throwIfAborted();
+  // A proven acknowledgment survives an ambiguous cleanup response. Do not
+  // repeat Done, Share, or any recipient Send to recover that response.
+  await report({phase:'completion_pending',...receipt});
+ }
+ return receipt;
+}
 export async function discardStory(s) {
   // Called only for this worker's unchanged rehearsal. Unwind its native
   // music/editor stack as well as the Story audience sheet.

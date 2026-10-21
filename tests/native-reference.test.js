@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mrinal. Native receipt and caption guards; offline fixtures only.
-import test from 'node:test';import assert from 'node:assert/strict';
+import test from 'node:test';import assert from 'node:assert/strict';import sharp from 'sharp';
 import {nativeId} from '../server/automation/android-native.js';
 import {nativeGridTiles,nativePostAuthor,nativePublishedCaption,copyNativePostUrl,verifyNativePost,verifyNativeViewer} from '../server/automation/native-reference.js';
 import {nativeCaption,normalizeNativeCaption} from '../server/automation/native-music.js';
@@ -70,4 +70,77 @@ test('Copy link targets the selected section share bounds when two post share co
 test('a scrolled selected post caption stays above the next visible section boundary',()=>{
  const nodes=[n('row_feed_button_share','',{'content-desc':'Send post. Button.',bounds:'[204,120][240,190]'}),n('','ours Reviewed caption',{bounds:'[18,200][540,500]'}),...postSectionNodes('foreign','Other caption')];
  assert.deepEqual(nativePublishedCaption(nodes,'ours').map(n=>n.caption),['Reviewed caption']);
+});
+
+const inlineCaptionButton=(label,extra={})=>({package:'com.instagram.android',displayed:'true',class:'android.widget.Button',clickable:'true','content-desc':label,bounds:'[155,953][205,978]',...extra});
+function captionWithControl(caption,controls=[]){const nodes=postSectionNodes('ours',caption);nodes.splice(4,0,...controls);return nodes;}
+
+test('only a proven visible inline collapse child permits the exact reviewed caption plus its UI suffix',async()=>{
+ const nodes=captionWithControl('Reviewed caption less',[inlineCaptionButton('less')]);
+ assert.equal(nativePublishedCaption(nodes,'ours')[0].caption,'Reviewed caption less');
+ assert.equal(await verifyNativeViewer({screen:async()=>nodes},'ours','Reviewed caption'),true);
+ const legitimate=captionWithControl('Ask for less');assert.equal(nativePublishedCaption(legitimate,'ours')[0].caption,'Ask for less');
+ assert.equal(await verifyNativeViewer({screen:async()=>legitimate},'ours','Ask for less'),true);
+ const literalWithControl=captionWithControl('Ask for less',[inlineCaptionButton('less')]);assert.equal(nativePublishedCaption(literalWithControl,'ours')[0].caption,'Ask for less');
+ assert.equal(await verifyNativeViewer({screen:async()=>literalWithControl},'ours','Ask for less'),true);
+ const doubled=captionWithControl('Ask for less less',[inlineCaptionButton('less')]);assert.equal(nativePublishedCaption(doubled,'ours')[0].caption,'Ask for less less');
+ assert.equal(await verifyNativeViewer({screen:async()=>doubled},'ours','Ask for less'),true);
+});
+
+test('hidden, foreign, outside, duplicate or unrelated less controls never alter the caption',()=>{
+ const variants=[[],[inlineCaptionButton('less',{displayed:'false'})],[inlineCaptionButton('less',{package:'com.other.app'})],[inlineCaptionButton('less',{bounds:'[155,982][205,1007]'})],[inlineCaptionButton('less'),inlineCaptionButton('less')],[inlineCaptionButton('Less')],[inlineCaptionButton('less',{clickable:'false'})],[inlineCaptionButton('less',{'resource-id':nativeId('unrelated_button')})]];
+ for(const controls of variants)assert.equal(nativePublishedCaption(captionWithControl('Reviewed caption less',controls),'ours')[0].caption,'Reviewed caption less');
+ const separated=captionWithControl('Reviewed caption less',[n('unrelated_container'),inlineCaptionButton('less')]);
+ assert.equal(nativePublishedCaption(separated,'ours')[0].caption,'Reviewed caption less');
+});
+
+test('a visible more span is clicked within the exact selected caption, then its proven less UI is excluded',async()=>{
+ let expanded=false;const expected='Reviewed caption with remaining words',calls=[];
+ const s={screen:async()=>captionWithControl(expanded?expected+' less':'Reviewed caption\u2026 more',[inlineCaptionButton(expanded?'less':'more')]),click:async(using,query)=>{
+  assert.equal(using,'xpath');assert(query.includes('//android.widget.Button[@content-desc="more"'));assert(query.includes('@bounds="[155,953][205,978]"'));assert(query.includes('@text="ours Reviewed caption'));calls.push('more span');expanded=true;
+ },until:async predicate=>{const result=await predicate(await s.screen());assert(result);return result;}};
+ assert.equal(await verifyNativeViewer(s,'ours',expected),true);assert.deepEqual(calls,['more span']);
+});
+
+test('duplicate inline more spans stop expansion without a broad caption click',async()=>{
+ const nodes=captionWithControl('Reviewed caption\u2026 more',[inlineCaptionButton('more'),inlineCaptionButton('more')]);
+ await assert.rejects(verifyNativeViewer({screen:async()=>nodes,click:async()=>assert.fail('Ambiguous inline controls must not be clicked')},'ours','Reviewed caption with remaining words'),/expand control is ambiguous/);
+});
+
+test('a clipped collapse child is revealed by bounded observation before exact comparison can succeed',async()=>{
+ let scrolled=false;const calls=[],picture=await sharp({create:{width:540,height:1170,channels:3,background:'#123456'}}).png().toBuffer();
+ const s={screen:async()=>captionWithControl('Reviewed caption less',scrolled?[inlineCaptionButton('less')]:[]),screenshot:async()=>picture,request:async(endpoint,method,body)=>{assert.equal(endpoint,'/execute/sync');assert.equal(body.script,'mobile: scrollGesture');assert.equal(body.args[0].direction,'down');calls.push('reveal');scrolled=true;}};
+ assert.equal(await verifyNativeViewer(s,'ours','Reviewed caption'),true);assert.deepEqual(calls,['reveal']);
+ scrolled=false;calls.length=0;s.screen=async()=>captionWithControl('Reviewed caption less');
+ await assert.rejects(verifyNativeViewer(s,'ours','Reviewed caption'),/complete published Instagram caption could not be verified/);assert.equal(calls.length,4);
+});
+
+
+test('the observed scoped More transition proves the native less suffix even without a collapse accessibility child',async()=>{
+ for(const expected of ['Reviewed caption with remaining words','Reviewed caption ending in less']){
+  let expanded=false;const calls=[];
+  const s={screen:async()=>captionWithControl(expanded?expected+' less':'Reviewed caption\u2026 more',expanded?[]:[inlineCaptionButton('more')]),click:async(using,query)=>{
+   assert.equal(using,'xpath');assert(query.includes('//android.widget.Button[@content-desc="more"'));calls.push('scoped more');expanded=true;
+  },until:async predicate=>{const value=await predicate(await s.screen());assert(value);return value;}};
+  assert.equal(await verifyNativeViewer(s,'ours',expected),true);assert.deepEqual(calls,['scoped more']);
+  // Extraction itself stays literal: the exception is local to that transition.
+  assert.equal(nativePublishedCaption(await s.screen(),'ours')[0].caption,expected+' less');
+ }
+});
+
+test('a broad caption click cannot establish the scoped More proof for a trailing less suffix',async()=>{
+ const expected='Reviewed caption with remaining words';let expanded=false;const calls=[];
+ const picture=await sharp({create:{width:540,height:1170,channels:3,background:'#123456'}}).png().toBuffer();
+ const s={screen:async()=>captionWithControl(expanded?expected+' less':'Reviewed caption\u2026 more'),click:async()=>{expanded=true;calls.push('broad caption');},until:async predicate=>{const value=await predicate(await s.screen());assert(value);return value;},screenshot:async()=>picture,request:async()=>calls.push('observe')};
+ await assert.rejects(verifyNativeViewer(s,'ours',expected),/complete published Instagram caption could not be verified/);
+ assert.equal(calls.filter(c=>c==='broad caption').length,1);assert.equal(calls.filter(c=>c==='observe').length,4);
+ assert.equal(nativePublishedCaption(await s.screen(),'ours')[0].caption,expected+' less');
+});
+
+
+test('scoped expansion cannot hide an extra literal less word in the actual published caption',async()=>{
+ let expanded=false;const expected='Reviewed caption with remaining words';
+ const s={screen:async()=>captionWithControl(expanded?expected+' less less':'Reviewed caption\u2026 more',expanded?[]:[inlineCaptionButton('more')]),click:async()=>{expanded=true;},until:async predicate=>{const value=await predicate(await s.screen());assert(value);return value;}};
+ await assert.rejects(verifyNativeViewer(s,'ours',expected),/caption does not match/);
+ assert.equal(nativePublishedCaption(await s.screen(),'ours')[0].caption,expected+' less less');
 });

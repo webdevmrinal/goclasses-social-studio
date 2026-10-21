@@ -21,7 +21,25 @@ function postSection(nodes){
  return current.slice(start,end<0?undefined:end);
 }
 export function nativePostAuthor(nodes,handle){const headers=postSection(nodes).filter(n=>n['resource-id']===nativeId('row_feed_photo_profile_name'));return headers.length===1&&headers[0].text===handle;}
-export function nativePublishedCaption(nodes,handle){const prefix=handle+' ';return postSection(nodes).filter(n=>n.text?.startsWith(prefix)&&!n['resource-id']).map(n=>({...n,caption:n.text.slice(prefix.length)}));}
+function captionControls(nodes,field,label){
+ // Native caption action spans are consecutive Button children in source order.
+ // Require their visible bounds to fit the caption, not an overlapping next post.
+ let box;try{box=nativeBounds(field);}catch{return [];}
+ const index=nodes.findIndex(n=>n.text===field.text&&n.bounds===field.bounds&&n.class===field.class);
+ if(index<0)return [];
+ const controls=[];
+ for(const child of nodes.slice(index+1)){
+  if((child.class||child.tag)!=='android.widget.Button')break;
+  if(!visible(child)||child['resource-id']||child['content-desc']!==label||child.clickable!=='true')continue;
+  let b;try{b=nativeBounds(child);}catch{continue;}
+  if(b.width>0&&b.height>0&&b.x>=box.x&&b.y>=box.y&&b.x+b.width<=box.x+box.width&&b.y+b.height<=box.y+box.height)controls.push(child);
+ }
+ return controls;
+}
+export function nativePublishedCaption(nodes,handle){
+ const prefix=handle+' ';
+ return postSection(nodes).filter(n=>n.text?.startsWith(prefix)&&!n['resource-id']).map(n=>({...n,caption:n.text.slice(prefix.length)}));
+}
 export function nativePostShare(nodes){
  const shares=postSection(nodes).filter(n=>n['resource-id']===nativeId('row_feed_button_share'));
  return shares.length===1&&/^Send post[. ]/i.test(shares[0]['content-desc']||'')?shares[0]:null;
@@ -89,12 +107,15 @@ const captionMismatch='The published Instagram caption does not match the review
 const captionUnavailable='The complete published Instagram caption could not be verified.';
 const captionAmbiguous='The current published Instagram caption is ambiguous.';
 const truncated=value=>/(?:\u2026|\.\.\.)?\s*more$/i.test(value);
-function captionMatch(nodes,handle,caption){
+function captionMatch(nodes,handle,caption,{expandedFromMore=false}={}){
  const fields=nativePublishedCaption(nodes,handle);
  if(fields.length>1)return {matched:false,reason:'caption_ambiguous',message:captionAmbiguous};
  if(!fields.length)return null;
  const field=fields[0],actual=normalizeNativeCaption(field.caption),expected=normalizeNativeCaption(caption);
  if(actual===expected)return {matched:true};
+ // This observed native surface appends a non-accessible collapse label. Only
+ // the same call's verified More-to-expanded transition proves that UI suffix.
+ if(actual===expected+' less')return expandedFromMore||captionControls(nodes,field,'less').length===1?{matched:true}:{reveal:field};
  if(truncated(actual)){
   const prefix=normalizeNativeCaption(actual.replace(/(?:\u2026|\.\.\.)?\s*more$/i,''));
   if(expected.startsWith(prefix))return {expand:field};
@@ -105,13 +126,18 @@ async function inspectNativeViewer(s,handle,caption){
  const initial=await s.screen();
  if(!nativePostAuthor(initial,handle))return {matched:false,reason:'author_unverified',message:'The post author does not match the configured Instagram account or is ambiguous.'};
  if(caption===undefined)return {matched:true};
+ let expandedFromMore=false;
  for(let attempt=0;attempt<5;attempt++){
-  const nodes=attempt?await s.screen():initial,result=captionMatch(nodes,handle,caption);
+  const nodes=attempt?await s.screen():initial;let result=captionMatch(nodes,handle,caption,{expandedFromMore});
   if(result?.expand){
-   await s.click('xpath','//*[@text='+xpathLiteral(result.expand.text)+']');
-   return s.until(next=>{const value=captionMatch(next,handle,caption);return value&&!value.expand&&value;},captionUnavailable,8000);
+   const field=result.expand,controls=captionControls(nodes,field,'more');
+   if(controls.length>1)throw new InterventionError('The current Instagram caption expand control is ambiguous.');
+   const query=controls.length===1?'//*[@package="com.instagram.android" and @text='+xpathLiteral(field.text)+' and @bounds='+xpathLiteral(field.bounds)+']//android.widget.Button[@content-desc="more" and @bounds='+xpathLiteral(controls[0].bounds)+' and @displayed="true"]':'//*[@text='+xpathLiteral(field.text)+']';
+   await s.click('xpath',query);
+   expandedFromMore=controls.length===1;
+   result=await s.until(next=>{const value=captionMatch(next,handle,caption,{expandedFromMore});return value&&!value.expand&&value;},captionUnavailable,8000);
   }
-  if(result)return result;
+  if(result&&!result.reveal)return result;
   if(attempt===4)break;
   const {width,height}=await sharp(await s.screenshot()).metadata();
   await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{left:Math.round(width*.06),top:Math.round(height*.30),width:Math.round(width*.88),height:Math.round(height*.46),direction:'down',percent:.32}]});
@@ -139,7 +165,7 @@ export async function nativeInstagramPublication(s,handle,baseline,caption,onDia
  const reject=(ordinal,reason)=>{if(diag.rejected.length<12)diag.rejected.push({ordinal,reason});};
  await report();
  const current=await s.screen(),currentCaption=captionMatch(current,handle,caption);
- if(nativePostAuthor(current,handle)&&has(current,'row_feed_button_share')&&(currentCaption?.matched||currentCaption?.expand)){
+ if(nativePostAuthor(current,handle)&&has(current,'row_feed_button_share')&&(currentCaption?.matched||currentCaption?.expand||currentCaption?.reveal)){
   const result=await inspectNativeViewer(s,handle,caption);
   if(result.matched){
    diag.matching++;const url=await copyNativePostUrl(s);diag.copied++;

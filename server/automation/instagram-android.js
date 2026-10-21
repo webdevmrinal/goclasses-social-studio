@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
-import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,discardStory} from './native-story.js';
+import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,confirmNativeStoryPublication,discardStory} from './native-story.js';
 import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
@@ -165,7 +165,7 @@ export class InstagramAndroidWorker {
     let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
       const nodes=await s.screen();
-      if(nodes.some(n=>/direct_external_share_container_view|direct_share_sheet_grid_view_pog|thread_list_recycler_view/.test(n['resource-id']||'')))return;
+      if(nodes.some(n=>/direct_external_share_container_view|direct_share_sheet_grid_view_pog|thread_list_recycler_view|row_user_username|recipients_rv|one_tap_send_button_container/.test(n['resource-id']||'')))return;
       const known=nodes.some(n=>n.displayed==='true'&&/share_footer_button|story_share_controls_action_bar|share_story_button|media_thumbnail_tray_button|music_editor_done_button|link_sticker_list_web_url_edit_text/.test(n['resource-id']||''));
       const albumOnly=album&&nodes.some(n=>n['resource-id']===nativeId('gallery_folder_menu_tv')&&n.text===album.folder);
       if(!known&&!albumOnly)return;
@@ -187,15 +187,20 @@ export class InstagramAndroidWorker {
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
         }
         const evidence=await prepareStoryAudience(s);
-        await ctx.recordPreparation({kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story});
+        const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};
+        await ctx.recordPreparation(preparation);
+        let publication;
         await snapshot('story-preview');
         const status=await finishPost({...ctx,snapshot,
           preflight:async()=>{ctx.signal?.throwIfAborted();if(JSON.stringify(await storyAudienceEvidence(s))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');},
           publish:async()=>{submitted=true;const id=await s.find('id',nativeId('share_story_button'));await s.request('/element/'+id+'/click','POST',{});},
-          verify:async()=>{await s.until(n=>n.some(x=>/^(Your story has been shared|Added to your story|Story shared)$/i.test(x.text||'')),'Story submission began. Check Instagram before retrying; no duplicate send was attempted.',30000);}
+          verify:async()=>{
+            const receipt=await confirmNativeStoryPublication(s,{onDiagnostic:async receipt=>ctx.recordPreparation({...preparation,receipt})});
+            publication={...receipt,sourcePostUrl:url,requestedDestinations:evidence.destinations};
+          }
         });
         if(status==='dry_run')await discardStory(s);
-        return {status};
+        return {status,...(publication?{publication}:{})};
       }
       if(ctx.mode==='LIVE')await ctx.step('Recording recent Instagram links to distinguish this new post from pinned posts...');
       const baseline=ctx.mode==='LIVE'?await nativeInstagramBaseline(s,ctx.config.platforms.instagram.handle):null;
