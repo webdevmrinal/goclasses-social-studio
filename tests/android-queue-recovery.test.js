@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {Queue} from '../server/queue.js';
 import {defaults} from '../server/config.js';
+import {publicationUrl} from '../server/automation/publication.js';
 
 const postUrl='https://www.instagram.com/p/EXISTING123/';
 const browser={page:async()=>({isClosed:()=>true})};
@@ -148,4 +149,58 @@ test('an unrelated web failure keeps the existing queue behavior when there is n
   const run=await queue.start(params(['x','linkedin'],'web'));await settled(queue);
   assert.equal(run.status,'completed_with_errors');assert.deepEqual(calls,['x','linkedin']);
   assert.deepEqual(run.items.map(item=>item.status),['failed','dry_run']);
+});
+test('Instagram resolution proof accepts only absolute HTTPS feed permalinks and canonicalizes tracking links',()=>{
+  assert.equal(publicationUrl('instagram','https://instagram.com/p/NEW_123-AB/?igsh=tracking#receipt'),'https://www.instagram.com/p/NEW_123-AB/');
+  assert.equal(publicationUrl('instagram','https://www.instagram.com/p/EXACT123'),'https://www.instagram.com/p/EXACT123/');
+  for(const link of [
+    '/p/EXACT123/','//www.instagram.com/p/EXACT123/','javascript:alert(1)',
+    'http://www.instagram.com/p/EXACT123/','https://www.instagram.com:444/p/EXACT123/',
+    'https://user@www.instagram.com/p/EXACT123/','https://www.instagram.com.evil.example/p/EXACT123/',
+    'https://example.com/p/EXACT123/','https://www.instagram.com/reel/EXACT123/',
+    'https://www.instagram.com/ours/','https://www.instagram.com/ours/p/EXACT123/',
+    'https://www.instagram.com/p/EXACT123/extra','https://www.instagram.com/p/'
+  ])assert.equal(publicationUrl('instagram',link),null,link);
+});
+
+test('resolving an uncertain feed with its exact permalink continues Story and queued work without repeating the feed',async t=>{
+  const calls=[],native=worker(),exact='https://www.instagram.com/p/NEW_123-AB/';
+  const queue=await fixture(t,{instagramWorker:native,runner:async ctx=>{
+    calls.push(ctx.id);
+    if(ctx.id==='instagram'){await ctx.markSubmitting();throw Error('The exact new Instagram post could not be confirmed');}
+    if(ctx.id==='instagramStory'){
+      assert.equal(ctx.instagramPublication.postUrl,exact);
+      assert.equal(ctx.instagramPublication.verifiedBy,'operator_confirmation');
+      assert.equal(ctx.instagramTestPublication,undefined);
+    }
+    await ctx.markSubmitting();return 'posted';
+  }});
+  const reviewed=params(),run=await queue.start({...reviewed,mode:'LIVE',confirmation:'POST'});await settled(queue);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
+  assert.deepEqual(run.items.map(item=>item.status),['uncertain','attention','queued']);
+  assert.equal(native.preflight,null);
+  const uncertain=structuredClone(run.items[0]);
+  for(const postUrl of ['https://example.com/p/WRONG/','/p/RELATIVE/','https://www.instagram.com/reel/WRONG/']){
+    await assert.rejects(queue.resolve(run.id,'instagram','posted',{postUrl}),/native publication permalink/);
+    assert.deepEqual(run.items[0],uncertain);
+  }
+  await queue.resolve(run.id,'instagram','posted',{
+    postUrl:'https://instagram.com/p/NEW_123-AB/?igsh=tracking',
+    verifiedBy:'read_only_recheck',verifiedAt:'forged-client-time',candidates:['https://www.instagram.com/p/OLD/']
+  });
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
+  assert.deepEqual(run.items.map(item=>item.status),['posted','attention','queued']);
+  assert.equal(run.items[0].publication.postUrl,exact);
+  assert.equal(run.items[0].publication.verifiedBy,'operator_confirmation');
+  assert.notEqual(run.items[0].publication.verifiedAt,'forged-client-time');
+  assert.equal(run.items[0].publication.candidates,undefined);
+  assert.match(run.items[0].message,/operator confirmed this exact post link/);
+  const persisted=JSON.parse(await fs.readFile(path.join(queue.dataDir,'runs.json'),'utf8'))[0];
+  assert.equal(persisted.items[0].publication.postUrl,exact);assert.equal(persisted.items[0].status,'posted');
+  await queue.control('continue');await settled(queue);
+  assert.equal(run.status,'completed');assert.deepEqual(calls,['instagram','instagramStory','x']);
+  assert(run.items.every(item=>item.status==='posted'));
+  assert.deepEqual(run.captions,reviewed.draft.captions);assert.deepEqual(run.instagram,reviewed.draft.instagram);
+  await queue.resolve(run.id,'instagram','posted',{postUrl:exact});
+  assert.deepEqual(calls,['instagram','instagramStory','x']);
 });

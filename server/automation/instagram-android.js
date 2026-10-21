@@ -138,10 +138,10 @@ export class InstagramAndroidWorker {
     this.handoff=null;this.s.signal=ctx.signal;this.s.onUnresponsive=ctx.step;
     return this.s;
   }
-  retainForStory(ctx,status,publication){
+  retainForStory(ctx,status,publication,currentViewer=false){
     const postUrl=instagramPostUrl(publication?.postUrl);
     if(status!=='posted'||!ctx.continueInstagramStory||!ctx.runId||!postUrl||ctx.signal?.aborted)return false;
-    this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle};return true;
+    this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle,currentViewer};return true;
   }
   async checkAccount(config,{runId,onProgress}={}){
     let retained=false;
@@ -160,7 +160,7 @@ export class InstagramAndroidWorker {
       // Standalone Story retries still verify ownership through the exact permalink.
     }
     await ctx.step(this.handoff?'Continuing from the confirmed Android feed post...':'Checking the dedicated Android Instagram account...');
-    const inherited=Boolean(this.handoff);
+    const inherited=Boolean(this.handoff),reuseViewer=Boolean(this.handoff?.currentViewer);
     const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.openForRun(ctx);
     let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
@@ -177,7 +177,7 @@ export class InstagramAndroidWorker {
         if(!inherited){await ctx.step('Verifying the exact native feed post for the Story...');await this.verifyPost(s,url,ctx.config.platforms.instagram.handle);}
         await ctx.recordPreparation({kind:'instagramStory',testExistingPost:ctx.mode==='TEST',postUrl:url,stage:'source_verified',story:options.story});
         await ctx.step('Opening the exact feed post as a Story...');
-        await openRepost(s,url);owned=true;
+        await openRepost(s,url,{reuseCurrent:!inherited||reuseViewer});owned=true;
         await ctx.step('Applying the reviewed shared-post card layout...');
         await placeRepost(s,options.story.layout,{hasLink:options.story.linkEnabled});
         let audio=null;
@@ -197,6 +197,7 @@ export class InstagramAndroidWorker {
         if(status==='dry_run')await discardStory(s);
         return {status};
       }
+      if(ctx.mode==='LIVE')await ctx.step('Recording recent Instagram links to distinguish this new post from pinned posts...');
       const baseline=ctx.mode==='LIVE'?await nativeInstagramBaseline(s,ctx.config.platforms.instagram.handle):null;
       await ctx.step('Transferring and verifying the reviewed Android image copies...');
       album=await pushAlbum(s,ctx.files);s.uploadAlbum=album;
@@ -213,19 +214,21 @@ export class InstagramAndroidWorker {
       await ctx.step('Verifying the native caption and images'+(music?' with music':'')+'...');
       await nativeCaption(s,ctx.caption);
       const photos=await photoEvidence(s);
-      await ctx.recordPreparation({kind:'instagramAndroid',music:music?{...music,...clip}:null,images:ctx.files.length,preview:photos});
-      let publication;
+      const preparation={kind:'instagramAndroid',music:music?{...music,...clip}:null,images:ctx.files.length,preview:photos};
+      await ctx.recordPreparation({...preparation,...(baseline?{receipt:{phase:'before_share',baseline}}:{})});
+      let publication,receiptState;
       const status=await finishPost({...ctx,snapshot,
         preflight:async()=>{ctx.signal?.throwIfAborted();await verifyNativeCaption(s,ctx.caption,music);if(JSON.stringify(await photoEvidence(s))!==JSON.stringify(photos))throw new InterventionError('The reviewed Android images changed.');},
         publish:async()=>{submitted=true;const id=await s.find('id',nativeId('share_footer_button'));await s.request('/element/'+id+'/click','POST',{});},
         verify:async()=>{
-          publication=await nativeInstagramPublication(s,ctx.config.platforms.instagram.handle,baseline,ctx.caption);
+          await ctx.step('Confirming the published Instagram post before continuing to its Story...');
+          publication=await nativeInstagramPublication(s,ctx.config.platforms.instagram.handle,baseline,ctx.caption,async receipt=>{receiptState=receipt;await ctx.recordPreparation({...preparation,receipt:{baseline,...receipt}});});
           if(!publication.postUrl)throw new Error('Feed submission began, but its exact new post could not be confirmed. Verify Instagram before retrying.');
         }
       });
       if(status==='dry_run')await discardPost(s,ctx.caption);
       if(status==='posted'||status==='dry_run'){await removeAlbum(s,album);album=null;}
-      retained=this.retainForStory(ctx,status,publication);
+      retained=this.retainForStory(ctx,status,publication,receiptState?.phase==='confirmed'&&receiptState?.passes===0);
       return {status,...(publication?{publication}:{})};
     }catch(e){
       if(!submitted&&owned&&!ctx.signal?.aborted){

@@ -38,7 +38,8 @@
     "android:play-store": "node scripts/android-worker.mjs play-store",
     "test:workflow-ui": "node tests/workflow-ui.js",
     "test:polish-ui": "node tests/polish-ui.js",
-    "test:updates": "node --test tests/updates.test.js && node tests/launcher-smoke.mjs"
+    "test:updates": "node --test tests/updates.test.js && node tests/launcher-smoke.mjs",
+    "test:instagram-resolution-ui": "node tests/instagram-resolution-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

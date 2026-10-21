@@ -55,6 +55,21 @@ export async function cancelInstagramPhotoAccess(s){
   await s.until(next=>!isPhotoAccessPicker(next)&&next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Android photo access is still closing. Close that dialog in the emulator and retry.',15000);
   return true;
 }
+export async function dismissInstagramRatingPrompt(s,nodes){
+  const current=nodes||await s.screen(),visible=current.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android');
+  if(!visible.some(n=>/^com\.instagram\.android:id\/appirater_/.test(n['resource-id']||'')))return false;
+  const title=visible.filter(n=>n['resource-id']===nativeId('appirater_title_area'));
+  const cancel=visible.filter(n=>n['resource-id']===nativeId('appirater_cancel_button'));
+  if(title.length!==1||title[0].text!=='Rate Instagram'||cancel.length!==1||cancel[0].text!=='No, thanks')throw new InterventionError('The Instagram rating dialog could not be verified. Close it yourself in the emulator; its screen and draft were preserved.');
+  if(visible.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text|direct_external_share_container_view/.test(n['resource-id']||'')||n.password==='true'))throw new InterventionError('Instagram has an unsent draft behind its rating dialog. Close it yourself in the emulator; the draft was preserved.');
+  if(s.ratingPromptDismissed)throw new InterventionError('The Instagram rating dialog appeared again. Close it yourself in the emulator; its screen and draft were preserved.');
+  s.signal?.throwIfAborted();
+  // Mark before the one allowed click: an ambiguous response must not replay it.
+  s.ratingPromptDismissed=true;
+  await s.click('xpath','//*[@package="com.instagram.android" and @resource-id="'+nativeId('appirater_cancel_button')+'" and @text="No, thanks" and @displayed="true"]');
+  await s.until(next=>!next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&/^com\.instagram\.android:id\/appirater_/.test(n['resource-id']||'')),'The Instagram rating dialog did not close. Close it yourself in the emulator; its screen and draft were preserved.',15000);
+  return true;
+}
 export const ANDROID_UNRESPONSIVE='Instagram is not responding in Android. Its draft was preserved. Wait for it in the emulator, or choose Web in Compose for a faster feed post. Nothing was retried automatically.';
 export const ANDROID_SYSTEM_UNRESPONSIVE='Android System UI is not responding. Its screen and draft were preserved. Wait in the emulator before another Android attempt, or use Web for the feed.';
 // Only a server-reported root-accessibility timeout can be retried, and only on
@@ -130,6 +145,7 @@ export class AndroidSession {
       for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
     });
     this.signal?.throwIfAborted();
+    this.ratingPromptDismissed=false;
     await this.request('/appium/settings','POST',{settings:ANDROID_DRIVER_SETTINGS});
     return this;
   }
@@ -252,6 +268,7 @@ export class AndroidSession {
     // Public post/share navigation can be dismissed, but never an unsent editor.
     for(let i=0;i<12;i++){
       const current=(await this.screen()).filter(n=>n.displayed==='true');
+      if(await dismissInstagramRatingPrompt(this,current))continue;
       if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view'))){
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
         await this.request('/back','POST',{});await delay(400);continue;
@@ -265,10 +282,16 @@ export class AndroidSession {
       break;
     }
     const ownProfile=nodes=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('action_bar_title')&&n.text===expected)&&nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_header_create_button'));
-    const nodes=await this.until(nodes=>(ownProfile(nodes)||nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_tab'))) && nodes,'Finish Instagram sign-in or close its unsent Android draft before preparing a post.');
+    const nodes=await this.until(async nodes=>{
+      if(await dismissInstagramRatingPrompt(this,nodes))return false;
+      return (ownProfile(nodes)||nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('profile_tab')))&&nodes;
+    },'Finish Instagram sign-in or close its unsent Android draft before preparing a post.');
     if(nodes.some(n=>n.displayed==='true'&&/new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|caption_input_text_view|music_editor_controls_container/.test(n['resource-id']||'')))throw new InterventionError('Instagram has an unsent Android draft. Close it yourself before preparing another post.');
     if(!ownProfile(nodes))await this.clickId('profile_tab');
-    await this.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('action_bar_title') && n.text===expected),'The Android Instagram account does not match @'+expected+'.');
+    await this.until(async nodes=>{
+      if(await dismissInstagramRatingPrompt(this,nodes))return false;
+      return nodes.some(n=>n['resource-id']===nativeId('action_bar_title')&&n.text===expected);
+    },'The Android Instagram account does not match @'+expected+'.');
     this.accountHandle=expected;
   }
   async gesture(actions) { return this.request('/actions','POST',{actions:[{type:'pointer',id:'studio-finger',parameters:{pointerType:'touch'},actions}]}); }

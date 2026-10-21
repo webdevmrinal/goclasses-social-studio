@@ -116,10 +116,12 @@ export class Queue extends EventEmitter {
         if (!url || id === 'telegram' && !url.startsWith(run.config?.platforms.telegram?.channelUrl + '/')) throw new Error('Use a native publication permalink for this destination.');
         publication = { postUrl: url };
       }
-      publication.verifiedBy = 'read_only_recheck'; publication.verifiedAt = new Date().toISOString();
+      // A supplied Instagram link records the operator's verification. URL
+      // validation alone does not inspect its author, caption or images.
+      publication.verifiedBy = id === 'instagram' ? 'operator_confirmation' : 'read_only_recheck'; publication.verifiedAt = new Date().toISOString();
     }
     item.status = resolution; item.message = `Operator verified outcome: ${resolution === 'failed' ? 'not published; may retry' : resolution}.`;
-    if (publication) { item.publication = publication; item.message = 'Published; verified against the existing platform record. No repost was performed.'; }
+    if (publication) { item.publication = publication; item.message = id === 'instagram' ? 'Published; operator confirmed this exact post link. No repost was performed.' : 'Published; verified against the existing platform record. No repost was performed.'; }
     if (resolution === 'posted' && !alreadyPosted) await this.advanceReplies(run, item);
     if (['completed', 'completed_with_errors'].includes(run.status)) run.status = run.items.some(i => ['failed', 'uncertain', 'needs_setup'].includes(i.status)) ? 'completed_with_errors' : 'completed';
     await this.change();

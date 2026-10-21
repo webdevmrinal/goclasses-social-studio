@@ -2,14 +2,17 @@
 import sharp from 'sharp';
 import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
+import {nativePostShare} from './native-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
 const has=(nodes,id)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(id));
-export async function openRepost(s,url) {
+export async function openRepost(s,url,{reuseCurrent=false}={}) {
   const exact=instagramPostUrl(url);
   if(!exact)throw new InterventionError('An exact published Instagram post URL is required.');
-  await s.request('/execute/sync','POST',{script:'mobile: deepLink',args:[{url:exact,package:'com.instagram.android'}]});
+  if(!reuseCurrent)await s.request('/execute/sync','POST',{script:'mobile: deepLink',args:[{url:exact,package:'com.instagram.android'}]});
   await s.until(nodes=>has(nodes,'row_feed_button_share'),'The exact Instagram post did not open.');
-  const share=await s.find('id',nativeId('row_feed_button_share'));
+  const control=nativePostShare(await s.screen());
+  if(!control)throw new InterventionError('The exact post sharing control is ambiguous. Nothing was shared.');
+  const share=control.bounds?await s.find('xpath','//*[@resource-id='+xpathLiteral(nativeId('row_feed_button_share'))+' and @bounds='+xpathLiteral(control.bounds)+']'):await s.find('id',nativeId('row_feed_button_share'));
   const label=await s.request('/element/'+share+'/attribute/content-desc');
   if(!/^Send post[. ]/i.test(label||''))throw new InterventionError('The post sharing control changed.');
   await s.request('/element/'+share+'/click','POST',{});
