@@ -40,7 +40,8 @@ export function destinationReadiness(draft, media, config, login = {}, xLength, 
     const sameDraft = sameOptions && parentSame && last?.captions[p.id] === draft.captions?.[p.id] && JSON.stringify(previousIds) === JSON.stringify(currentIds);
     const unresolvedFeed=p.id==='instagram'&&runs.some(run=>run.items.some(i=>i.id==='instagram'&&i.status==='uncertain')&&run.captions?.instagram===draft.captions?.instagram&&JSON.stringify(run.mediaByPlatform?.instagram||run.media?.map(m=>m.id))===JSON.stringify(currentIds));
     if(unresolvedFeed)errors.push('An Instagram submission with these images and caption needs verification in Activity before another attempt, even with a different posting method.');
-    if (sameDraft && ['failed', 'uncertain', 'attention', 'needs_setup'].includes(item?.status)) errors.push(`Last attempt needs review in Activity: ${String(item.message).slice(0, 300)}`);
+    const reviewedFreshAttempt=Boolean(draft.restartOf&&draft.restartOf===last?.id&&item?.status==='failed'&&!item.submitting);
+    if (sameDraft && !reviewedFreshAttempt && ['failed', 'uncertain', 'attention', 'needs_setup'].includes(item?.status)) errors.push(`Last attempt needs review in Activity: ${String(item.message).slice(0, 300)}`);
     return [p.id, { ready: !errors.length, errors: [...new Set(errors)] }];
   }));
 }
