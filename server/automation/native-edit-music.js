@@ -61,12 +61,33 @@ export async function editPhotoProof(s,identity){
  }
  throw new InterventionError('The existing post image preview could not be verified. No music save was attempted.');
 }
+function postMenuList(nodes){
+ const sheet=one(nodes,'action_sheet_container'),list=one(nodes,'recycler_view');
+ if(!sheet||!list||list.scrollable!=='true'||!visible(nodes).some(n=>n['resource-id']===nativeId('control_option_text')))return null;
+ const outer=nativeBounds(sheet),box=nativeBounds(list);
+ if(box.width<80||box.height<100||box.x<outer.x||box.y<outer.y||box.x+box.width>outer.x+outer.width||box.y+box.height>outer.y+outer.height)return null;
+ return box;
+}
+// Called only after the exact post was verified and its own More menu opened.
+// Scroll this menu, then select only its unique Edit row. Never Save or Share.
+export async function selectPostEdit(s){
+ let nodes=await s.until(n=>postMenuList(n)&&n,'The existing post action menu is unavailable.',15000),canScroll=true;
+ for(let attempt=0;attempt<=6;attempt++){
+  s.signal?.throwIfAborted();const box=postMenuList(nodes);if(!box)throw new InterventionError('The existing post action menu changed. No edit was opened.');
+  const matches=visible(nodes).filter(n=>n['resource-id']===nativeId('control_option_text')&&n.text==='Edit');
+  if(matches.length>1)throw new InterventionError('The existing post Edit option is ambiguous. No edit was opened.');
+  if(matches.length===1){const row=nativeBounds(matches[0]);if(row.x<box.x||row.y<box.y||row.x+row.width>box.x+box.width||row.y+row.height>box.y+box.height)throw new InterventionError('The existing post Edit option is outside its verified menu.');await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('control_option_text'))+' and @text="Edit" and @displayed="true"]');return;}
+  if(!canScroll||attempt===6)break;
+  canScroll=await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{left:box.x+8,top:box.y+8,width:box.width-16,height:box.height-16,direction:'down',percent:.7}]});
+  nodes=await s.screen();
+ }
+ throw new InterventionError('The existing post Edit option was not found after scrolling its menu. No edit was opened.');
+}
 export async function openEditInfo(s,url,handle,caption){
  await verifyNativePost(s,url,handle,caption);
  for(let i=0;i<7;i++){const nodes=await s.screen();if(has(nodes,'media_option_button')&&one(nodes,'row_feed_photo_profile_name')?.text===handle)break;if(!has(nodes,'row_feed_button_share'))throw new InterventionError('The exact post viewer changed before Edit.');const root=one(nodes,'action_bar_root');if(!root)throw new InterventionError('The native post bounds are unavailable.');const canvas=nativeBounds(root);await s.adb(['shell','input','swipe',String(Math.round(canvas.width/2)),String(Math.round(canvas.height*.25)),String(Math.round(canvas.width/2)),String(Math.round(canvas.height*.8)),'400']);}
  const nodes=await s.screen();if(!has(nodes,'media_option_button')||one(nodes,'row_feed_photo_profile_name')?.text!==handle)throw new InterventionError('The exact post menu is unavailable.');
- await s.clickId('media_option_button');await s.until(n=>visible(n).filter(x=>x['resource-id']===nativeId('control_option_text')&&x.text==='Edit').length===1,'The existing post Edit menu is unavailable.');
- await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('control_option_text'))+' and @text="Edit" and @displayed="true"]');
+ await s.clickId('media_option_button');await selectPostEdit(s);
  return s.until(nodes=>editInfoState(nodes,{handle,caption}),'The existing post Edit info does not match its reviewed account and caption.');
 }
 export async function chooseEditMusic(s,chosen,identity){
