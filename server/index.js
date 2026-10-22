@@ -214,6 +214,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/instagram/music/select',async(req,res)=>{requireIdle();try{res.json(await instagramWorker.choose(req.body.key));}finally{queue.emit('change',queue.state());}});
   app.post('/api/instagram/music/close',async(req,res)=>{requireIdle();try{await instagramWorker.cancelPicker();res.json({ok:true});}finally{queue.emit('change',queue.state());}});
   app.post('/api/runs/:id/kill',async(req,res)=>{await queue.control('kill',req.params.id);res.json({ok:true});});
+  app.post('/api/android/intervention', async (req,res)=>{res.json(await queue.interventions.act(req.body));});
   app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });
   app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
   app.post('/api/logins', (req, res) => {

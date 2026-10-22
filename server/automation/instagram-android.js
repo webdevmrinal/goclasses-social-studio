@@ -5,7 +5,7 @@ import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
 import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,confirmNativeStoryPublication,discardStory} from './native-story.js';
-import {musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
+import {matchesMusicReference,resolveMusic,previewMusicChoice,assistNativeStage,musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
@@ -120,13 +120,13 @@ export class InstagramAndroidWorker {
     const s=await this.openForRun(ctx),handle=ctx.config.platforms.instagram.handle;let retained=false;
     try{
       await ctx.step('Opening only the confirmed feed post to add music...');
-      const state=await openEditInfo(s,url,handle,ctx.mode==='LIVE'?ctx.instagramCaption:undefined),identity={handle,caption:state.caption};
-      const photos=await editPhotoProof(s,identity),existing=await readEditMusic(s,identity);
+      const state=await openEditInfo(s,url,handle,ctx.mode==='LIVE'?ctx.instagramCaption:undefined,ctx),identity={handle,caption:state.caption};
+      const photos=await editPhotoProof(s,identity),existing=await readEditMusic(s,identity,{ctx});
       const preparation={kind:'instagramMusic',postUrl:url,music,testExistingPost:ctx.mode==='TEST',feedAlreadyPublished:true};await ctx.recordPreparation(preparation);
-      if(!music.key&&sameMusic(existing,music)){
-        await discardOwnedEdit(s,identity);const status=ctx.mode==='LIVE'?'posted':'dry_run',publication={postUrl:url,music:{...music,inherited:true},verifiedBy:'existing_post_audio',verifiedAt:new Date().toISOString()};retained=this.retainForStory(ctx,status,publication,true);if(!retained)await this.returnReady(s,ctx);return {status,publication};
+      if(!music.key&&matchesMusicReference(existing,music)){
+        await discardOwnedEdit(s,identity);const status=ctx.mode==='LIVE'?'posted':'dry_run',publication={postUrl:url,music:{...music,...existing,inherited:true},verifiedBy:'existing_post_audio',verifiedAt:new Date().toISOString()};retained=this.retainForStory(ctx,status,publication,true);if(!retained)await this.returnReady(s,ctx);return {status,publication};
       }
-      await ctx.step('Finding the exact song once in the existing post editor...');const chosen=await chooseEditMusic(s,music,identity);await ctx.recordPreparation({...preparation,music:chosen});let publication;
+      await ctx.step('Checking visible songs before searching Instagram...');const chosen=await chooseEditMusic(s,music,identity,ctx);await ctx.recordPreparation({...preparation,music:chosen});let publication;
       const status=await finishPost({...ctx,snapshot:async label=>{const nodes=await s.screen();if(editInfoState(nodes,identity))await ctx.snapshot(label,{nativeImage:await s.screenshot()});},
         preflight:async()=>{if(JSON.stringify(await editPhotoProof(s,identity))!==JSON.stringify(photos))throw new InterventionError('The existing post images changed. No music save was attempted.');if(!sameMusic(await readEditMusic(s,identity),chosen))throw new InterventionError('The reviewed song changed. No music save was attempted.');},
         publish:async()=>{if(!editInfoState(await s.screen(),identity))throw new InterventionError('The final Edit info screen changed.');await s.clickId('action_bar_button_action');},
@@ -136,23 +136,21 @@ export class InstagramAndroidWorker {
       retained=this.retainForStory(ctx,status,publication,true);if(!retained)await this.returnReady(s,ctx);return {status,...(publication?{publication}:{})};
     }finally{if(!retained)await this.close();}
   }
-  async applyStoryMusic(s,music,{allowInherited=false}={}){
+  async applyStoryMusic(s,music,{allowInherited=false,ctx={}}={}){
     if(allowInherited){
       await s.click('id','music_button');const nodes=await s.until(n=>(n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('row_search_edit_text'))||inheritedStoryAudio(n))&&n,'The inherited Story music could not be verified.');
       const inherited=inheritedStoryAudio(nodes);if(inherited){await s.clickId('music_editor_done_button');await s.until(n=>n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('music_editor_done_button')),'The inherited audio review did not return to Story.');return {...music,...inherited,sourceVerified:true};}
     }
     await openStoryMusicLibrary(s);
-    await searchMusic(s,music.query);
-    const match=await revealMusicResult(s,music);
+    const match=await resolveMusic(s,music,ctx);
     if(!match)throw new InterventionError('The reviewed song is not available for this Story. Nothing was shared.');
-    await s.click('id',match.selector);
-    await s.until(n=>n.some(x=>x['resource-id']==='audio_bar_select_tap_target'&&x['content-desc']==='Select track '+music.title+' by '+music.artist),'The music preview differs from the selected song.');
+    await previewMusicChoice(s,match);
     await s.click('id','audio_bar_select_tap_target');
     const {segmentStart:segment}=await waitForMusicClip(s,'music_editor_done_button','The Story audio clip is still loading or could not be verified. Nothing was shared.');
     await s.click('accessibility id','Music Only');
     await s.clickId('music_editor_done_button');
     await s.until(n=>n.some(x=>x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x['resource-id']===nativeId('music_editor_done_button')&&x.displayed==='true'),'Story music did not return to the editor.');
-    return {key:music.key,title:music.title,artist:music.artist,segmentStart:segment,style:'Music Only'};
+    return {...match,segmentStart:segment,style:'Music Only'};
   }
   async openForRun(ctx){
     if(!this.preflight)return this.open(ctx.config,ctx.signal,ctx.step);
@@ -185,11 +183,13 @@ export class InstagramAndroidWorker {
   async run(ctx){
     if(ctx.id==='instagramMusic')return this.runMusic(ctx);
     if(ctx.id==='instagram'&&instagramHashtags(ctx.caption).length>5)throw new InterventionError('Instagram accepts up to 5 hashtags. Edit the caption before starting Android.');
-    const options=instagramOptions(ctx.instagram),music=instagramMusicEnabled(options,ctx.id)?this.chosenMusic(options,ctx.config.platforms.instagram.handle):null;
+    const options=instagramOptions(ctx.instagram);let music=instagramMusicEnabled(options,ctx.id)?this.chosenMusic(options,ctx.config.platforms.instagram.handle):null;
     let url;
     if(ctx.id==='instagramStory'){
       const source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl||(ctx.mode==='TEST'?ctx.instagramTestPublication?.postUrl:undefined);
       url=instagramPostUrl(source);
+      const proof=ctx.instagramMusicPublication||ctx.instagramPublication;
+      if(music&&proof?.postUrl===url&&proof.music?.title&&proof.music?.artist)music={...music,...proof.music};
       if(!url&&ctx.mode!=='TEST')throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
       // The retained session comes only from this run's confirmed native feed.
       // Standalone Story retries still verify ownership through the exact permalink.
@@ -216,7 +216,7 @@ export class InstagramAndroidWorker {
         await ctx.step('Applying the reviewed shared-post card layout...');
         await placeRepost(s,options.story.layout,{hasLink:options.story.linkEnabled});
         let audio=null;
-        if(music){await ctx.step('Adding the selected Story music...');const proof=ctx.instagramMusicPublication||ctx.instagramPublication;audio=await this.applyStoryMusic(s,music,{allowInherited:proof?.postUrl===url&&sameMusic(proof.music,music)});}
+        if(music){await ctx.step('Adding the selected Story music...');const proof=ctx.instagramMusicPublication||ctx.instagramPublication;audio=await this.applyStoryMusic(s,music,{ctx,allowInherited:proof?.postUrl===url&&matchesMusicReference(proof.music,music)});}
         if(options.story.linkEnabled){
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
@@ -248,9 +248,9 @@ export class InstagramAndroidWorker {
       await selectAlbumPhotos(s,album);
       let clip;
       if(music){
-        await ctx.step('Loading Instagram music for the reviewed images...');await openMusicLibrary(s);
-        await ctx.step('Finding the exact selected song: '+music.title+'...');await searchMusic(s,music.query);
-        await ctx.step('Applying and verifying the selected audio clip...');clip=await applyTrack(s,music,music.durationSeconds,ctx.step);
+        await ctx.step('Loading Instagram music for the reviewed images...');await assistNativeStage(s,ctx,{kind:'navigation',title:'Open Instagram music',instructions:'Open Audio for this prepared photo post. Leave the music library open, then continue here. Do not share the post.'},()=>openMusicLibrary(s),n=>n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('row_search_edit_text')));
+        await ctx.step('Checking visible songs before searching for '+music.title+'...');
+        await ctx.step('Applying and verifying the selected audio clip...');clip=await applyTrack(s,music,music.durationSeconds,ctx.step,ctx);
       }
       await ctx.step('Verifying the native caption and images'+(music?' with music':'')+'...');
       await nativeCaption(s,ctx.caption);
@@ -259,7 +259,7 @@ export class InstagramAndroidWorker {
       await ctx.recordPreparation({...preparation,...(baseline?{receipt:{phase:'before_share',baseline}}:{})});
       let publication,receiptState;
       const status=await finishPost({...ctx,snapshot,
-        preflight:async()=>{ctx.signal?.throwIfAborted();await verifyNativeCaption(s,ctx.caption,music);if(JSON.stringify(await photoEvidence(s))!==JSON.stringify(photos))throw new InterventionError('The reviewed Android images changed.');},
+        preflight:async()=>{ctx.signal?.throwIfAborted();await verifyNativeCaption(s,ctx.caption,music?{...music,...clip}:null);if(JSON.stringify(await photoEvidence(s))!==JSON.stringify(photos))throw new InterventionError('The reviewed Android images changed.');},
         publish:async()=>{submitted=true;const id=await s.find('id',nativeId('share_footer_button'));await s.request('/element/'+id+'/click','POST',{});},
         verify:async()=>{
           await ctx.step('Confirming the published Instagram post before continuing to its Story...');

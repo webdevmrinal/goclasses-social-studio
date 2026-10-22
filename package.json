@@ -41,7 +41,8 @@
     "test:updates": "node --test tests/updates.test.js && node tests/launcher-smoke.mjs",
     "test:instagram-resolution-ui": "node tests/instagram-resolution-ui.js",
     "test:hybrid-ui": "node tests/hybrid-ui.js",
-    "test:restart-job-ui": "node tests/restart-job-ui.js"
+    "test:restart-job-ui": "node tests/restart-job-ui.js",
+    "test:native-handoff-ui": "node tests/native-handoff-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

@@ -27,6 +27,63 @@ export function musicResults(nodes) {
     return title&&match?[{key:id,title,artist:match[1].trim(),length:match[2],selector:node['resource-id']}]:[];
   });
 }
+// Lookup tolerates presentation differences; subsequent clip/Save guards use the
+// exact native result returned here. Remixes and covers remain distinct titles.
+export const normalizeMusicText=value=>String(value||'').normalize('NFKD').replace(/(\p{Script=Latin})\p{M}+/gu,'$1').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}\p{M}]+/gu,' ').trim().replace(/\s+/g,' ');
+const musicTitle=value=>normalizeMusicText(String(value||'').replace(/\s*[([ -]*(?:official audio|official music video|official video)[)\] ]*$/i,''));
+export function matchesMusicReference(actual,expected){
+ if(!actual||!expected||expected.key&&actual.key!==expected.key)return false;
+ if(!musicTitle(expected.title)||musicTitle(actual.title)!==musicTitle(expected.title))return false;
+ const artist=value=>normalizeMusicText(value).replace(/\b(?:feat|ft|featuring)\b/g,' ').replace(/\s+/g,' ').trim();
+ const wanted=artist(expected.artist),credit=artist(actual.artist);
+ return Boolean(wanted&&(' '+credit+' ').includes(' '+wanted+' ')&&(!expected.length||actual.length===expected.length));
+}
+export function visibleMusicChoice(nodes){
+ const selected=nodes.filter(n=>n.displayed==='true'&&n['resource-id']==='audio_bar_select_tap_target');
+ if(selected.length!==1)return null;
+ const label=selected[0]['content-desc']||'',rows=musicResults(nodes).filter(r=>label==='Select track '+r.title+' by '+r.artist);
+ const parts=label.match(/^Select track (.+) by (.+)$/u),track=(rows.length===1?rows[0]:null)||(parts?{title:parts[1],artist:parts[2]}:null);
+ return track&&musicPlayback(nodes,track)!==null?track:null;
+}
+const candidate=(rows,chosen)=>{const matches=[...new Map(rows.filter(r=>matchesMusicReference(r,chosen)).map(r=>[r.key,r])).values()];return matches.length===1?matches[0]:matches.length>1?'ambiguous':null;};
+// Manual navigation is resumed by a read-only verifier, never by replaying the
+// action that failed. No Save/Share control is allowed in this handoff.
+export async function assistNativeStage(s,ctx,details,attempt,inspect){
+ try{return await attempt();}catch(error){
+  s.signal?.throwIfAborted();if(!ctx?.intervene||error.name==='AccountMismatchError')throw error;
+  return ctx.intervene({...details,reason:error.message},async()=>{s.signal?.throwIfAborted();return inspect(await s.screen());});
+ }
+}
+export async function resolveMusic(s,chosen,ctx={}){
+ const manual=async reason=>{
+  if(!ctx.intervene)throw new InterventionError(reason);
+  return ctx.intervene({kind:'music',title:'Choose the song in Instagram',instructions:'In the emulator, tap the song to preview it. Leave the music library open, then check your selection here. Do not tap the arrow, Done, Save or Share.',requested:{title:chosen.title,artist:chosen.artist},reason},async()=>visibleMusicChoice(await s.screen()));
+ };
+ try{
+  let nodes=await s.screen();assertMusicLibrary(nodes);
+  const preview=visibleMusicChoice(nodes);if(matchesMusicReference(preview,chosen))return preview;
+  let found=candidate(musicResults(nodes),chosen);
+  if(found==='ambiguous')return await manual('Several visible tracks match. Choose the version you want.');
+  if(found)return found;
+  await ctx.step?.('Looking for '+chosen.title+' in Instagram music...');
+  const rows=await searchMusic(s,chosen.title);found=candidate(rows,chosen);
+  if(found==='ambiguous')return await manual('Several tracks match this title and artist. Choose the version you want.');
+  if(found)return found;
+  // Only a short bounded browse; a person can finish a dynamic list faster.
+  const seen=new Set([rows.map(r=>r.key).join(',')]);
+  for(let i=0;rows.length&&i<2;i++){
+   const next=await scrollMusicPage(s),stamp=next.map(r=>r.key).join(',');if(seen.has(stamp))break;seen.add(stamp);
+   found=candidate(next,chosen);if(found==='ambiguous')return await manual('Several tracks match. Choose the version you want.');if(found)return found;
+  }
+  return await manual('The requested song could not be matched confidently.');
+ }catch(error){s.signal?.throwIfAborted();if(!ctx.intervene)throw error;return manual(error.message);}
+}
+export async function previewMusicChoice(s,track){
+ if(musicPlayback(await s.screen(),track)===null){
+  if(!track.selector)throw new InterventionError('The approved preview changed. Check the selected song again.');
+  await s.click('id',track.selector);await s.until(n=>musicPlayback(n,track)!==null,'The selected song preview changed.');
+ }
+}
 const musicIndex=track=>Number(track.selector?.match(/^audio_browser_track_(\d+)_/)?.[1]??NaN);
 function assertMusicLibrary(nodes){
   if(!present(nodes,'row_search_edit_text')||!nodes.some(n=>n.displayed==='true'&&/music_browser_container|music_search_clips_landing_page_container|audio_browser_track_/.test(n['resource-id']||'')))throw new InterventionError('The Instagram music library changed. Reopen the picker; no track was selected.');
@@ -61,7 +118,7 @@ export async function revealMusicResult(s,chosen,onPage=()=>{}){
   const expected=musicIndex(chosen),seen=new Set();
   for(let i=0;i<18;i++){
     const rows=await musicPage(s);onPage(rows);
-    const matches=rows.filter(r=>(!chosen.key||r.key===chosen.key)&&r.title===chosen.title&&r.artist===chosen.artist&&(!chosen.length||r.length===chosen.length));
+    const matches=rows.filter(r=>(!chosen.key||r.key===chosen.key)&&matchesMusicReference(r,chosen));
     if(matches.length>1)throw new InterventionError('More than one exact song matched. Add its Instagram audio link or ID. Nothing was selected.');
     if(matches.length===1)return matches[0];
     const stamp=rows.map(r=>r.key).join(',');if(seen.has(stamp))break;seen.add(stamp);
@@ -168,15 +225,14 @@ export async function configureFeedMusicClip(s,chosen,duration=30,onProgress=asy
   await s.until(nodes=>present(nodes,'media_thumbnail_tray_button')&&present(nodes,'audio_pill_empty_background')&&!present(nodes,'music_editor_controls_container'),'Instagram did not finish applying the verified music clip. Nothing was shared.');
   return {durationSeconds:clip.durationSeconds,segmentStart:clip.segmentStart};
 }
-export async function applyTrack(s,chosen,duration=30,onProgress){
+export async function applyTrack(s,chosen,duration=30,onProgress,ctx){
   if(![15,30].includes(duration))throw new InterventionError('Choose a 15 or 30 second music clip. Nothing was shared.');
-  const candidate=await revealMusicResult(s,chosen);
-  await s.click('id',candidate.selector);
-  await s.until(nodes=>musicPlayback(nodes,chosen)!==null,'Instagram track preview is still loading.');
+  const candidate=ctx?await resolveMusic(s,chosen,ctx):await revealMusicResult(s,chosen);
+  await previewMusicChoice(s,candidate);
   await s.click('id','audio_bar_select_tap_target');
   await s.until(nodes=>present(nodes,'audio_pill_empty_background')&&present(nodes,'media_thumbnail_tray_button'),'Instagram did not apply the chosen song.');
   await s.clickId('audio_pill_empty_background');
-  return configureFeedMusicClip(s,chosen,duration,onProgress);
+  return {...candidate,...await configureFeedMusicClip(s,candidate,duration,onProgress)};
 }
 export const normalizeNativeCaption=value=>String(value??'').replace(/\r\n?/g,'\n').normalize('NFC').trim();
 export function captionField(nodes){const fields=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('caption_input_text_view'));return fields.length===1?fields[0]:null;}

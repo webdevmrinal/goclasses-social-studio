@@ -188,7 +188,7 @@ test('applying a chosen feed song goes through stable clip review before returni
     if(id==='audio_pill_empty_background'){s.touches.push({using:'id',selector:id});assert.equal(s.phase,'photo');s.phase='editor';return;}
     return clickId(id);
   };
-  assert.deepEqual(await applyTrack(s,chosen),{durationSeconds:30,segmentStart:'12.5'});
+  assert.deepEqual(await applyTrack(s,chosen),{...chosen,durationSeconds:30,segmentStart:'12.5'});
   assert.deepEqual(s.touches.map(t=>t.selector),[chosen.selector,'audio_bar_select_tap_target','audio_pill_empty_background','bottom_sheet_done_button']);
   assert.equal(s.reads.editor,2);assert.equal(s.reads.closing,2);assert.equal(s.reads.picker,0);
 });

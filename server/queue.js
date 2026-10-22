@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { EventEmitter } from 'node:events';
+import {NativeInterventions} from './native-interventions.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -12,10 +13,10 @@ import { mediaFor } from '../shared/media.js';
 import { usesInstagramAndroid, instagramNeedsMusicEdit } from '../shared/instagram.js';
 import { publicationUrl } from './automation/publication.js';
 
-const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual'];
+const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual', 'waiting_for_input'];
 export class Queue extends EventEmitter {
   constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline, instagramWorker } = {}) {
-    super(); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.nativeDeadline=deadline??300000; this.channelDeadline = deadline ?? 240000;
+    super(); this.interventions=new NativeInterventions(this); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.nativeDeadline=deadline??300000; this.channelDeadline = deadline ?? 240000;
     this.runs = []; this.login = { running: false, items: {} }; this.persistChain = Promise.resolve(); this.processing = false;
   }
   get active() { return this.runs.find(run => busyStates.includes(run.status)); }
@@ -28,7 +29,8 @@ export class Queue extends EventEmitter {
       if (!busyStates.includes(run.status)) continue;
       run.status = 'interrupted'; run.confirmedLive = false;
       for (const item of run.items) {
-        if (item.status === 'running' || item.status === 'awaiting_manual') {
+        delete item.intervention;
+        if (item.status === 'running' || item.status === 'awaiting_manual' || item.status === 'waiting_for_input') {
           item.status = item.submitting ? 'uncertain' : run.killRequested ? 'skipped' : 'failed';
           item.message = item.submitting ? 'Worker restarted after publication may have begun. Verify on the platform before resolving this result.' : 'Worker restarted. Safe to retry this failed preparation.';
         } else if(item.status==='attention'&&item.startedAt&&!item.submitting){
@@ -94,6 +96,7 @@ export class Queue extends EventEmitter {
       if(this.runController?.runId===run.id)this.runController.controller.abort(new InterventionError('Stopped by operator. No further publication actions are allowed.'));
     } else if (action === 'stop') {
       run.status = 'stopping';
+      if(this.interventions.pending?.run===run)this.runController?.controller.abort(new InterventionError('Stopped by operator. No further publication actions are allowed.'));
       for (const item of run.items) {
         if (item.status === 'queued' || item.status === 'attention') { item.status = 'skipped'; item.message = 'Stopped by operator.'; }
         if (item.status === 'awaiting_manual') { item.status = 'uncertain'; item.message = 'Assisted update stopped. Check ManyChat to see whether changes were saved.'; }
@@ -254,8 +257,10 @@ export class Queue extends EventEmitter {
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
           if(!native)page = await this.browser.page(item.id);
           const deadline = native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
+          let armDeadline;
           const timeout = new Promise((_, reject) => {
-            timer = setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page?.close().catch(() => {}); }, deadline);
+            armDeadline=()=>{clearTimeout(timer);timer=setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page?.close().catch(() => {}); }, deadline);};
+            armDeadline();
           });
           task = this.runner({
             page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
@@ -266,8 +271,9 @@ export class Queue extends EventEmitter {
             instagramTestPublication:this.testInstagramPublication(run),
             captureInstagramPost: run.items.some(i=>['instagramStory','instagramMusic'].includes(i.id)) || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
             step: message => { controller.signal.throwIfAborted(); return this.log(run, item, message); }, snapshot: (label, target = page) => { controller.signal.throwIfAborted(); return this.snapshot(run, item, page, label, false, target); },
+            intervene: native ? (details,inspect)=>this.interventions.wait(run,item,controller.signal,details,inspect,{pause:()=>clearTimeout(timer),resume:armDeadline}) : undefined,
             recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = details; await this.change(); },
-            markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping')throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
+            markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping'||run.status==='waiting_for_input')throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
           });
           const result = await Promise.race([task, timeout]);
           clearTimeout(timer);
