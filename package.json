@@ -47,7 +47,8 @@
     "test:caption-review-ui": "node tests/caption-review-ui.js",
     "test:layout-previews-ui": "node tests/layout-previews-ui.js",
     "test:wifi-phone-ui": "node tests/wifi-phone-ui.js",
-    "test:manual-login-ui": "node tests/manual-login-ui.js"
+    "test:manual-login-ui": "node tests/manual-login-ui.js",
+    "test:dependencies-ui": "node tests/dependencies-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

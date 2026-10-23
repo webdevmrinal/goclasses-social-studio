@@ -5,6 +5,7 @@ import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY
 import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
 import {storyPresetLayout,selectedStoryPreset} from '/shared/story-layouts.js';
 import {phoneToolbar,phoneRows,phoneSetup} from './phone-controls.js';
+import {syncStorySelection,setDestinationSelected,dependencyRequirements,resolveDependencyLinks,skipDestination} from '/shared/dependencies.js';
 import {platformPostPreview} from './platform-previews.js';
 import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
 import { freshDraft, workspaceFingerprint, reconcilePublishedDraft, restartChoices, draftFromRun } from '/shared/draft.js';
@@ -69,7 +70,7 @@ draft.mediaByPlatform = draft.mediaByPlatform && typeof draft.mediaByPlatform ==
 draft.instagram={postingMethod:instagramMethod(draft.instagram),music:{enabled:false,...draft.instagram?.music},story:{enabled:false,linkEnabled:true,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
 draft.instagram.story.enabled=draft.instagram.story.enabled===true;draft.instagram.music.enabled=draft.instagram.music.enabled===true;
 try{draft.instagram.story.layout=storyLayout(draft.instagram.story.layout);}catch{draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);}
-draft.selected=draft.selected.filter(id=>id!=='instagramStory'&&draft.captions[id]?.trim());if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
+draft.selected=draft.selected.filter(id=>id==='instagramStory'||draft.captions[id]?.trim());syncStorySelection(draft);
 let instagramTab='feed';
 let theme = 'system';
 try { theme = localStorage.getItem('mrinal.social-studio.theme') || 'system'; } catch { /* Use system appearance. */ }
@@ -120,7 +121,7 @@ const activeRun = () => state.runs.find(r => ['running', 'pausing', 'paused', 's
 const workerBusy = () => state.workerBusy || Boolean(activeRun()) || state.login.running;
 function updateWorkerControls() {
   const busy = workerBusy();
-  document.querySelectorAll('[data-ig-method],[data-native-device],[data-ig-field],[data-song-source],[data-song-field],[data-ig-music],[data-story-align],[data-story-size],[data-story-reset],[data-story-suggestion],[data-story-preset]').forEach(el => { el.disabled = busy || el.hasAttribute('data-layout-unavailable'); });
+  document.querySelectorAll('[data-ig-method],[data-native-device],[data-ig-field],[data-song-source],[data-song-field],[data-ig-music],[data-story-align],[data-story-size],[data-story-reset],[data-story-suggestion],[data-story-preset],[data-only-destination],[data-skip-destination]').forEach(el => { el.disabled = busy || el.hasAttribute('data-layout-unavailable'); });
 }
 function manualLoginNotice() {
   const pending=state.manualLogin;if(!pending)return '';
@@ -149,6 +150,7 @@ async function api(url, { method = 'GET', body, ...options } = {}) {
 // Persist the final route and edits even when the page closes before debounce.
 window.addEventListener('pagehide',()=>{try{localStorage.setItem('mrinal.social-studio.draft',JSON.stringify(draft));}catch{/* Normal save status reports unavailable storage. */}});
 function saveDraft() {
+  syncStorySelection(draft);
   captionConsent=null;liveMetadataConsent={};
   reviewValid = false;
   reviewDraft = null; remoteReadiness = null;
@@ -195,8 +197,8 @@ function composePage() {
   const heroImage = media[mediaPreviewIndex];
   return `<div class="hero compose-hero"><div class="title-row"><h1>New post</h1><small id="draft-status" class="save-status">Saved</small></div><div class="hero-actions"><button class="button small" data-action="fresh-workspace" aria-label="Fresh start" title="Clear this draft for a fresh start" ${workerBusy()||uploading?'disabled':''}>${icon('refresh')}<span>Fresh start</span></button><button class="button subtle" data-action="export" title="Export captions">${icon('download')}<span>Export</span></button><button class="button" data-action="import" title="Import all captions">${icon('upload')}<span>Import captions</span></button></div></div>
     ${mode === 'LIVE' ? liveBanner() : ''}
-    <section aria-labelledby="destinations-title"><div class="section-heading"><h2 id="destinations-title">Destinations</h2><small>${draft.selected.filter(id=>id!=='instagramStory').length} of ${PLATFORMS.length} selected</small></div>
-    <div class="destination-grid">${PLATFORMS.map(p => `<button class="destination ${draft.selected.includes(p.id) ? 'selected' : ''}" data-destination="${p.id}" aria-pressed="${draft.selected.includes(p.id)}" title="${p.name}: ${p.detail}">${platformIcon(p)}<span class="check">${icon('check')}</span><span class="destination-name">${escape(p.name.replace(' · GATE ', ' · '))}</span><span class="destination-status" data-destination-status="${p.id}"></span></button>`).join('')}</div></section>
+    <section aria-labelledby="destinations-title"><div class="section-heading"><h2 id="destinations-title">Destinations</h2><small>${draft.selected.length} action${draft.selected.length===1?'':'s'} selected</small></div>
+    <div class="destination-grid">${PLATFORMS.map(p => `<button class="destination ${draft.selected.includes(p.id) ? 'selected' : ''}" data-destination="${p.id}" aria-pressed="${draft.selected.includes(p.id)}" title="${p.name}: ${p.detail}">${platformIcon(p)}<span class="check">${icon('check')}</span><span class="destination-name">${escape(p.name.replace(' · GATE ', ' · '))}</span><span class="destination-status" data-destination-status="${p.id}"></span></button>`).join('')}</div>${draft.selected.includes('instagramStory')?`<div class="selected-story-pill" data-selected-story>${icon('instagram')}<span>Story included</span><button class="text-button" data-skip-destination="instagramStory" ${workerBusy()?'disabled':''}>Skip Story ${icon('close')}</button></div>`:''}</section>
 
     <div class="composer-grid"><section class="panel media-panel" aria-label="Media upload"><div class="panel-label">Images <small>${media.length ? `${media.length} image${media.length === 1 ? '' : 's'}` : 'Up to 10 images'}</small></div>
       <label class="dropzone ${heroImage ? 'has-preview' : ''}" id="dropzone" tabindex="0" role="button" aria-label="Upload images"><input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden ${uploading ? 'disabled' : ''}>${heroImage ? `<img id="uploaded-preview" class="uploaded-preview" src="${escape(heroImage.url)}" alt="Preview: ${escape(heroImage.name)}"><span class="media-preview-caption">${mediaPreviewIndex + 1} of ${media.length} · ${uploading ? 'Uploading…' : 'Add images'}</span>${metadataChip(heroImage)}${heroImage.pending ? '<span class="uploading-badge" role="status">Uploading · preview ready</span>' : ''}` : `<span class="upload-art">${icon('image')}</span><strong>Drop or choose images</strong><p>JPG, PNG, WEBP · 20 MB max</p>`}</label>
@@ -263,7 +265,7 @@ function captionEditor(p) {
   const text = draft.captions[p.id] || '';
   const count = captionLength(p, text), limit = captionLimit(p, platformMedia(p.id).length);
   return `<div class="caption-body ${captionTab !== p.id ? 'hidden' : ''}" id="editor-${p.id}" role="tabpanel" aria-labelledby="tab-${p.id}">
-    <div class="caption-toolbar"><div class="caption-account">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id !== 'instagram' ? `<button class="button subtle small" data-copy-instagram="${p.id}" title="Copy caption from Instagram">${icon('copy')}<span>From Instagram</span></button>` : ''}</div>
+    <div class="caption-toolbar"><div class="caption-account">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div><div class="caption-action-group"><button class="button small subtle" data-only-destination="${p.id}" ${workerBusy()?'disabled':''} title="Select only ${escape(p.name)}">Only this</button>${p.id !== 'instagram' ? `<button class="button subtle small" data-copy-instagram="${p.id}" title="Copy caption from Instagram">${icon('copy')}<span>From Instagram</span></button>` : ''}</div></div>
     <div data-editor-readiness="${p.id}"></div>${p.id==='instagram'?instagramTabs(instagramTab)+`<div data-ig-panel="feed" class="${instagramTab!=='feed'?'hidden':''}">`+postingMethodControl(draft.instagram,workerBusy(),state.config):''}${destinationMediaEditor(p)}
     <label class="editor-label" for="caption-${p.id}">${p.id === 'manychat' ? 'DM text' : 'Post caption'}</label>
     <textarea class="caption-editor" id="caption-${p.id}" data-caption="${p.id}" placeholder="${p.id === 'manychat' ? 'Write your DM…' : 'Write a caption…'}" spellcheck="true">${escape(text)}</textarea>
@@ -324,7 +326,7 @@ function previewPage() {
     const song=draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details';
     const route=p.id==='instagram'?(instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' · Android music: '+song:''):'Android'+(draft.instagram.music.enabled?' · '+song:'')):'';
     const post=p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle})+'<div class="preview-caption">Instagram'+(draft.instagram.story.linkEnabled!==false?' · '+escape(draft.instagram.story.label)+' · '+escape(draft.instagram.story.url):'')+'</div>':platformPostPreview({id:p.id,account:accountLabel(p),handle:state.config?.platforms[p.id==='manychat'?'instagram':p.id]?.handle||'',caption,images,carousel:mediaCarousel(p,images,'review'),route,links:p.id==='manychat'?currentManychatLinks():[]});
-    return `<article class="panel preview-card ${valid?'':'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${post}${p.id==='manychat'?manychatReview():''}${!valid?`<div class="excluded-reasons">${ready[p.id].errors.map(error=>`<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>`:''}<div class="preview-meta"><span class="badge ${valid?'':'warn'}">${icon(valid?'check':'info')}${valid?'Included in run':'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
+    return `<article class="panel preview-card ${valid?'':'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div><div class="preview-action-group"><button class="text-button" data-only-destination="${p.id}" ${workerBusy()?'disabled':''}>Only this</button><button class="text-button" data-skip-destination="${p.id}" ${workerBusy()?'disabled':''}>Skip</button></div></div>${post}${p.id==='manychat'?manychatReview():''}${!valid?`<div class="excluded-reasons">${ready[p.id].errors.map(error=>`<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>`:''}<div class="preview-meta"><span class="badge ${valid?'':'warn'}">${icon(valid?'check':'info')}${valid?'Included in run':'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
   }).join('')}</div>${!draft.selected.length ? '<div class="panel empty-state"><h2>No destinations selected</h2><p>Choose destinations in Compose to see your previews.</p></div>' : ''}${footer()}`;
 }
 const statusLabels = { queued: 'Queued', running: 'In progress', dry_run: 'Test complete', posted: 'Published', failed: 'Failed', uncertain: 'Verify outcome', attention: 'Needs attention', waiting_for_input: 'Your turn', awaiting_manual: 'Your turn', needs_setup: 'Choose flow', skipped: 'Skipped' };
@@ -497,15 +499,39 @@ function confirmLive(onConfirm, label = 'Publish selected', destinations = draft
   };
   input.focus();
 }
+function dependencyDialog(candidate,onApply) {
+  const requirements=dependencyRequirements(candidate);if(!requirements.length)return onApply(candidate);
+  showDialog('Choose the existing Instagram post','<p>Paste the published post link for each action you want to keep. Uncheck an action to skip it.</p><div class="dependency-choices">'+requirements.map(item=>'<section class="dependency-choice"><label class="dependency-toggle"><input type="checkbox" data-dependency-include="'+item.id+'" checked><strong>'+escape(platform(item.id).name)+'</strong></label><label class="field"><span>Instagram post link</span><input type="url" data-dependency-url="'+item.id+'" placeholder="https://www.instagram.com/p/..."></label></section>').join('')+'</div><p id="dependency-error" class="dialog-error" role="alert"></p>','<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="apply-dependencies">Apply &amp; review</button>');
+  for(const item of requirements){const include=modal.querySelector('[data-dependency-include="'+item.id+'"]'),input=modal.querySelector('[data-dependency-url="'+item.id+'"]');include.onchange=()=>{input.disabled=!include.checked;};}
+  modal.querySelector('#apply-dependencies').onclick=async()=>{
+    const button=modal.querySelector('#apply-dependencies');button.disabled=true;
+    try {
+      if(workerBusy())throw Error('Finish the current activity first.');
+      let next=structuredClone(candidate);const links={};
+      for(const item of requirements){if(!modal.querySelector('[data-dependency-include="'+item.id+'"]').checked)next=skipDestination(next,item.id);else links[item.id]=modal.querySelector('[data-dependency-url="'+item.id+'"]').value.trim();}
+      next=resolveDependencyLinks(next,links);modal.close();await onApply(next);
+    }catch(error){const el=modal.querySelector('#dependency-error');if(el)el.textContent=error.message;button.disabled=false;}
+  };
+}
+async function changeSelectedActions(candidate,{review=view==='preview'}={}) {
+  if(workerBusy()||uploading)return toast('Finish the current activity first.',true);
+  const apply=async next=>{draft=next;saveDraft();if(review)await preview();else shell();};
+  if(dependencyRequirements(candidate).length){dependencyDialog(candidate,apply);return;}
+  await apply(candidate);
+}
 async function preview() {
+  if(workerBusy()||uploading)return toast('Finish the current activity first.',true);
   try {
+    syncStorySelection(draft);
     const source = structuredClone(draft), stamp = JSON.stringify(source);
+    if(dependencyRequirements(source).length){dependencyDialog(source,async next=>{draft=next;saveDraft();await preview();});return;}
     const checked = await api('/api/readiness', { method: 'POST', body: source });
     if (stamp !== JSON.stringify(draft)) return toast('The draft changed during review. Preview it again.');
     remoteReadiness = checked.destinations;
     const selected = runnableIds();
     reviewBlocked = draft.selected.filter(id => !selected.includes(id));
-    reviewDraft = { ...source, selected };
+    reviewDraft = { ...source, selected };syncStorySelection(reviewDraft);
+    if(dependencyRequirements(reviewDraft).length){dependencyDialog(reviewDraft,async next=>{draft=next;saveDraft();await preview();});return;}
     if (selected.length) await api('/api/validate', { method: 'POST', body: reviewDraft });
     reviewValid = true; navigate('preview');
     if (reviewBlocked.length) toast(`${reviewBlocked.length} destination${reviewBlocked.length === 1 ? '' : 's'} excluded until fixed. Review the reasons on each card.`);
@@ -537,10 +563,10 @@ function exportText() {
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function captionDialog(id){
+function captionDialog(id,{only=false}={}){
  const p=platform(id),editing=draft.selected.includes(id);showDialog((editing?'Edit ':'Add ')+escape(p.name)+' caption','<label class="field"><span>'+(id==='manychat'?'DM text':'Caption')+'</span><textarea id="destination-caption" rows="7" placeholder="Write a caption"></textarea></label><div id="dialog-error" role="alert"></div>','<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="save-destination-caption">'+(editing?'Save caption':'Enable '+escape(p.name))+'</button>');
  const input=modal.querySelector('#destination-caption');input.value=draft.captions[id]||'';input.focus();
- modal.querySelector('#save-destination-caption').onclick=()=>{if(!input.value.trim()){modal.querySelector('#dialog-error').textContent='Enter a caption to enable this destination.';return;}if(id==='instagram'&&instagramHashtags(input.value).length>5){modal.querySelector('#dialog-error').textContent='Keep up to 5 hashtags. This caption has '+instagramHashtags(input.value).length+'.';return;}draft.captions[id]=input.value.trim();draft.selected=DESTINATIONS.filter(p=>[...draft.selected,id].includes(p.id)).map(p=>p.id);captionTab=id;saveDraft();modal.close();shell();};
+ modal.querySelector('#save-destination-caption').onclick=()=>{if(!input.value.trim()){modal.querySelector('#dialog-error').textContent='Enter a caption to enable this destination.';return;}if(id==='instagram'&&instagramHashtags(input.value).length>5){modal.querySelector('#dialog-error').textContent='Keep up to 5 hashtags. This caption has '+instagramHashtags(input.value).length+'.';return;}if(only){const next=structuredClone(draft);next.captions[id]=input.value.trim();next.selected=[id];syncStorySelection(next);captionTab=id;modal.close();changeSelectedActions(next).catch(error=>toast(error.message,true));return;}draft.captions[id]=input.value.trim();setDestinationSelected(draft,id,true);captionTab=id;saveDraft();modal.close();shell();};
 }
 function importDialog() {
   showDialog('Import captions', '<p>Paste your platform sections. Include only the platforms you need. Missing or empty captions stay off. <code>=====INSTAGRAM_STORY=====</code> is optional.</p><label class="field"><span>Structured captions</span><textarea id="import-captions" placeholder="=====INSTAGRAM=====&#10;Your caption here…&#10;&#10;=====LINKEDIN=====&#10;Your company update…"></textarea></label><div id="dialog-error" class="dialog-error" role="alert"></div>', '<button class="button" data-dialog-close>Cancel</button><button class="button primary" id="parse-captions">Import captions</button>');
@@ -599,8 +625,11 @@ document.addEventListener('click', async e => {
       document.querySelector(`[data-carousel-view="${scope}-${id}"] .carousel-thumb.active`)?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); return;
     }
     if (button.dataset.view) { if (button.dataset.view === 'preview') await preview(); else navigate(button.dataset.view); return; }
+    if(button.dataset.skipDestination){await changeSelectedActions(skipDestination(draft,button.dataset.skipDestination));return;}
+    if(button.dataset.onlyDestination){const id=button.dataset.onlyDestination;if(!draft.captions[id]?.trim()&&id!=='instagramStory'){captionDialog(id,{only:true});return;}const next=structuredClone(draft);next.selected=[id];syncStorySelection(next);await changeSelectedActions(next);return;}
     if (button.dataset.destination) {
-      const id = button.dataset.destination;if(!draft.selected.includes(id)&&!draft.captions[id]?.trim()){captionDialog(id);return;} draft.selected = draft.selected.includes(id) ? draft.selected.filter(p => p !== id) : DESTINATIONS.filter(p => [...draft.selected, id].includes(p.id)).map(p => p.id); saveDraft(); shell(); return;
+      if(workerBusy())return toast('Finish the current activity first.',true);
+      const id = button.dataset.destination;if(!draft.selected.includes(id)&&!draft.captions[id]?.trim()){captionDialog(id);return;}setDestinationSelected(draft,id,!draft.selected.includes(id));saveDraft();shell();return;
     }
     if (button.dataset.captionTab) { captionTab = button.dataset.captionTab; shell(); document.querySelector(`#tab-${captionTab}`)?.focus(); return; }
     if (button.dataset.copyInstagram) { draft.captions[button.dataset.copyInstagram] = draft.captions.instagram; saveDraft(); shell(); toast('Instagram caption copied. Make it your own.'); return; }
@@ -625,9 +654,7 @@ document.addEventListener('click', async e => {
     if (button.hasAttribute('data-media-preview')) { mediaPreviewIndex = Number(button.dataset.mediaPreview); shell(); return; }
     if (button.dataset.action === 'continue-compose') {
       if (document.querySelector('#settings-form')?.dataset.dirty === 'true') return toast('Save your connection changes before continuing.', true);
-      const verified = verifiedDestinations();
-      draft.selected = verified.filter(id => draft.selected.includes(id));
-      draft.selected=draft.selected.filter(id=>draft.captions[id]?.trim());if(draft.instagram.story.enabled)draft.selected.push('instagramStory');
+      draft.selected=draft.selected.filter(id=>id==='instagramStory'||draft.captions[id]?.trim());syncStorySelection(draft);
       saveDraft(); navigate('compose'); return;
     }
     if (button.dataset.mode) {
@@ -728,7 +755,7 @@ document.addEventListener('input', e => {
   if(e.target.dataset.igField){const [section,key]=e.target.dataset.igField.split('.');draft.instagram[section][key]=e.target.type==='checkbox'?e.target.checked:e.target.value;if(section==='music'&&key==='enabled'&&e.target.checked){if(state.config.androidDevice?.type==='phone')draft.instagram.music.source='manual';else if(!draft.instagram.music.selection)draft.instagram.music.source='details';draft.instagram.music.reference||={title:'',artist:'',audioUrl:''};}
     if(key==='linkEnabled'&&selectedStoryPreset(draft.instagram.story)!=='custom')draft.instagram.story.layout=storyPresetLayout(selectedStoryPreset(draft.instagram.story),storyPresetMeasurements());
     if(key==='linkEnabled'||key==='facebookEnabled'||section==='music'&&key==='enabled'){saveDraft();shell();return;}
-    if(section==='story'&&key==='enabled'){draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(e.target.checked)draft.selected.push('instagramStory');saveDraft();shell();return;}
+    if(section==='story'&&key==='enabled'){setDestinationSelected(draft,'instagramStory',e.target.checked);saveDraft();shell();return;}
     const label=document.querySelector('[data-story-label]');if(label&&key==='label')label.textContent=e.target.value||'Application Form';saveDraft();return;}
   if(e.target.dataset.storySize){const key=e.target.dataset.storySize,item=draft.instagram.story.layout[key];item.width=Number(e.target.value)/100;item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,item.x));updateStoryItem(key);markStoryCustom();saveDraft();return;}
 
@@ -752,7 +779,7 @@ document.addEventListener('input', e => {
   const id = e.target.dataset.caption;
   if (!id) return;
   draft.captions[id] = e.target.value;
-  if(!e.target.value.trim())draft.selected=draft.selected.filter(key=>key!==id);
+  if(!e.target.value.trim())setDestinationSelected(draft,id,false);
   if (id === 'manychat') refreshManychatLinks();
   const p = platform(id), limit = captionLimit(p, platformMedia(id).length); const length = captionLength(p, e.target.value); const el = document.querySelector(`#count-${id}`);
   el.textContent = `${id==='instagram'?instagramHashtags(e.target.value).length+' / 5 hashtags ? ':''}${length.toLocaleString()} / ${limit.toLocaleString()}${id === 'x' ? ' *' : ''}`; el.classList.toggle('error-text', length > limit||id==='instagram'&&instagramHashtags(e.target.value).length>5);
