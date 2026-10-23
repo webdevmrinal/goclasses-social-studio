@@ -69,7 +69,8 @@ try {
   await tab('linkedin'); assert.equal(await editor('linkedin').locator('.image-choice.chosen').count(), 0);
   await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   const linkedinPreview = page.locator('[data-preview-destination="linkedin"]');
-  assert.match(await linkedinPreview.locator('.text-only-placeholder').innerText(), /Text only/);
+  assert.equal(await linkedinPreview.locator('[data-site-preview="linkedin"] img').count(),0,'Text-only LinkedIn mockup has no photo');
+  assert((await linkedinPreview.locator('.site-caption').innerText()).trim().length>0,'Text-only post displays the reviewed caption');
   assert.equal(await linkedinPreview.getByText('Included in run', { exact: true }).isVisible(), true, 'LinkedIn text-only posts remain eligible');
   await page.getByRole('button', { name: 'Keep editing' }).click(); await page.reload(); await page.getByRole('button', { name: 'Compose', exact: true }).click(); await tab('linkedin');
   assert.equal(await editor('linkedin').locator('.image-choice.chosen').count(), 0, 'LinkedIn text-only selection survives reload');
@@ -108,8 +109,8 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   const xPreview = page.locator('[data-preview-destination="x"]'), waPreview = page.locator('[data-preview-destination="whatsapp"]');
-  assert.equal(await xPreview.locator('.carousel-thumb').count(), 4); assert.equal(await waPreview.locator('.carousel-thumb').count(), 1);
-  assert.match(await xPreview.locator('.destination-image img').getAttribute('alt'), /artwork 2/); assert.match(await waPreview.locator('.destination-image img').getAttribute('alt'), /artwork 3/);
+  assert.equal(await xPreview.locator('.site-gallery img').count(), 4); assert.equal(await waPreview.locator('.carousel-thumb').count(), 1);
+  assert.match(await xPreview.locator('.site-gallery img').first().getAttribute('alt'), /artwork 2/); assert.match(await waPreview.locator('.destination-image img').getAttribute('alt'), /artwork 3/);
   await page.getByRole('button', { name: 'Keep editing' }).click(); await tab('whatsapp'); await page.locator('#caption-whatsapp').fill('');
   await page.getByRole('button', { name: 'Preview posts' }).click(); await page.getByRole('heading', { name: 'Review posts' }).waitFor();
   assert.equal(await waPreview.count(),0); assert.equal(await page.getByRole('button', { name: 'Run test', exact: true }).isEnabled(), true);
@@ -124,7 +125,7 @@ try {
   const firstRun = queue.runs[0]; assert.deepEqual(firstRun.mediaByPlatform.whatsapp, undefined); assert.deepEqual(firstRun.mediaByPlatform.x, [xIds[1], xIds[0], ...xIds.slice(2)]);
   fail = false; const retryRequest = page.waitForRequest(req => req.url().endsWith('/retry'));
   await page.locator('[data-retry-platform="x"]').click(); await page.getByRole('heading', { name: 'Retry X', exact: true }).waitFor(); await page.getByRole('button', { name: 'Retry in TEST', exact: true }).click();
-  assert.deepEqual((await retryRequest).postDataJSON(), { mode: 'TEST', platform: 'x', metadataConsent:{} });
+  assert.deepEqual((await retryRequest).postDataJSON(), { mode: 'TEST', platform: 'x', metadataConsent:{}, captionConsent:null });
   await page.getByText('Test complete', { exact: true }).first().waitFor({ state: 'attached' });
   const retryCard = page.locator('.run-card').first();
   if (!await retryCard.evaluate(el => el.open)) await retryCard.locator('.run-summary').click();

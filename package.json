@@ -44,7 +44,8 @@
     "test:restart-job-ui": "node tests/restart-job-ui.js",
     "test:native-handoff-ui": "node tests/native-handoff-ui.js",
     "test:phone-ui": "node tests/phone-manual-ui.js",
-    "test:caption-review-ui": "node tests/caption-review-ui.js"
+    "test:caption-review-ui": "node tests/caption-review-ui.js",
+    "test:layout-previews-ui": "node tests/layout-previews-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

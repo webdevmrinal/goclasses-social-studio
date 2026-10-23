@@ -29,3 +29,32 @@
 .ig-alignment-tools [data-story-alignment]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
 .ig-music-dialog #music-retry[hidden]{display:none}
+/* Story layout gallery. The miniatures use the same positions as the editable canvas. */
+.ig-story-editor{container-type:inline-size}
+.story-layout-studio{display:grid;grid-template-columns:76px minmax(0,280px) 76px;grid-template-rows:repeat(4,1fr) auto;gap:12px 18px;justify-content:center;align-items:center;margin:24px 0 12px}
+.story-layout-choices{display:contents}
+.story-layout-studio>.ig-phone{grid-column:2;grid-row:1/5;width:100%;margin:0}
+.story-layout-option{position:relative;min-width:0;width:76px;padding:5px;border:1px solid transparent;border-radius:12px;background:transparent;color:var(--secondary);opacity:.58;filter:saturate(.12);transition:opacity .2s ease,filter .2s ease,border-color .2s ease,background .2s ease,transform .2s ease}
+.story-layout-option.layout-left{grid-column:1}.story-layout-option.layout-right{grid-column:3}
+.story-layout-option:nth-child(4n+1){grid-row:1}.story-layout-option:nth-child(4n+2){grid-row:2}.story-layout-option:nth-child(4n+3){grid-row:3}.story-layout-option:nth-child(4n+4){grid-row:4}
+.story-layout-option:hover{opacity:.9;filter:saturate(.7);transform:translateY(-2px)}
+.story-layout-option[aria-pressed=true]{opacity:1;filter:none;background:var(--blue-soft);border-color:var(--focus);color:var(--text);box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 12%,transparent)}
+.story-layout-option:focus-visible,.story-layout-custom:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+.story-layout-mini{display:block;position:relative;aspect-ratio:9/16;width:54px;margin:auto;overflow:hidden;background:linear-gradient(155deg,#a49b93,#745768);border:1px solid #ffffff30;border-radius:6px}
+.mini-progress{position:absolute;top:5%;left:8%;right:8%;height:1px;background:#fffa}
+.mini-post{position:absolute;display:block;transform:translate(-50%,-50%);border-radius:3px;overflow:hidden;background:white;box-shadow:0 2px 4px #0002}
+.mini-post img{width:100%;height:auto;display:block}.mini-author,.mini-caption{display:block;height:5px;background:#fff}.mini-author:before,.mini-caption:before{content:'';display:block;width:45%;height:1px;background:#2225;position:relative;top:2px;left:3px}.mini-art{display:block;aspect-ratio:1;background:linear-gradient(140deg,#e7d0b5,#8e6766)}
+.mini-link{position:absolute;width:48%;height:5%;transform:translate(-50%,-50%);border-radius:3px;background:#fff}.mini-link:after{content:'';position:absolute;inset:40% 20%;background:#388ab6}
+.layout-name{display:block;font-size:10px;line-height:1.3;font-weight:600;margin-top:5px;white-space:nowrap}
+.layout-selected{position:absolute;top:43%;left:50%;transform:translate(-50%,-50%);padding:5px 8px;border-radius:20px;background:#216bd5;color:#fff;font-size:9px;font-weight:700;box-shadow:0 2px 8px #0004;white-space:nowrap;pointer-events:none}
+.layout-selected[hidden]{display:none}
+.story-layout-custom{grid-column:1/-1;grid-row:5;position:relative;justify-self:center;display:flex;align-items:center;justify-content:center;gap:10px;width:190px;min-height:38px;border:1px dashed var(--stroke);border-radius:10px;background:transparent;color:var(--secondary);font-size:12px}
+.story-layout-custom[aria-pressed=true]{background:var(--blue-soft);color:var(--text);border-color:var(--focus);border-style:solid}.story-layout-custom .layout-selected{position:static;transform:none;box-shadow:none}
+.ig-story-canvas.is-aligning [data-story-item]{transition:left .45s cubic-bezier(.2,.8,.2,1),top .45s cubic-bezier(.2,.8,.2,1),width .45s cubic-bezier(.2,.8,.2,1)}
+@container (max-width:480px){
+ .story-layout-studio{grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:auto repeat(2,auto) auto;gap:10px 5px}
+ .story-layout-studio>.ig-phone{grid-row:1;grid-column:1/-1;width:min(100%,270px);justify-self:center;margin-bottom:12px}
+ .story-layout-option.layout-left,.story-layout-option.layout-right{grid-column:auto;grid-row:auto;width:100%}
+ .story-layout-custom{grid-row:4;grid-column:1/-1}.layout-name{font-size:9px}
+}
+@media(prefers-reduced-motion:reduce){.story-layout-option,.ig-story-canvas.is-aligning [data-story-item]{transition:none}.story-layout-option:hover{transform:none}}

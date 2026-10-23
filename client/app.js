@@ -3,6 +3,8 @@ import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, 
 import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
 import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
+import {storyPresetLayout,selectedStoryPreset} from '/shared/story-layouts.js';
+import {platformPostPreview} from './platform-previews.js';
 import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
 import { freshDraft, workspaceFingerprint, reconcilePublishedDraft, restartChoices, draftFromRun } from '/shared/draft.js';
 import { mediaFor, mediaIdsFor, updateDraftMedia, setTextOnly, metadataNeedsReview, TEXT_ONLY_PLATFORMS } from '/shared/media.js';
@@ -309,7 +311,10 @@ function previewPage() {
   return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}${captionReviewBanner(reviewDraft||draft)}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
     const images = platformMedia(p.id), caption = draft.captions[p.id] || '';
     const valid = ready[p.id].ready;
-    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagram'?(instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' &middot; Android music: '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details'):''):'Android'+(draft.instagram.music.enabled?' &middot; '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Choose song'):''))+'<br>':''}${p.id==='instagramStory'?'Instagram'+(draft.instagram.story.linkEnabled!==false?' &middot; '+escape(draft.instagram.story.label)+' &middot; '+escape(draft.instagram.story.url):''):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
+    const song=draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details';
+    const route=p.id==='instagram'?(instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' · Android music: '+song:''):'Android'+(draft.instagram.music.enabled?' · '+song:'')):'';
+    const post=p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle})+'<div class="preview-caption">Instagram'+(draft.instagram.story.linkEnabled!==false?' · '+escape(draft.instagram.story.label)+' · '+escape(draft.instagram.story.url):'')+'</div>':platformPostPreview({id:p.id,account:accountLabel(p),handle:state.config?.platforms[p.id==='manychat'?'instagram':p.id]?.handle||'',caption,images,carousel:mediaCarousel(p,images,'review'),route,links:p.id==='manychat'?currentManychatLinks():[]});
+    return `<article class="panel preview-card ${valid?'':'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${post}${p.id==='manychat'?manychatReview():''}${!valid?`<div class="excluded-reasons">${ready[p.id].errors.map(error=>`<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>`:''}<div class="preview-meta"><span class="badge ${valid?'':'warn'}">${icon(valid?'check':'info')}${valid?'Included in run':'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
   }).join('')}</div>${!draft.selected.length ? '<div class="panel empty-state"><h2>No destinations selected</h2><p>Choose destinations in Compose to see your previews.</p></div>' : ''}${footer()}`;
 }
 const statusLabels = { queued: 'Queued', running: 'In progress', dry_run: 'Test complete', posted: 'Published', failed: 'Failed', uncertain: 'Verify outcome', attention: 'Needs attention', waiting_for_input: 'Your turn', awaiting_manual: 'Your turn', needs_setup: 'Choose flow', skipped: 'Skipped' };
@@ -547,8 +552,9 @@ document.addEventListener('click', async e => {
   const button = e.target.closest('button'); if (!button || button.disabled) return;
   try {
     if(button.dataset.igTab){instagramTab=button.dataset.igTab;shell();return;}
+    if(button.hasAttribute('data-story-preset')){selectStoryLayout(button.dataset.storyPreset);return;}
     if(button.hasAttribute('data-story-align')){autoAlignStory();return;}
-    if(button.hasAttribute('data-story-reset')){draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);saveDraft();shell();return;}
+    if(button.hasAttribute('data-story-reset')){selectStoryLayout('signature');return;}
     if(button.hasAttribute('data-story-suggestion')){const link=storyLinks(draft.captions)[Number(button.dataset.storySuggestion)];if(link){Object.assign(draft.instagram.story,{url:link.url,label:link.label});saveDraft();shell();}return;}
     if(button.hasAttribute('data-ig-music')){await musicDialog();return;}
     if(button.hasAttribute('data-dialog-close')) { modal.close(); return; }
@@ -696,10 +702,11 @@ document.addEventListener('input', e => {
   if(e.target.hasAttribute('data-song-source')){draft.instagram.music.source=e.target.value;draft.instagram.music.reference||={title:'',artist:'',audioUrl:''};saveDraft();shell();return;}
   if(e.target.dataset.songField){draft.instagram.music.reference||={};draft.instagram.music.reference[e.target.dataset.songField]=e.target.value;saveDraft();return;}
   if(e.target.dataset.igField){const [section,key]=e.target.dataset.igField.split('.');draft.instagram[section][key]=e.target.type==='checkbox'?e.target.checked:e.target.value;if(section==='music'&&key==='enabled'&&e.target.checked){if(state.config.androidDevice?.type==='phone')draft.instagram.music.source='manual';else if(!draft.instagram.music.selection)draft.instagram.music.source='details';draft.instagram.music.reference||={title:'',artist:'',audioUrl:''};}
+    if(key==='linkEnabled'&&selectedStoryPreset(draft.instagram.story)!=='custom')draft.instagram.story.layout=storyPresetLayout(selectedStoryPreset(draft.instagram.story),storyPresetMeasurements());
     if(key==='linkEnabled'||key==='facebookEnabled'||section==='music'&&key==='enabled'){saveDraft();shell();return;}
     if(section==='story'&&key==='enabled'){draft.selected=draft.selected.filter(id=>id!=='instagramStory');if(e.target.checked)draft.selected.push('instagramStory');saveDraft();shell();return;}
     const label=document.querySelector('[data-story-label]');if(label&&key==='label')label.textContent=e.target.value||'Application Form';saveDraft();return;}
-  if(e.target.dataset.storySize){const key=e.target.dataset.storySize,item=draft.instagram.story.layout[key];item.width=Number(e.target.value)/100;item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,item.x));updateStoryItem(key);saveDraft();return;}
+  if(e.target.dataset.storySize){const key=e.target.dataset.storySize,item=draft.instagram.story.layout[key];item.width=Number(e.target.value)/100;item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,item.x));updateStoryItem(key);markStoryCustom();saveDraft();return;}
 
   if (e.target.hasAttribute('data-manychat-post')) { draft.manychat.postUrl = e.target.value; saveDraft(); return; }
   if (e.target.hasAttribute('data-manychat-link')) {
@@ -872,6 +879,30 @@ async function musicDialog(){
   el('music-retry').onclick=()=>{if(!busy&&!pickerOwned)connect();};
   await connect();
 }
+let storyLayoutTimer;
+function refreshStoryLayoutSelection(){
+ const id=selectedStoryPreset(draft.instagram.story);
+ for(const button of document.querySelectorAll('[data-story-preset]')){const active=button.dataset.storyPreset===id;button.setAttribute('aria-pressed',String(active));button.querySelector('.layout-selected').hidden=!active;}
+}
+function markStoryCustom(){draft.instagram.story.layoutPreset='custom';refreshStoryLayoutSelection();}
+function storyPresetMeasurements(){
+ const canvas=document.querySelector('[data-story-canvas]'),card=canvas?.querySelector('[data-story-item="card"]'),image=card?.querySelector('img'),height=canvas?.getBoundingClientRect().height||1;
+ const photo=platformMedia('instagram')[0];
+ return {hasLink:draft.instagram.story.linkEnabled!==false,imageAspect:image?.naturalWidth?image.naturalWidth/image.naturalHeight:(photo?.width||1)/(photo?.height||1),chromeHeight:card?(card.getBoundingClientRect().height-(image?.getBoundingClientRect().height||0))/height:.12};
+}
+function selectStoryLayout(id){
+ if(workerBusy())return;
+ if(id==='custom'){markStoryCustom();saveDraft();return;}
+ const layout=storyPresetLayout(id,storyPresetMeasurements());
+ draft.instagram.story.layout=layout;draft.instagram.story.layoutPreset=id;
+ const canvas=document.querySelector('[data-story-canvas]');clearTimeout(storyLayoutTimer);canvas?.classList.add('is-aligning');
+ for(const key of ['card','link'])updateStoryItem(key);
+ canvas?.setAttribute('data-ig-layout',JSON.stringify(layout));
+ const range=document.querySelector('[data-story-size="card"]');if(range)range.value=Math.round(layout.card.width*100);
+ refreshStoryLayoutSelection();storyGuides();saveDraft();
+ const status=document.querySelector('[data-story-alignment]');if(status)status.textContent=document.querySelector('[data-story-preset="'+id+'"] .layout-name')?.textContent+' layout selected';
+ storyLayoutTimer=setTimeout(()=>canvas?.classList.remove('is-aligning'),500);
+}
 function updateStoryItem(key){
   const item=draft.instagram.story.layout[key],el=document.querySelector('[data-story-item="'+key+'"]');
   if(el){el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
@@ -893,7 +924,7 @@ function moveStoryItem(key,x,y,{magnetic=false}={}){
 }
 function autoAlignStory(){
   if(workerBusy())return;
-  draft.instagram.story.layout=alignStoryItems(draft.instagram.story.layout,storyMeasurements());
+  draft.instagram.story.layout=alignStoryItems(draft.instagram.story.layout,storyMeasurements());markStoryCustom();
   const canvas=document.querySelector('[data-story-canvas]');canvas?.classList.add('is-aligning');
   for(const key of ['card','link'])updateStoryItem(key);
   setTimeout(()=>canvas?.classList.remove('is-aligning'),250);
@@ -901,6 +932,7 @@ function autoAlignStory(){
   const status=document.querySelector('[data-story-alignment]');if(status)status.textContent=draft.instagram.story.linkEnabled===false?'Post centered':'Post and link aligned';
 }
 function bindStoryGestures(){
+  for(const button of document.querySelectorAll('[data-story-mini-layout]')){const layout=JSON.parse(button.dataset.storyMiniLayout);for(const [key,selector] of [['card','.mini-post'],['link','.mini-link']]){const el=button.querySelector(selector);if(el){el.style.left=layout[key].x*100+'%';el.style.top=layout[key].y*100+'%';if(key==='card')el.style.width=layout[key].width*100+'%';}}}
   for(const canvas of document.querySelectorAll('[data-ig-canvas]')){
     const layout=JSON.parse(canvas.dataset.igLayout);if(canvas.dataset.igPhoto)canvas.style.setProperty('--story-image','url("'+canvas.dataset.igPhoto+'")');
     for(const key of ['card','link']){const el=canvas.querySelector('[data-ig-item="'+key+'"]'),item=layout[key];if(!el)continue;el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
@@ -911,12 +943,12 @@ function bindStoryGestures(){
     el.onpointerdown=e=>{
       if(e.button!==0||workerBusy())return;e.preventDefault();el.setPointerCapture(e.pointerId);
       const key=el.dataset.storyItem,rect=el.closest('[data-story-canvas]').getBoundingClientRect(),start={...draft.instagram.story.layout[key]},origin={x:e.clientX,y:e.clientY};
-      el.onpointermove=move=>moveStoryItem(key,start.x+(move.clientX-origin.x)/rect.width,start.y+(move.clientY-origin.y)/rect.height,{magnetic:true});
+      el.onpointermove=move=>{if(Math.abs(move.clientX-origin.x)+Math.abs(move.clientY-origin.y)<2)return;markStoryCustom();moveStoryItem(key,start.x+(move.clientX-origin.x)/rect.width,start.y+(move.clientY-origin.y)/rect.height,{magnetic:true});};
       el.onpointerup=el.onpointercancel=up=>{if(el.hasPointerCapture(up.pointerId))el.releasePointerCapture(up.pointerId);el.onpointermove=el.onpointerup=el.onpointercancel=null;settleStoryGuides();saveDraft();};
     };
     el.onkeydown=e=>{
       if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)||workerBusy())return;e.preventDefault();
-      const key=el.dataset.storyItem,item=draft.instagram.story.layout[key],step=e.shiftKey?.04:.01;
+      markStoryCustom();const key=el.dataset.storyItem,item=draft.instagram.story.layout[key],step=e.shiftKey?.04:.01;
       moveStoryItem(key,item.x+(e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0),item.y+(e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0));storyGuides();saveDraft();
     };
   }
