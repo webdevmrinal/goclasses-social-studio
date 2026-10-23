@@ -60,7 +60,7 @@ export function instagramOptions(value={}) {
   if(enabled&&musicSource==='picker'&&(!selection||typeof selection.id!=='string'||!/^[a-f0-9-]{36}$/.test(selection.id)))throw new Error('Instagram: choose a song from the Android music picker.');
   const source=typeof story.sourcePostUrl==='string'?story.sourcePostUrl.trim():'';
   if(source&&!instagramPostUrl(source))throw new Error('Instagram Story: use an exact Instagram post URL.');
-  return {postingMethod,music:{enabled,source:musicSource,...(music.reference?{reference:structuredClone(music.reference)}:{}),...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,facebookEnabled:story.facebookEnabled!==false,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
+  return {postingMethod,music:{enabled,source:musicSource,...(musicSource==='details'&&music.reference?{reference:structuredClone(music.reference)}:{}),...(musicSource==='picker'&&selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,facebookEnabled:false,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
 }
 export function storyErrors(story={},selected=[]) {
   const errors=[];
@@ -73,7 +73,7 @@ export function storyErrors(story={},selected=[]) {
 }
 export function importStory(captions) {
   const raw=captions.instagramStory||'',link=storyLinks({instagramStory:raw})[0];
-  return {enabled:Boolean(raw.trim()),facebookEnabled:true,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
+  return {enabled:Boolean(raw.trim()),facebookEnabled:false,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
 }
 
 // Positions stay normalized so mouse, touch and keyboard edits share the same review.

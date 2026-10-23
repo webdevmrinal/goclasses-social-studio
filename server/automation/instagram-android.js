@@ -221,7 +221,7 @@ export class InstagramAndroidWorker {
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
         }
-        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:options.story.facebookEnabled!==false?'Open Story sharing options and enable Facebook Story. Leave Share untouched, then continue here. The app returns to the editor and uses Your story in LIVE only.':'Return to the prepared Story editor with Your story visible. Do not tap it; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
+        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story visible. Do not tap it; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
         const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};
         await ctx.recordPreparation(preparation);
         let publication;

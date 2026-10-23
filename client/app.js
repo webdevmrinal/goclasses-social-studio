@@ -103,7 +103,7 @@ function renderReadiness() {
   const ready = readiness();
   document.querySelectorAll('[data-destination]').forEach(el=>{const selected=draft.selected.includes(el.dataset.destination);el.classList.toggle('selected',selected);el.setAttribute('aria-pressed',String(selected));});
   document.querySelectorAll('[data-destination-status]').forEach(el => { const id = el.dataset.destinationStatus; el.textContent = !draft.selected.includes(id) ? '' : ready[id]?.ready ? 'Ready' : 'Needs attention'; el.classList.toggle('error-text', draft.selected.includes(id) && !ready[id]?.ready); });
-  document.querySelectorAll('[data-editor-readiness]').forEach(el => { const item = ready[el.dataset.editorReadiness]; if(!item)return; el.className = 'destination-readiness blocked'; el.hidden = item.ready || !draft.selected.includes(el.dataset.editorReadiness); el.innerHTML = item.ready ? '' : `${icon('info')}<div><strong>Fix before running</strong><ul>${item.errors.map(error => `<li>${escape(error)}</li>`).join('')}</ul></div>`; });
+  document.querySelectorAll('[data-editor-readiness]').forEach(el => { const item = ready[el.dataset.editorReadiness]; if(!item)return; el.className = 'destination-readiness blocked'; el.hidden = item.ready || !draft.selected.includes(el.dataset.editorReadiness) || el.dataset.editorReadiness==='instagram'&&instagramTab==='story'; el.innerHTML = item.ready ? '' : `${icon('info')}<div><strong>Fix before running</strong><ul>${item.errors.map(error => `<li>${escape(error)}</li>`).join('')}</ul></div>`; });
   document.querySelectorAll('[data-caption-tab]').forEach(el => { el.classList.toggle('needs-fix', draft.selected.includes(el.dataset.captionTab) && !ready[el.dataset.captionTab]?.ready); });
   const bar = document.querySelector('.actionbar'); if (bar) { const host = document.createElement('div'); host.innerHTML = actionbar(); bar.replaceWith(host.firstElementChild); }
 }
@@ -308,7 +308,7 @@ function previewPage() {
   return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
     const images = platformMedia(p.id), caption = draft.captions[p.id] || '';
     const valid = ready[p.id].ready;
-    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagram'?(instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' &middot; Android music: '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details'):''):'Android'+(draft.instagram.music.enabled?' &middot; '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Choose song'):''))+'<br>':''}${p.id==='instagramStory'?(draft.instagram.story.facebookEnabled!==false?'Instagram + Facebook':'Instagram only')+(draft.instagram.story.linkEnabled!==false?' &middot; '+escape(draft.instagram.story.label)+' &middot; '+escape(draft.instagram.story.url):''):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
+    return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagram'?(instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' &middot; Android music: '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details'):''):'Android'+(draft.instagram.music.enabled?' &middot; '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Choose song'):''))+'<br>':''}${p.id==='instagramStory'?'Instagram'+(draft.instagram.story.linkEnabled!==false?' &middot; '+escape(draft.instagram.story.label)+' &middot; '+escape(draft.instagram.story.url):''):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
   }).join('')}</div>${!draft.selected.length ? '<div class="panel empty-state"><h2>No destinations selected</h2><p>Choose destinations in Compose to see your previews.</p></div>' : ''}${footer()}`;
 }
 const statusLabels = { queued: 'Queued', running: 'In progress', dry_run: 'Test complete', posted: 'Published', failed: 'Failed', uncertain: 'Verify outcome', attention: 'Needs attention', waiting_for_input: 'Your turn', awaiting_manual: 'Your turn', needs_setup: 'Choose flow', skipped: 'Skipped' };
@@ -621,7 +621,7 @@ document.addEventListener('click', async e => {
       } return;
     }
     if(button.hasAttribute('data-native-device')){await nativeDeviceDialog();return;}
-    if(button.dataset.nativeType){const updated=structuredClone(state.config);updated.androidDevice={type:button.dataset.nativeType,serial:button.dataset.nativeSerial||''};state.config=await api('/api/config',{method:'PUT',body:updated});if(updated.androidDevice.type==='phone'){draft.instagram.music.source='manual';saveDraft();}modal.close();await refresh();shell();toast('Android device selected.');return;}
+    if(button.dataset.nativeType){const updated=structuredClone(state.config);updated.androidDevice={type:button.dataset.nativeType,serial:button.dataset.nativeSerial||''};state.config=await api('/api/config',{method:'PUT',body:updated});if(updated.androidDevice.type==='phone')draft.instagram.music.source='manual';if(nativePostingChoice)draft.instagram.postingMethod='android';saveDraft();modal.close();await refresh();shell();toast('Android device selected.');return;}
     if(button.hasAttribute('data-native-open')){androidProgressDismissed='';renderAndroidProgress();if(androidProgressDialog&&!androidProgressDialog.open)androidProgressDialog.showModal();return;}
     if(button.dataset.nativeAction){
       const run=activeRun(),item=run?.items.find(i=>i.status==='waiting_for_input'),handoff=item?.intervention;if(!handoff)return;
@@ -689,8 +689,7 @@ document.addEventListener('click', async e => {
 });
 document.addEventListener('input', e => {
   if(e.target.hasAttribute('data-ig-method')){
-    draft.instagram.postingMethod=e.target.value;
-    saveDraft();shell();return;
+    selectPostingRoute(e.target.value).catch(error=>{shell();toast(error.message,true);});return;
   }
   if(e.target.hasAttribute('data-song-source')){draft.instagram.music.source=e.target.value;draft.instagram.music.reference||={title:'',artist:'',audioUrl:''};saveDraft();shell();return;}
   if(e.target.dataset.songField){draft.instagram.music.reference||={};draft.instagram.music.reference[e.target.dataset.songField]=e.target.value;saveDraft();return;}
@@ -971,6 +970,19 @@ async function updatesDialog(){
   };draw();
 }
 
-async function nativeDeviceDialog(){
+let nativePostingChoice=false,changingPostingRoute=false;
+async function nativeDeviceDialog({posting=false}={}){
+ nativePostingChoice=posting;
  const {devices}=await api('/api/android/devices');showDialog('Music & Story device','<p>Choose the device used for native Instagram steps.</p>'+devices.map(d=>'<div class="native-device-row"><span>'+escape(d.model)+' <small>'+escape(d.state)+'</small></span><button class="button primary" data-native-type="phone" data-native-serial="'+escape(d.serial)+'" '+(d.state!=='device'?'disabled':'')+'>Use phone</button></div>').join('')+(!devices.length?'<p>No USB phone detected. Connect and unlock it, then allow USB debugging.</p>':'')+'<button class="button" data-native-type="emulator">Use dedicated emulator</button>','<button class="button" data-dialog-close>Cancel</button>');
+}
+
+async function selectPostingRoute(route){
+ if(changingPostingRoute||workerBusy())return;
+ if(!['web','emulator','phone'].includes(route))throw Error('Choose Web, Emulator or Phone.');
+ if(route==='phone'&&state.config.androidDevice?.type!=='phone'){shell();await nativeDeviceDialog({posting:true});return;}
+ changingPostingRoute=true;
+ try{
+  if(route==='emulator'&&state.config.androidDevice?.type!=='emulator'){const updated=structuredClone(state.config);updated.androidDevice={type:'emulator',serial:''};state.config=await api('/api/config',{method:'PUT',body:updated});}
+  draft.instagram.postingMethod=route==='web'?'web':'android';if(route==='phone')draft.instagram.music.source='manual';saveDraft();shell();
+ }finally{changingPostingRoute=false;}
 }

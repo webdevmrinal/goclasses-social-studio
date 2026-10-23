@@ -162,9 +162,10 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     for(const id of ['instagram','instagramStory']){
       if(process.platform!=='win32'&&(id==='instagramStory'&&req.body.selected?.includes(id)||id==='instagram'&&req.body.selected?.includes(id)&&(usesInstagramAndroid(req.body.instagram,id)||req.body.instagram?.music?.enabled))){destinations[id].ready=false;destinations[id].errors.push('Android posting and Story sharing require the configured Windows worker.');}
       if(!instagramMusicEnabled(req.body.instagram,id)||!req.body.selected?.includes(id))continue;
-      try{if(req.body.instagram?.music?.source!=='details')instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
+      try{if(!['manual','details'].includes(req.body.instagram?.music?.source))instagramWorker.selection(req.body.instagram?.music?.selection,config.platforms.instagram.handle);}
       catch(error){destinations[id].ready=false;destinations[id].errors.push(error.message);}
     }
+    for(const item of Object.values(destinations))item.errors=[...new Set(item.errors)];
     res.json({destinations});
   });
   app.post('/api/validate', async (req, res) => {

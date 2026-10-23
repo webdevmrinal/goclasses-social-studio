@@ -108,15 +108,15 @@ test('owned Story cleanup unwinds inherited music editors without a Cancel butto
 
 test('direct Your story preparation never presses either publish shortcut or blue arrow',async()=>{
  const f=await directFixture(),proof=await prepareStoryAudience(f.s,{facebookEnabled:false});assert.deepEqual(proof.destinations,['instagram']);assert.equal(proof.publishControl.id,nativeId('your_story_share_shortcut_button'));assert.deepEqual(f.calls,[]);
- await assert.rejects(prepareStoryAudience(f.s),/Enable Facebook/);assert.deepEqual(f.calls,[]);
+ assert.deepEqual((await prepareStoryAudience(f.s)).destinations,['instagram']);assert.deepEqual(f.calls,[]);
  await publishStory(f.s,proof,{facebookEnabled:false});assert.deepEqual(f.calls,['Your story']);await assert.rejects(publishStory(f.s,proof,{facebookEnabled:false}),/already attempted/);assert.deepEqual(f.calls,['Your story']);
 });
-test('a manually reviewed Facebook audience returns to editor before the same one-shot shortcut',async()=>{
+test('an existing audience sheet returns to editor before the same one-shot shortcut',async()=>{
  const f=await directFixture();f.sheet=true;
- const proof=await prepareStoryAudience(f.s);assert.deepEqual(proof.destinations,['instagram','facebook']);assert.deepEqual(f.calls,['Back to editor']);await publishStory(f.s,proof);assert.deepEqual(f.calls,['Back to editor','Your story']);
+ const proof=await prepareStoryAudience(f.s);assert.deepEqual(proof.destinations,['instagram']);assert.deepEqual(f.calls,['Back to editor']);await publishStory(f.s,proof);assert.deepEqual(f.calls,['Back to editor','Your story']);
 });
 test('mismatched, changed or ambiguous direct Story controls block before a publishing request',async()=>{
- const f=await directFixture(),options={facebookEnabled:false};f.sheet=true;await assert.rejects(prepareStoryAudience(f.s,options),/Turn off Facebook/);assert.deepEqual(f.calls,[]);f.sheet=false;
+ const f=await directFixture(),options={facebookEnabled:false};f.sheet=true;await prepareStoryAudience(f.s,options);assert.deepEqual(f.calls,['Back to editor']);f.calls.length=0;
  let proof=await prepareStoryAudience(f.s,options);f.changed=true;await assert.rejects(publishStory(f.s,proof,options),/changed/);assert.deepEqual(f.calls,[]);f.changed=false;f.duplicate=true;await assert.rejects(storyAudienceEvidence(f.s,options),/prepared Story/);assert.deepEqual(f.calls,[]);
 });
 test('TEST stops before direct Story publish and a lost LIVE click response is never repeated',async()=>{

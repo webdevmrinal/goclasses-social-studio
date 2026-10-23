@@ -11,7 +11,7 @@ const instagramKey=(value,id)=>{
   if(id==='instagramMusic')return JSON.stringify({enabled,track});
   if(id==='instagram')return JSON.stringify({method:instagramMethod(value),enabled,track});
   const story=value?.story||{};
-  return JSON.stringify({track,musicEnabled:enabled,facebookEnabled:story.facebookEnabled!==false,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});
+  return JSON.stringify({track,musicEnabled:enabled,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});
 };
 export function setupIssues(config, id) {
   if(['instagramStory','instagramMusic'].includes(id))id='instagram';
