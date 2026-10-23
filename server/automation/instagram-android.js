@@ -222,7 +222,7 @@ export class InstagramAndroidWorker {
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
         }
-        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story visible. Do not tap it; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
+        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story or Your stories visible. Do not tap either button; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
         const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};
         await ctx.recordPreparation(preparation);
         let publication,submittedAt;const preview=await storyPreviewPixels(await s.screenshot(),nativeBounds({bounds:evidence.bounds}));

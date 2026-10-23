@@ -57,11 +57,12 @@ export async function addStoryLink(s,{url,label,layout}) {
 }
 // Your story publishes immediately. Preparation and TEST must never tap it.
 const storySubmitAttempts=new WeakMap();
+const directStoryLabels=new Set(['Your story','Your stories']);
 function directStoryControl(nodes){
  const matches=nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&n['resource-id']===nativeId('your_story_share_shortcut_button'));
- if(!has(nodes,'story_share_controls_action_bar')||has(nodes,'share_story_button')||matches.length!==1)throw new InterventionError('Open the prepared Story editor with Your story visible. Leave that button untouched; the app will share in LIVE only.');
+ if(!has(nodes,'story_share_controls_action_bar')||has(nodes,'share_story_button')||matches.length!==1)throw new InterventionError('Open the prepared Story editor with Your story or Your stories visible. Leave that button untouched; the app will share in LIVE only.');
  const control=matches[0];
- if((control.class||control.tag)!=='android.widget.Button'||control['content-desc']!=='Your story'||control.enabled!=='true'||control.clickable!=='true')throw new InterventionError('The Your story control changed. Nothing was shared.');
+ if((control.class||control.tag)!=='android.widget.Button'||!directStoryLabels.has(control['content-desc'])||control.enabled!=='true'||control.clickable!=='true')throw new InterventionError('The Your story control changed. Nothing was shared.');
  const b=nativeBounds(control);if(b.width<=0||b.height<=0)throw new InterventionError('The Your story control is not visible. Nothing was shared.');return control;
 }
 export async function prepareStoryAudience(s){
@@ -76,13 +77,13 @@ export async function storyAudienceEvidence(s){
  const nodes=await s.screen(),control=directStoryControl(nodes),canvases=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('camera_photo_texture_view'));
  if(canvases.length!==1)throw new InterventionError('The Story image preview disappeared.');
  const canvas=canvases[0],b=nativeBounds(canvas),image=await sharp(await s.screenshot()).extract({left:b.x,top:b.y,width:b.width,height:b.height}).raw().toBuffer();
- return {destinations:['instagram'],bounds:canvas.bounds,hash:digest(image),publishControl:{id:control['resource-id'],bounds:control.bounds}};
+ return {destinations:['instagram'],bounds:canvas.bounds,hash:digest(image),publishControl:{id:control['resource-id'],label:control['content-desc'],bounds:control.bounds}};
 }
 export async function publishStory(s,evidence,options={}){
  s.signal?.throwIfAborted();
  if(JSON.stringify(await storyAudienceEvidence(s,options))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');
  const session=s.id??null;if(storySubmitAttempts.get(s)===session)throw new InterventionError('Story sharing was already attempted. Verify Instagram before retrying.');
- const selector='//android.widget.Button[@package="com.instagram.android" and @resource-id='+xpathLiteral(nativeId('your_story_share_shortcut_button'))+' and @content-desc="Your story" and @bounds='+xpathLiteral(evidence.publishControl.bounds)+' and @displayed="true" and @enabled="true"]';
+ const selector='//android.widget.Button[@package="com.instagram.android" and @resource-id='+xpathLiteral(nativeId('your_story_share_shortcut_button'))+' and @content-desc='+xpathLiteral(evidence.publishControl.label)+' and @bounds='+xpathLiteral(evidence.publishControl.bounds)+' and @displayed="true" and @enabled="true"]';
  const id=await s.find('xpath',selector);s.signal?.throwIfAborted();
  // Record before the single publishing request, including a lost response.
  storySubmitAttempts.set(s,session);await s.request('/element/'+id+'/click','POST',{});
