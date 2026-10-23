@@ -12,7 +12,7 @@ import {ANDROID_DISPLAY,ANDROID_ANIMATIONS,displaySettings} from '../shared/andr
 
 const exec = promisify(execFile);
 const action = process.argv[2] || 'status';
-if (!['status', 'start', 'cold-start', 'stop', 'doctor', 'play-store', 'optimize'].includes(action)) throw new Error('Use status, start, cold-start, stop, doctor, play-store, or optimize.');
+if (!['status', 'start', 'server-start', 'cold-start', 'stop', 'doctor', 'play-store', 'optimize'].includes(action)) throw new Error('Use status, start, cold-start, stop, doctor, play-store, or optimize.');
 if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) throw new Error('This experimental emulator launcher currently supports Windows.');
 const root = path.join(process.env.LOCALAPPDATA, 'GoClassesSocialStudio', 'android-worker');
 const sdk = path.join(root, 'sdk');
@@ -102,10 +102,9 @@ async function launch(file, args, { visible = false, log } = {}) {
     return child.pid;
   } finally { if (fd !== undefined) closeSync(fd); }
 }
-async function requireTools() {
+async function requireTools({phoneOnly=false}={}) {
   for (const [label, file] of [
-    ['Android emulator', emulator], ['Android platform-tools', adb], ['Appium', appium],
-    ['Android virtual device', avdConfig],
+    ...(!phoneOnly?[['Android emulator', emulator],['Android virtual device', avdConfig]]:[]), ['Android platform-tools', adb], ['Appium', appium],
     ['Java JDK', javaHome ? path.join(javaHome, 'bin', 'javac.exe') : '']
   ]) {
     if (!file || !await exists(file)) throw new Error(label + ' is missing. Finish the dedicated Android test setup first. No app settings were changed.');
@@ -188,6 +187,17 @@ async function status() {
     appiumUrl, publishingEnabled: false
   }, null, 2));
 }
+// Start only the driver for a USB phone. Never boot or tune the emulator here.
+async function startPhoneServer(){
+ await requireTools({phoneOnly:true});await fs.mkdir(path.join(root,'logs'),{recursive:true});const runtime=await readJson(runtimeFile);
+ if(!await ownedAppium(runtime.appiumPid)||!await serverReady()){
+  if(!await portAvailable(4731))throw new Error('Port 4731 belongs to an unverified service. It was left unchanged.');
+  runtime.appiumPid=await launch(process.execPath,['--require',path.resolve('scripts/android-console.cjs'),appium,'--address','127.0.0.1','--port','4731','--use-drivers','uiautomator2','--log-level','warn','--log-no-colors','--log',path.join(root,'logs','appium.log')]);
+  await fs.writeFile(runtimeFile,JSON.stringify(runtime,null,2)+'\n',{mode:0o600});
+ }
+ const end=Date.now()+45000;while(Date.now()<end){if(await ownedAppium(runtime.appiumPid)&&await serverReady()){console.log('USB phone driver ready. No emulator or phone settings were changed.');return;}await delay(500);}
+ throw new Error('The USB phone driver did not become ready. No Instagram action was attempted.');
+}
 async function start({ cold = false } = {}) {
   await requireTools();
   await fs.mkdir(path.join(root, 'logs'), { recursive: true });
@@ -249,6 +259,7 @@ async function stop() {
 try {
   if (action === 'status') await status();
   if (action === 'start') await start();
+  if (action === 'server-start') await startPhoneServer();
   if (action === 'cold-start') await start({ cold: true });
   if (action === 'stop') await stop();
   if(action==='optimize')await optimize();

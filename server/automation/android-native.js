@@ -4,11 +4,12 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import {androidDevice,EMULATOR_SERIAL,EMULATOR_AVD} from '../../shared/android-device.js';
 import { ANDROID_DRIVER_SETTINGS } from '../../shared/android-performance.js';
 import { InterventionError } from './utils.js';
 const exec = promisify(execFile);
-export const ANDROID_SERIAL = 'emulator-5556';
-export const ANDROID_AVD = 'GOC_Instagram_Music_Test';
+export const ANDROID_SERIAL = EMULATOR_SERIAL;
+export const ANDROID_AVD = EMULATOR_AVD;
 export const ANDROID_URL = 'http://127.0.0.1:4731';
 const decode = value => value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, key) => key[0] === '#' ? String.fromCodePoint(parseInt(key.slice(key[1]?.toLowerCase() === 'x' ? 2 : 1), key[1]?.toLowerCase() === 'x' ? 16 : 10)) : ({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[key]));
 export function nativeNodes(xml) {
@@ -25,13 +26,13 @@ export function nativeBounds(node) {
 export const xpathLiteral = value => !value.includes('"') ? '"' + value + '"' : !value.includes("'") ? "'" + value + "'" : 'concat(' + value.split('"').map(part => '"' + part + '"').join(", '\"', ") + ')';
 // Retry only an explicit pre-session instrumentation failure. A lost/ambiguous
 // response may have created a session, so it must never be retried automatically.
-export async function connectAndroidDriver(create,reset){
+export async function connectAndroidDriver(create,reset,recovery='Run android:start and try again.'){
   for(let attempt=0;attempt<2;attempt++){
     const {ok,result}=await create();
     if(ok&&result.value?.sessionId)return result.value.sessionId;
     const message=result.value?.message||'';
     if(attempt===0&&!result.value?.sessionId&&/instrumentation process cannot be initialized within \d+ms timeout/i.test(message)){await reset();continue;}
-    throw new InterventionError('The dedicated Android driver could not connect. Run android:start and try again.');
+    throw new InterventionError('The selected Android driver could not connect. '+recovery);
   }
 }
 const PHOTO_PROVIDER='com.google.android.providers.media.module';
@@ -46,7 +47,7 @@ export function instagramOwnsPhotoPicker(activities){
 }
 export async function cancelInstagramPhotoAccess(s){
   const nodes=await s.screen();if(!isPhotoAccessPicker(nodes))return false;
-  if(!instagramOwnsPhotoPicker(await s.adb(['shell','dumpsys','activity','activities'])))throw new InterventionError('The photo-access dialog could not be verified as belonging to Instagram. Close it in the emulator, then retry. Its selections were preserved.');
+  if(!instagramOwnsPhotoPicker(await s.adb(['shell','dumpsys','activity','activities'])))throw new InterventionError('The photo-access dialog could not be verified as belonging to Instagram. Close it on the selected Android device, then retry. Its selections were preserved.');
   const cancel=nodes.filter(n=>n.displayed==='true'&&n.package===PHOTO_PROVIDER&&n.tag==='android.widget.ImageButton'&&n['content-desc']==='Cancel');
   if(cancel.length!==1)throw new InterventionError('Close the Android photo-access dialog, then retry. No photo permissions were changed.');
   // Cancel pending edits only. Never press Allow on a stale dialog, broaden
@@ -108,24 +109,30 @@ export function androidAnrOwner(nodes){
 }
 export function instagramAnr(nodes){return androidAnrOwner(nodes)==='instagram';}
 export class AndroidSession {
-  constructor({signal}={}) {
-    this.signal=signal;
+  constructor({signal,device}={}) {
+    this.signal=signal;this.device=androidDevice(device);this.serial=this.device.serial;
     if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) throw new InterventionError('Instagram music and Stories require the configured Windows Android worker.');
     this.root = path.join(process.env.LOCALAPPDATA, 'GoClassesSocialStudio', 'android-worker');
     this.adbPath = path.join(this.root, 'sdk', 'platform-tools', 'adb.exe');
   }
   async adb(args, timeout=20000) {
     this.signal?.throwIfAborted();
-    const result = await exec(this.adbPath, ['-s', ANDROID_SERIAL, ...args], { windowsHide:true, timeout, maxBuffer:4*1024*1024, signal:this.signal });
+    const result = await exec(this.adbPath, ['-s', this.serial, ...args], { windowsHide:true, timeout, maxBuffer:4*1024*1024, signal:this.signal });
     this.signal?.throwIfAborted();return result.stdout.trim();
   }
   async open({ start = false } = {}) {
     // Warm workers skip the launcher, repeated PowerShell ownership queries and tuning.
     let ready=false;try{const response=await fetch(ANDROID_URL+'/status',{signal:AbortSignal.timeout(1200)});ready=response.ok&&(await response.json()).value?.ready===true;}catch{}
+    if(this.device.type==='phone'){
+      if(await this.adb(['get-state']).catch(()=>'')!=='device')throw new InterventionError('Connect and unlock the selected USB phone, then allow USB debugging. No other device was selected.');
+      if(await this.adb(['shell','getprop','ro.kernel.qemu'])==='1')throw new InterventionError('The selected phone is an emulator. Select the intended USB phone.');
+      if(!ready)await exec(process.execPath,[path.resolve('scripts/android-worker.mjs'),'server-start'],{windowsHide:true,timeout:70000,maxBuffer:1024*1024,signal:this.signal});
+    }else{
     const existing=ready?await this.adb(['emu','avd','name']).catch(()=>''):'';
     if(start&&(!ready||!existing.split(/\r?\n/).map(value=>value.trim()).includes(ANDROID_AVD)))await exec(process.execPath, [path.resolve('scripts/android-worker.mjs'), 'start'], { windowsHide:true, timeout:150000, maxBuffer:1024*1024, signal:this.signal });
     const name = (existing||await this.adb(['emu','avd','name'])).split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&x!=='OK').join('');
     if (name !== ANDROID_AVD || await this.adb(['shell','getprop','sys.boot_completed']) !== '1') throw new InterventionError('Start the dedicated Instagram Android emulator and finish signing in.');
+    }
     const packages = await this.adb(['shell','pm','list','packages']);
     const installedServer = packages.split(/\s+/).includes('package:io.appium.uiautomator2.server') && packages.includes('package:io.appium.uiautomator2.server.test');
     const deviceServer = installedServer ? await this.adb(['shell','dumpsys','package','io.appium.uiautomator2.server']) : '';
@@ -133,7 +140,7 @@ export class AndroidSession {
     const reusableServer = deviceServer.match(/versionName=([^\s]+)/)?.[1] === serverPackage.version;
     this.id=await connectAndroidDriver(async()=>{
     const response = await fetch(ANDROID_URL+'/session', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({capabilities:{alwaysMatch:{
-      platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':ANDROID_SERIAL,'appium:deviceName':ANDROID_AVD,
+      platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':this.serial,'appium:deviceName':this.device.type==='phone'?this.serial:ANDROID_AVD,
       'appium:appPackage':'com.instagram.android','appium:autoLaunch':false,'appium:noReset':true,'appium:fullReset':false,
       'appium:skipUnlock':true,'appium:skipDeviceInitialization':packages.includes('package:io.appium.settings'),
       'appium:skipServerInstallation':reusableServer,'appium:uiautomator2ServerLaunchTimeout':60000,'appium:adbExecTimeout':60000,'appium:skipLogcatCapture':true,'appium:printPageSourceOnFindFailure':false,'appium:newCommandTimeout':900
@@ -143,7 +150,7 @@ export class AndroidSession {
       // Reset only our automation instrumentation, preserving Instagram data,
       // its signed-in account and every unsent editor. No publication is retried.
       for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
-    });
+    },this.device.type==='phone'?'Reconnect and unlock the selected USB phone, allow debugging, then retry.':'Run android:start and try again.');
     this.signal?.throwIfAborted();
     this.ratingPromptDismissed=false;
     await this.request('/appium/settings','POST',{settings:ANDROID_DRIVER_SETTINGS});
@@ -261,7 +268,7 @@ export class AndroidSession {
     await this.until(async nodes=>{
       if(isPhotoAccessPicker(nodes)){await cancelInstagramPhotoAccess(this);return false;}
       return nodes.some(n=>n.displayed==='true'&&n.package==='com.instagram.android');
-    },'Instagram did not finish opening on Android. Open it in the emulator and try again.',90000);
+    },'Instagram did not finish opening on Android. Open it on the selected Android device and try again.',90000);
   }
   async account(expected) {
     await this.activate();
@@ -273,7 +280,7 @@ export class AndroidSession {
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
         await this.request('/back','POST',{});await delay(400);continue;
       }
-      if(current.some(n=>n['resource-id']===nativeId('new_post_title')||n['resource-id']===nativeId('gallery_folder_menu_tv')))throw new InterventionError('Instagram has an unfinished New post screen. Close it in the emulator, then retry. Your draft was preserved.');
+      if(current.some(n=>n['resource-id']===nativeId('new_post_title')||n['resource-id']===nativeId('gallery_folder_menu_tv')))throw new InterventionError('Instagram has an unfinished New post screen. Close it on the selected Android device, then retry. Your draft was preserved.');
       if(current.some(n=>/caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Close the unsent Instagram Android draft before continuing.');
       if(!current.some(n=>n['resource-id']===nativeId('profile_tab'))&&(current.some(n=>n['resource-id']===nativeId('row_feed_profile_header'))||current.some(n=>n['resource-id']===nativeId('row_feed_button_share'))||current.some(n=>n['resource-id']===nativeId('profile_tab_layout')))){
         // Close only an observed public viewer/profile, never an unsent editor.

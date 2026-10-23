@@ -2,12 +2,14 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import {androidDevice} from '../shared/android-device.js';
 import { DEFAULT_REPLY_MESSAGES, replyPool, manychatBuilderUrl } from '../shared/manychat.js';
 import { DEFAULT_WHATSAPP_NAME, DEFAULT_WHATSAPP_URL, whatsappChannelUrl } from '../shared/whatsapp.js';
 import { DEFAULT_TELEGRAM_NAME, DEFAULT_TELEGRAM_URL, telegramChannelUrl } from '../shared/telegram.js';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DATA = path.resolve(ROOT, process.env.DATA_DIR || 'data');
 export const defaults = {
+  androidDevice:androidDevice(),
   platforms: {
     instagram: { handle: '' },
     linkedin: { companyPageUrl: 'https://www.linkedin.com/company/74757117/admin/dashboard/', companyName: 'GO Classes' },
@@ -32,6 +34,7 @@ export async function readJson(file, fallback) {
 export async function loadConfig() { return readJson(path.join(DATA, 'config.json'), defaults); }
 export function validateConfig(input) {
   const result = structuredClone(defaults);
+  result.androidDevice=androidDevice(input?.androidDevice);
   for (const [id, fields] of Object.entries(result.platforms)) {
     for (const key of Object.keys(fields)) {
       const value = input?.platforms?.[id]?.[key] ?? fields[key];

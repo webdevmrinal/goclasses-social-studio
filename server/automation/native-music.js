@@ -57,8 +57,10 @@ export async function assistNativeStage(s,ctx,details,attempt,inspect){
 export async function resolveMusic(s,chosen,ctx={}){
  const manual=async reason=>{
   if(!ctx.intervene)throw new InterventionError(reason);
-  return ctx.intervene({kind:'music',title:'Choose the song in Instagram',instructions:'In the emulator, tap the song to preview it. Leave the music library open, then check your selection here. Do not tap the arrow, Done, Save or Share.',requested:{title:chosen.title,artist:chosen.artist},reason},async()=>visibleMusicChoice(await s.screen()));
+  const selected=await ctx.intervene({kind:'music',title:'Choose the song in Instagram',instructions:'On your Android device, tap the song to preview it. Leave the music library open, then check your selection here. Do not tap the arrow, Done, Save or Share.',requested:chosen.manual?undefined:{title:chosen.title,artist:chosen.artist},reason},async()=>visibleMusicChoice(await s.screen()));
+  await ctx.step?.('Applying your selected song: '+selected.title+'...');return selected;
  };
+ if(chosen.manual)return manual('Choose music on your connected Android device. No automatic search will run.');
  try{
   let nodes=await s.screen();assertMusicLibrary(nodes);
   const preview=visibleMusicChoice(nodes);if(matchesMusicReference(preview,chosen))return preview;

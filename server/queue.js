@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import {androidDeviceKey} from '../shared/android-device.js';
 import { EventEmitter } from 'node:events';
 import {NativeInterventions} from './native-interventions.js';
 import { randomUUID } from 'node:crypto';
@@ -213,7 +214,7 @@ export class Queue extends EventEmitter {
     const runController=new AbortController();this.runController={runId:run.id,controller:runController};
     try {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
-      if(nativeItem&&nativeItem.id!=='instagramMusic'&&this.instagramWorker&&run.status!=='stopping'){
+      if(nativeItem&&(nativeItem.id!=='instagramMusic'||run.config.androidDevice?.type==='phone')&&this.instagramWorker&&run.status!=='stopping'){
         await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
         try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
@@ -362,6 +363,13 @@ export class Queue extends EventEmitter {
           if (this.login.items[id].detectedSettings) await saveDetected(id, this.login.items[id].detectedSettings);
         } catch (error) { this.login.items[id] = { status: error instanceof NetworkError ? 'network_error' : error instanceof InterventionError ? id==='instagram'&&usesInstagramAndroid(instagram)?'needs_attention':'needs_login' : 'verification_failed', message: error.message,...(id==='instagram'?{transport:usesInstagramAndroid(instagram)?'android':'web'}:{}) }; }
         this.login.items[id].checkedAt = new Date().toISOString();
+        if(id==='instagram'&&this.login.items[id].transport==='android')this.login.items[id].deviceKey=androidDeviceKey(config.androidDevice);
+        if(id==='instagram'&&!usesInstagramAndroid(instagram)&&(instagram?.music?.enabled||instagram?.story?.enabled)){
+          this.login.items.instagramNative={status:'checking',transport:'android',deviceKey:androidDeviceKey(config.androidDevice),message:'Checking the selected device for music and Story...'};this.emit('change',this.state());
+          try{await this.instagramWorker.checkAccount(config,{onProgress:async message=>{this.login.items.instagramNative.message=message;this.emit('change',this.state());}});this.login.items.instagramNative.status='verified';this.login.items.instagramNative.message='Selected Android account verified.';}
+          catch(error){this.login.items.instagramNative.status='needs_attention';this.login.items.instagramNative.message=error.message;}
+          this.login.items.instagramNative.checkedAt=new Date().toISOString();
+        }
         if (page && !page.isClosed()) {
           try {
             const record = { id: `login-${randomUUID()}` }, item = { id, screenshots: [] };

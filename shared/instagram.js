@@ -52,15 +52,15 @@ export function instagramOptions(value={}) {
   const music=value.music||{},story=value.story||{},postingMethod=instagramMethod(value);
   if(!['web','android'].includes(postingMethod))throw new Error('Instagram: choose Web or Android for feed posting.');
   if(typeof music!=='object'||typeof story!=='object'||Array.isArray(music)||Array.isArray(story))throw new Error('Invalid Instagram options.');
-  if(music.enabled!==undefined&&typeof music.enabled!=='boolean'||story.enabled!==undefined&&typeof story.enabled!=='boolean'||story.linkEnabled!==undefined&&typeof story.linkEnabled!=='boolean')throw new Error('Invalid Instagram option switch.');
-  if(music.source!==undefined&&!['details','picker'].includes(music.source))throw new Error('Instagram: choose song details or the Instagram picker.');
+  if(music.enabled!==undefined&&typeof music.enabled!=='boolean'||story.enabled!==undefined&&typeof story.enabled!=='boolean'||story.linkEnabled!==undefined&&typeof story.linkEnabled!=='boolean'||story.facebookEnabled!==undefined&&typeof story.facebookEnabled!=='boolean')throw new Error('Invalid Instagram option switch.');
+  if(music.source!==undefined&&!['details','picker','manual'].includes(music.source))throw new Error('Instagram: choose song details or the Instagram picker.');
   const selection=music.selection;
-  const enabled=music.enabled===true,musicSource=music.source==='details'?'details':'picker';
+  const enabled=music.enabled===true,musicSource=music.source==='manual'?'manual':music.source==='details'?'details':'picker';
   if(enabled&&musicSource==='details')musicReference(music.reference);
   if(enabled&&musicSource==='picker'&&(!selection||typeof selection.id!=='string'||!/^[a-f0-9-]{36}$/.test(selection.id)))throw new Error('Instagram: choose a song from the Android music picker.');
   const source=typeof story.sourcePostUrl==='string'?story.sourcePostUrl.trim():'';
   if(source&&!instagramPostUrl(source))throw new Error('Instagram Story: use an exact Instagram post URL.');
-  return {postingMethod,music:{enabled,source:musicSource,...(music.reference?{reference:structuredClone(music.reference)}:{}),...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
+  return {postingMethod,music:{enabled,source:musicSource,...(music.reference?{reference:structuredClone(music.reference)}:{}),...(selection?{selection:structuredClone(selection)}:{})},story:{enabled:story.enabled===true,facebookEnabled:story.facebookEnabled!==false,linkEnabled:story.linkEnabled!==false,url:typeof story.url==='string'?story.url.trim():'',label:typeof story.label==='string'?story.label.trim():'',sourcePostUrl:source?instagramPostUrl(source):'',layout:storyLayout(story.layout)}};
 }
 export function storyErrors(story={},selected=[]) {
   const errors=[];
@@ -73,7 +73,7 @@ export function storyErrors(story={},selected=[]) {
 }
 export function importStory(captions) {
   const raw=captions.instagramStory||'',link=storyLinks({instagramStory:raw})[0];
-  return {enabled:Boolean(raw.trim()),linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
+  return {enabled:Boolean(raw.trim()),facebookEnabled:true,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
 }
 
 // Positions stay normalized so mouse, touch and keyboard edits share the same review.

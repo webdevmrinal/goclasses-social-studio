@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import {prepareStoryAudience,storyAudienceEvidence,discardStory} from '../server/automation/native-story.js';
+import {prepareStoryAudience,storyAudienceEvidence,publishStory,discardStory} from '../server/automation/native-story.js';
 import {openStoryMusicLibrary} from '../server/automation/native-music.js';
 import {Queue} from '../server/queue.js';
 import {defaults} from '../server/config.js';
@@ -106,10 +106,27 @@ test('owned Story cleanup unwinds inherited music editors without a Cancel butto
  await discardStory(s);assert.equal(i,6);assert.deepEqual(calls,['/back','/back','cancel_button','Discard owned Story']);
 });
 
-test('the blue arrow preserves Facebook + Instagram and changed or ambiguous audiences block sharing',async()=>{
- const n=(id,extra={})=>({'resource-id':nativeId(id),displayed:'true',...extra}),picture=await sharp({create:{width:32,height:32,channels:3,background:'#dddddd'}}).png().toBuffer(),calls=[];
- let facebook=true,extraRadio=false;
- const s={screen:async()=>[n('share_story_button'),n('camera_photo_texture_view',{bounds:'[0,0][32,32]'}),n('recipient_picker_radio_button',{checked:'true'}),...(facebook?[n('sharing_preferences_label',{text:'And Facebook Story'})]:[]),...(extraRadio?[n('recipient_picker_radio_button',{checked:'true'})]:[])],click:async(using,label)=>{assert.equal(using,'accessibility id');assert.equal(label,'Share to');calls.push(label);},until:async predicate=>{assert(predicate(await s.screen()));},find:async(using,query)=>{assert(query.includes('row_add_to_story_container'));return 'your-story-radio';},screenshot:async()=>picture};
- const proof=await prepareStoryAudience(s);assert.deepEqual(proof.destinations,['instagram','facebook']);assert.deepEqual(calls,['Share to']);
- facebook=false;await assert.rejects(storyAudienceEvidence(s),/Enable Facebook/);facebook=true;extraRadio=true;await assert.rejects(storyAudienceEvidence(s),/ambiguous/);assert.deepEqual(calls,['Share to']);
+test('direct Your story preparation never presses either publish shortcut or blue arrow',async()=>{
+ const f=await directFixture(),proof=await prepareStoryAudience(f.s,{facebookEnabled:false});assert.deepEqual(proof.destinations,['instagram']);assert.equal(proof.publishControl.id,nativeId('your_story_share_shortcut_button'));assert.deepEqual(f.calls,[]);
+ await assert.rejects(prepareStoryAudience(f.s),/Enable Facebook/);assert.deepEqual(f.calls,[]);
+ await publishStory(f.s,proof,{facebookEnabled:false});assert.deepEqual(f.calls,['Your story']);await assert.rejects(publishStory(f.s,proof,{facebookEnabled:false}),/already attempted/);assert.deepEqual(f.calls,['Your story']);
 });
+test('a manually reviewed Facebook audience returns to editor before the same one-shot shortcut',async()=>{
+ const f=await directFixture();f.sheet=true;
+ const proof=await prepareStoryAudience(f.s);assert.deepEqual(proof.destinations,['instagram','facebook']);assert.deepEqual(f.calls,['Back to editor']);await publishStory(f.s,proof);assert.deepEqual(f.calls,['Back to editor','Your story']);
+});
+test('mismatched, changed or ambiguous direct Story controls block before a publishing request',async()=>{
+ const f=await directFixture(),options={facebookEnabled:false};f.sheet=true;await assert.rejects(prepareStoryAudience(f.s,options),/Turn off Facebook/);assert.deepEqual(f.calls,[]);f.sheet=false;
+ let proof=await prepareStoryAudience(f.s,options);f.changed=true;await assert.rejects(publishStory(f.s,proof,options),/changed/);assert.deepEqual(f.calls,[]);f.changed=false;f.duplicate=true;await assert.rejects(storyAudienceEvidence(f.s,options),/prepared Story/);assert.deepEqual(f.calls,[]);
+});
+test('TEST stops before direct Story publish and a lost LIVE click response is never repeated',async()=>{
+ const {finishPost}=await import('../server/automation/utils.js'),f=await directFixture(),options={facebookEnabled:false},proof=await prepareStoryAudience(f.s,options);
+ const ctx={mode:'TEST',confirmedLive:true,preflight:async()=>storyAudienceEvidence(f.s,options),snapshot:async()=>{},step:async()=>{},markSubmitting:async()=>{},publish:async()=>publishStory(f.s,proof,options),verify:async()=>{}};
+ assert.equal(await finishPost(ctx),'dry_run');assert.deepEqual(f.calls,[]);f.lost=true;await assert.rejects(publishStory(f.s,proof,options),/Lost click/);await assert.rejects(publishStory(f.s,proof,options),/already attempted/);assert.deepEqual(f.calls,['Your story']);
+});
+async function directFixture(){
+ const n=(id,extra={})=>({'resource-id':nativeId(id),package:'com.instagram.android',displayed:'true',...extra}),picture=await sharp({create:{width:32,height:32,channels:3,background:'#dddddd'}}).png().toBuffer();
+ const f={calls:[],sheet:false,changed:false,duplicate:false,lost:false};
+ const button=()=>n('your_story_share_shortcut_button',{class:'android.widget.Button','content-desc':'Your story',clickable:'true',enabled:'true',bounds:f.changed?'[0,33][31,40]':'[0,33][32,40]'});
+ f.s={id:'native-session',screen:async()=>[n('camera_photo_texture_view',{bounds:'[0,0][32,32]'}),...(f.sheet?[n('share_story_button'),n('recipient_picker_radio_button',{checked:'true'}),n('sharing_preferences_label',{text:'And Facebook Story'})]:[n('story_share_controls_action_bar'),button(),...(f.duplicate?[button()]:[])])],click:async()=>assert.fail('Preparation cannot click any control'),until:async predicate=>assert(predicate(await f.s.screen())),find:async(using,query)=>{if(f.sheet){assert(query.includes('row_add_to_story_container'));return 'selected-radio';}assert.equal(using,'xpath');assert(query.includes('your_story_share_shortcut_button'));assert(!query.includes('recipient_picker_button'));assert(query.includes('@content-desc="Your story"'));return 'direct-story-control';},request:async(endpoint)=>{if(endpoint==='/back'){f.calls.push('Back to editor');f.sheet=false;}else{assert.equal(endpoint,'/element/direct-story-control/click');f.calls.push('Your story');if(f.lost)throw Error('Lost click response');}},screenshot:async()=>picture};return f;
+}

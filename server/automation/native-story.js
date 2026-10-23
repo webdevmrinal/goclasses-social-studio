@@ -54,22 +54,49 @@ export async function addStoryLink(s,{url,label,layout}) {
   if(Math.abs((moved.x+moved.width/2)-destination.x)>canvas.width*.07||Math.abs((moved.y+moved.height/2)-destination.y)>canvas.height*.055)throw new InterventionError('The Story link sticker did not move below the image.');
   return {canvas,sticker:moved,url,label};
 }
-export async function prepareStoryAudience(s) {
-  // The observed blue arrow opens audience review. It does not publish.
-  await s.click('accessibility id','Share to');
-  await s.until(nodes=>has(nodes,'share_story_button'),'Instagram Story sharing options are still loading.');
-  return storyAudienceEvidence(s);
+// The shortcut publishes immediately. Preparation and TEST must never tap it.
+const reviewedStoryAudiences=new WeakMap(),storySubmitAttempts=new WeakMap();
+function directStoryControl(nodes){
+ const matches=nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&n['resource-id']===nativeId('your_story_share_shortcut_button'));
+ if(!has(nodes,'story_share_controls_action_bar')||has(nodes,'share_story_button')||matches.length!==1)throw new InterventionError('Open the prepared Story editor with Your story visible. Leave that button untouched; the app will share in LIVE only.');
+ const control=matches[0];
+ if((control.class||control.tag)!=='android.widget.Button'||control['content-desc']!=='Your story'||control.enabled!=='true'||control.clickable!=='true')throw new InterventionError('The Your story control changed. Nothing was shared.');
+ const b=nativeBounds(control);if(b.width<=0||b.height<=0)throw new InterventionError('The Your story control is not visible. Nothing was shared.');
+ return control;
 }
-export async function storyAudienceEvidence(s) {
-  const nodes=await s.screen();
-  const facebook=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('sharing_preferences_label')&&n.text==='And Facebook Story');
-  if(!has(nodes,'share_story_button')||facebook.length!==1)throw new InterventionError('Enable Facebook Story sharing in Instagram sharing options, then retry only this Story. Nothing was shared.');
+function facebookStoryEnabled(nodes){return nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('sharing_preferences_label')&&n.text==='And Facebook Story').length;}
+export async function prepareStoryAudience(s,options={}) {
+ const nodes=await s.screen(),facebookEnabled=options.facebookEnabled!==false;
+ if(has(nodes,'share_story_button')){
+  // A user may open audience options during a handoff. Inspect only; never
+  // click the blue arrow or this sheet's final Share to prepare a direct send.
+  const facebook=facebookStoryEnabled(nodes);
+  if(facebook!==(facebookEnabled?1:0))throw new InterventionError(facebookEnabled?'Enable Facebook Story sharing in Instagram sharing options, or turn off Also share to Facebook in a new review. Nothing was shared.':'Turn off Facebook Story sharing in Instagram sharing options. Nothing was shared.');
   await s.find('xpath','//*[@resource-id='+xpathLiteral(nativeId('row_add_to_story_container'))+']//*[@resource-id='+xpathLiteral(nativeId('recipient_picker_radio_button'))+' and @checked="true"]');
-  if(nodes.filter(n=>n['resource-id']===nativeId('recipient_picker_radio_button')&&n.checked==='true').length!==1)throw new InterventionError('The Story audience is ambiguous. Nothing was shared.');
-  const canvas=nodes.find(n=>n['resource-id']===nativeId('camera_photo_texture_view'));
-  if(!canvas)throw new InterventionError('The Story image preview disappeared.');
-  const b=nativeBounds(canvas),image=await sharp(await s.screenshot()).extract({left:b.x,top:b.y,width:b.width,height:b.height}).raw().toBuffer();
-  return {destinations:['instagram','facebook'],bounds:canvas.bounds,hash:digest(image)};
+  if(nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('recipient_picker_radio_button')&&n.checked==='true').length!==1)throw new InterventionError('The Story audience is ambiguous. Nothing was shared.');
+  reviewedStoryAudiences.set(s,{session:s.id,facebookEnabled});
+  await s.request('/back','POST',{});
+  await s.until(next=>has(next,'story_share_controls_action_bar')&&!has(next,'share_story_button'),'Return to the prepared Story editor. Do not tap Your story.');
+ }
+ return storyAudienceEvidence(s,options);
+}
+export async function storyAudienceEvidence(s,options={}) {
+ const nodes=await s.screen(),control=directStoryControl(nodes),facebookEnabled=options.facebookEnabled!==false,review=reviewedStoryAudiences.get(s);
+ if(facebookEnabled&&!(review&&review.session===s.id&&review.facebookEnabled===true))throw new InterventionError('Enable Facebook Story sharing in Instagram sharing options, or turn off Also share to Facebook in a new review. Nothing was shared.');
+ if(!facebookEnabled&&facebookStoryEnabled(nodes))throw new InterventionError('Facebook is enabled on this Story. Turn it off before continuing. Nothing was shared.');
+ const canvases=nodes.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId('camera_photo_texture_view'));
+ if(canvases.length!==1)throw new InterventionError('The Story image preview disappeared.');
+ const canvas=canvases[0],b=nativeBounds(canvas),image=await sharp(await s.screenshot()).extract({left:b.x,top:b.y,width:b.width,height:b.height}).raw().toBuffer();
+ return {destinations:facebookEnabled?['instagram','facebook']:['instagram'],bounds:canvas.bounds,hash:digest(image),publishControl:{id:control['resource-id'],bounds:control.bounds}};
+}
+export async function publishStory(s,evidence,options={}){
+ s.signal?.throwIfAborted();
+ if(JSON.stringify(await storyAudienceEvidence(s,options))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');
+ const session=s.id??null;if(storySubmitAttempts.get(s)===session)throw new InterventionError('Story sharing was already attempted. Verify Instagram before retrying.');
+ const selector='//android.widget.Button[@package="com.instagram.android" and @resource-id='+xpathLiteral(nativeId('your_story_share_shortcut_button'))+' and @content-desc="Your story" and @bounds='+xpathLiteral(evidence.publishControl.bounds)+' and @displayed="true" and @enabled="true"]';
+ const id=await s.find('xpath',selector);s.signal?.throwIfAborted();
+ // Record before the single publishing request, including a lost response.
+ storySubmitAttempts.set(s,session);await s.request('/element/'+id+'/click','POST',{});
 }
 const storyCompletionDoneAttempts=new WeakMap();
 const storyReceiptEditors=new Set(['share_story_button','story_share_controls_action_bar','music_editor_done_button','music_editor_controls_container','link_sticker_list_web_url_edit_text','caption_input_text_view','new_post_title'].map(nativeId));

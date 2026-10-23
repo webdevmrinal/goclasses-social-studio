@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {AndroidSession,nativeId} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
-import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,confirmNativeStoryPublication,discardStory} from './native-story.js';
+import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,publishStory,confirmNativeStoryPublication,discardStory} from './native-story.js';
 import {matchesMusicReference,resolveMusic,previewMusicChoice,assistNativeStage,musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
@@ -23,11 +23,11 @@ export class InstagramAndroidWorker {
     if(!chosen)throw new Error('Choose the Instagram song again from this music picker.');
     return structuredClone(chosen);
   }
-  chosenMusic(options,handle){return options.music.source==='details'?musicReference(options.music.reference):this.selection(options.music.selection,handle);}
+  chosenMusic(options,handle){return options.music.source==='manual'?{manual:true,source:'manual',durationSeconds:30}:options.music.source==='details'?musicReference(options.music.reference):this.selection(options.music.selection,handle);}
   async open(config,signal,onProgress){
     if(this.busy)throw new InterventionError('Finish choosing Instagram music before starting a run.');
     this.busy=true;
-    try{this.s=this.sessionFactory({signal});await this.s.open({start:true});this.s.onUnresponsive=onProgress||((message)=>this.progress(message));await this.s.account(config.platforms.instagram.handle);return this.s;}
+    try{this.s=this.sessionFactory({signal,device:config.androidDevice});await this.s.open({start:true});this.s.onUnresponsive=onProgress||((message)=>this.progress(message));await this.s.account(config.platforms.instagram.handle);return this.s;}
     catch(e){await this.close();throw e;}
   }
   async close(){
@@ -221,14 +221,14 @@ export class InstagramAndroidWorker {
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
         }
-        const evidence=await prepareStoryAudience(s);
+        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:options.story.facebookEnabled!==false?'Open Story sharing options and enable Facebook Story. Leave Share untouched, then continue here. The app returns to the editor and uses Your story in LIVE only.':'Return to the prepared Story editor with Your story visible. Do not tap it; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
         const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};
         await ctx.recordPreparation(preparation);
         let publication;
         await snapshot('story-preview');
         const status=await finishPost({...ctx,snapshot,
-          preflight:async()=>{ctx.signal?.throwIfAborted();if(JSON.stringify(await storyAudienceEvidence(s))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');},
-          publish:async()=>{submitted=true;const id=await s.find('id',nativeId('share_story_button'));await s.request('/element/'+id+'/click','POST',{});},
+          preflight:async()=>{ctx.signal?.throwIfAborted();if(JSON.stringify(await storyAudienceEvidence(s,options.story))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');},
+          publish:async()=>{submitted=true;await publishStory(s,evidence,options.story);},
           verify:async()=>{
             const receipt=await confirmNativeStoryPublication(s,{onDiagnostic:async receipt=>ctx.recordPreparation({...preparation,receipt})});
             publication={...receipt,sourcePostUrl:url,requestedDestinations:evidence.destinations};

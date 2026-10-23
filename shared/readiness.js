@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import {androidDeviceKey} from './android-device.js';
 import { PLATFORMS, DESTINATIONS, validateDraft } from './platforms.js';
 import { validateManychatDraft } from './manychat.js';
 import { mediaFor } from './media.js';
@@ -6,11 +7,11 @@ import { usesInstagramAndroid } from './instagram.js';
 import { instagramPostUrl } from './manychat.js';
 import { DEFAULT_STORY_LAYOUT,instagramMethod,instagramMusicEnabled } from './instagram.js';
 const instagramKey=(value,id)=>{
-  const song=value?.music?.source==='details'?value.music.reference:value?.music?.selection,enabled=instagramMusicEnabled(value,id),track=enabled?JSON.stringify({key:song?.key||song?.id||song?.audioUrl||'',title:song?.title||'',artist:song?.artist||''}):'';
+  const song=value?.music?.source==='manual'?{key:'manual'}:value?.music?.source==='details'?value.music.reference:value?.music?.selection,enabled=instagramMusicEnabled(value,id),track=enabled?JSON.stringify({key:song?.key||song?.id||song?.audioUrl||'',title:song?.title||'',artist:song?.artist||''}):'';
   if(id==='instagramMusic')return JSON.stringify({enabled,track});
   if(id==='instagram')return JSON.stringify({method:instagramMethod(value),enabled,track});
   const story=value?.story||{};
-  return JSON.stringify({track,musicEnabled:enabled,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});
+  return JSON.stringify({track,musicEnabled:enabled,facebookEnabled:story.facebookEnabled!==false,linkEnabled:story.linkEnabled!==false,source:instagramPostUrl(story.sourcePostUrl)||'',url:story.linkEnabled===false?'':story.url?.trim()||'',label:story.linkEnabled===false?'':story.label?.trim()||'',layout:story.layout||DEFAULT_STORY_LAYOUT});
 };
 export function setupIssues(config, id) {
   if(['instagramStory','instagramMusic'].includes(id))id='instagram';
@@ -28,8 +29,9 @@ export function destinationReadiness(draft, media, config, login = {}, xLength, 
     const errors = validateDraft({ ...draft, selected: p.id==='instagramStory'&&draft.selected?.includes('instagram') ? ['instagram','instagramStory'] : [p.id] }, media, xLength);
     errors.push(...setupIssues(config, p.id));
     if (p.id === 'manychat') { try { validateManychatDraft(draft.manychat, draft.captions?.manychat); } catch (error) { errors.push(error.message); } }
-    const connection = login[['instagramStory','instagramMusic'].includes(p.id)?'instagram':p.id];
-    const transportApplies=!['instagram','instagramStory','instagramMusic'].includes(p.id)||(connection?.transport||'web')===(usesInstagramAndroid(draft.instagram,p.id)?'android':'web');
+    const native=usesInstagramAndroid(draft.instagram,p.id),connection = ['instagramStory','instagramMusic'].includes(p.id)?login.instagramNative||(login.instagram?.transport==='android'?login.instagram:undefined):login[p.id];
+    const deviceApplies=!native||!connection?.deviceKey||connection.deviceKey===androidDeviceKey(config?.androidDevice);
+    const transportApplies=deviceApplies&&(!['instagram','instagramStory','instagramMusic'].includes(p.id)||(connection?.transport||'web')===(usesInstagramAndroid(draft.instagram,p.id)?'android':'web'));
     if (transportApplies&&blockedLoginStatuses.includes(connection?.status)) errors.push(connection.message || 'Check this connection before running.');
     const last = runs.find(run => run.items.some(item => item.id === p.id));
     const item = last?.items.find(item => item.id === p.id);

@@ -17,6 +17,7 @@ import { destinationUrl } from './automation/platforms.js';
 import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor, selectionErrors, metadataNeedsReview, metadataConsentValid } from '../shared/media.js';
+import {discoverPhones} from './android-devices.js';
 import { InstagramAndroidWorker } from './automation/instagram-android.js';
 import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '../shared/instagram.js';
 import { destinationReadiness } from '../shared/readiness.js';
@@ -67,6 +68,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   queue.on('workerError', error => console.error('Worker error:', error));
   const xLength = text => twitterText.parseTweet(text).weightedLength;
   app.get('/api/bootstrap', (req, res) => res.json({ config, media, ...queue.state(), author: 'Mrinal', protected: security.enabled,revision:process.env.STUDIO_REVISION||'',capabilities:{instagramAndroid:process.platform==='win32'} }));
+  app.get('/api/android/devices',async(req,res)=>res.json({devices:await discoverPhones()}));
   app.get('/api/status', (req, res) => res.json(queue.state()));
   app.get('/api/events', (req, res) => {
     res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -86,6 +88,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     for (const id of Object.keys(updated.platforms)) {
       if (JSON.stringify(config.platforms[id]) !== JSON.stringify(updated.platforms[id])) delete queue.login.items[id];
     }
+    if(JSON.stringify(config.androidDevice)!==JSON.stringify(updated.androidDevice)){delete queue.login.items.instagramNative;if(queue.login.items.instagram?.transport==='android')delete queue.login.items.instagram;}
     config = updated; queue.settings = config; queue.emit('change', queue.state()); res.json(config);
   });
   const upload = multer({ dest: path.join(dataDir, 'incoming'), limits: { fileSize: 20 * 1024 * 1024, files: 10, fields: 0, parts: 10 }, fileFilter: (req, file, cb) => cb(['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype) ? null : new Error('Choose JPG, PNG, or WEBP images.'), true) });
@@ -143,7 +146,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if(draft.selected.some(id=>['instagram','instagramStory','instagramMusic'].includes(id))){
       const options=instagramOptions({...draft.instagram,story:{...draft.instagram?.story,enabled:draft.selected.includes('instagramStory')}});
       if(process.platform!=='win32'&&(draft.selected.some(id=>usesInstagramAndroid(options,id))||draft.selected.includes('instagram')&&options.music.enabled))throw new Error('Android posting and Story sharing need the configured Windows worker. Choose Web for feed posting on this Mac.');
-      if(options.music.enabled&&options.music.source!=='details')options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
+      if(options.music.enabled&&options.music.source==='picker')options.music.selection=instagramWorker.selection(options.music.selection,config.platforms.instagram.handle);
       draft.instagram=options;
     }
     if (draft.selected?.includes('manychat')) validateManychatDraft(draft.manychat, draft.captions?.manychat);
