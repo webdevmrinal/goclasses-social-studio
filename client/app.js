@@ -118,6 +118,15 @@ async function refreshReadiness() {
 const verifiedDestinations = () => PLATFORMS.filter(p => state.login.items[p.id]?.status === 'verified').map(p => p.id);
 const activeRun = () => state.runs.find(r => ['running', 'pausing', 'paused', 'stopping', 'attention', 'waiting_for_input', 'awaiting_manual'].includes(r.status));
 const workerBusy = () => state.workerBusy || Boolean(activeRun()) || state.login.running;
+function updateWorkerControls() {
+  const busy = workerBusy();
+  document.querySelectorAll('[data-ig-method],[data-native-device],[data-ig-field],[data-song-source],[data-song-field],[data-ig-music],[data-story-align],[data-story-size],[data-story-reset],[data-story-suggestion],[data-story-preset]').forEach(el => { el.disabled = busy || el.hasAttribute('data-layout-unavailable'); });
+}
+function manualLoginNotice() {
+  const pending=state.manualLogin;if(!pending)return '';
+  const busy=state.login.running||Boolean(activeRun()),name=platform(pending.platform)?.name||'Browser';
+  return '<section class="manual-signin-notice" role="status"><div><strong>'+escape(name)+' sign-in '+(pending.open?'is open':'is ready to check')+'</strong><p>'+(pending.open?'Finish signing in, then check the saved session.':'The sign-in window is closed. Check the saved session to continue.')+'</p></div><div class="inline-controls"><button type="button" class="button primary small" data-finish-login="check" '+(busy?'disabled':'')+'>'+icon('check')+'Finish sign-in &amp; check</button><button type="button" class="button small" data-finish-login="cancel" '+(busy?'disabled':'')+'>Cancel sign-in</button></div></section>';
+}
 const platform = id => DESTINATIONS.find(p => p.id === id);
 const platformIcon = p => `<span class="platform-icon ${p.icon}">${icon(p.icon)}</span>`;
 const bytes = size => size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${Math.round(size / 1024)} KB`;
@@ -161,10 +170,10 @@ function shell() {
       <div class="sidebar-bottom"><div class="credit"><div class="avatar">M</div><div><p>Created by</p><strong>Mrinal</strong></div></div></div>
     </aside>
     <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
-    <main id="main" class="main" tabindex="-1">${page()}</main></div>
+    <div data-manual-login-host>${manualLoginNotice()}</div><main id="main" class="main" tabindex="-1">${page()}</main></div>
     ${actionbar()}
   </div>`;
-  bindPage(); renderReadiness(); renderAndroidProgress();
+  bindPage(); renderReadiness(); renderAndroidProgress(); updateWorkerControls();
   centerCaptionTab();
 }
 function centerCaptionTab() {
@@ -676,10 +685,21 @@ document.addEventListener('click', async e => {
       const input = document.querySelector(`[name="${button.dataset.useChannel}.channelId"]`); input.value = button.dataset.channelId; document.querySelector('#settings-form').dataset.dirty = 'true'; toast('Channel ID filled in. Verify it belongs to this destination, then Save connections.'); return;
     }
     if (button.dataset.checkLogin) { await checkLogins([button.dataset.checkLogin]); return; }
+    if (button.dataset.finishLogin) {
+      if (!state.manualLogin) return;
+      button.disabled=true;
+      try {
+        await api('/api/manual-login/finish', {method:'POST',body:{platform:state.manualLogin.platform,action:button.dataset.finishLogin}});
+        if(modal.open)modal.close();await refresh();
+        toast(button.dataset.finishLogin==='check'?'Checking the saved Web session.':'Sign-in cancelled. Workspace unlocked.');
+      } finally { button.disabled=false; }
+      return;
+    }
     if (button.dataset.manualLogin) {
       if (document.querySelector('#settings-form')?.dataset.dirty === 'true') return toast('Save your connection changes before signing in.', true);
       const result = await api('/api/manual-login', { method: 'POST', body: { platform: button.dataset.manualLogin } });
-      showDialog('Sign in with your regular browser', `<p>A separate ${escape(result.browser)} window is open with this tool’s saved profile. It has no automation connection during sign-in.</p><p>Finish signing in there, then <strong>close that separate window completely</strong>. Return to Connections and click <strong>Open &amp; check</strong> to use the saved session.</p>`, '<button class="button primary" data-dialog-close>Got it</button>');
+      await refresh();
+      showDialog('Sign in with your regular browser', `<p>A separate ${escape(result.browser)} window is open with this tool’s saved profile. It has no automation connection during sign-in.</p><p>Finish signing in there, then click <strong>Finish sign-in &amp; check</strong>. Studio closes only its separate sign-in window and checks the saved session.</p>`, '<button class="button" data-dialog-close>Keep signing in</button><button class="button primary" data-finish-login="check">Finish sign-in &amp; check</button>');
       return;
     }
     if (button.dataset.imageStep) {
@@ -768,7 +788,9 @@ function applyStatus(data) {
   state.runs = data.runs;
   if(data.phone)state.phone=data.phone;
   const completed=reconcilePublishedDraft(draft,state.runs.find(run=>run.id===draft.submission?.runId));if(completed){draft=completed.draft;saveDraft();if(completed.cleared)toast('Published. Workspace cleared.');}
-  state.login = data.login; state.workerBusy = data.workerBusy;renderPhoneToolbar();
+  state.login = data.login; state.workerBusy = data.workerBusy;state.manualLogin=data.manualLogin;renderPhoneToolbar();
+  const signInHost=document.querySelector('[data-manual-login-host]');if(signInHost)signInHost.innerHTML=manualLoginNotice();
+  updateWorkerControls();
   const freshButton=document.querySelector('[data-action="fresh-workspace"]');if(freshButton)freshButton.disabled=workerBusy()||uploading;
    state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';

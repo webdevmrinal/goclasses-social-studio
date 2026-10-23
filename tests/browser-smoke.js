@@ -31,5 +31,11 @@ try {
   await manager.close();
   const restored = await manager.page('test'); await restored.goto(url);
   assert((await restored.context().cookies(url)).some(c => c.name === 'studio_test' && c.value === 'saved'));
-  console.log(`Browser connection passed: ${installed.label}, Unicode paste, file upload, screenshot, and profile persistence. No social websites were visited.`);
+  await manager.manualLogin(url);
+  assert(manager.manualProcess, 'Manual browser owns the dedicated profile until finished');
+  await manager.finishManualLogin();
+  assert.equal(manager.manualProcess, null);
+  const afterSignIn = await manager.page('test'); await afterSignIn.goto(url);
+  assert((await afterSignIn.context().cookies(url)).some(c => c.name === 'studio_test' && c.value === 'saved'), 'Finishing manual sign-in retains the saved profile');
+  console.log(`Browser connection passed: ${installed.label}, Unicode paste, file upload, screenshot, profile persistence, and graceful manual sign-in recovery. No social websites were visited.`);
 } finally { await manager.close(); server.closeAllConnections(); server.close(); }

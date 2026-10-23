@@ -19,6 +19,11 @@ export class Queue extends EventEmitter {
   constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline, instagramWorker } = {}) {
     super(); this.interventions=new NativeInterventions(this); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.nativeDeadline=deadline??300000; this.channelDeadline = deadline ?? 240000;
     this.runs = []; this.login = { running: false, items: {} }; this.persistChain = Promise.resolve(); this.processing = false;
+    this.manualLogin = null;
+    browser.on?.('manual-login-change', () => {
+      if (this.manualLogin && !browser.manualProcess && this.login.items[this.manualLogin.platform]?.status === 'manual_login') this.login.items[this.manualLogin.platform].message = 'Sign-in window closed. Check the saved session to continue.';
+      this.emit('change', this.state());
+    });
   }
   get active() { return this.runs.find(run => busyStates.includes(run.status)); }
   async init() {
@@ -42,7 +47,7 @@ export class Queue extends EventEmitter {
     await this.persist();
   }
   state() {
-    return { update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
+    return { manualLogin:this.manualLogin ? {...this.manualLogin,open:Boolean(this.browser.manualProcess)} : null,update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
   }
   persist() {
     const snapshot = structuredClone(this.runs);
@@ -350,6 +355,7 @@ export class Queue extends EventEmitter {
   }
   async checkLogins(config, selected, saveDetected = async () => {}, {instagram}={}) {
     if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');
+    if (this.manualLogin && selected.includes(this.manualLogin.platform)) this.manualLogin = null;
     this.login = { running: true, items: { ...this.login.items } }; this.emit('change', this.state());
     try {
       for (const id of selected) {

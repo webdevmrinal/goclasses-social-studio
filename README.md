@@ -42,7 +42,7 @@ To recreate a deleted post or rebuild a job, stop any active run, expand the job
 
 ### Google says “This browser or app may not be secure”
 
-In Connections, expand the account’s **Settings** and use **Manual sign-in** for ManyChat or YouTube. This closes the tool's connected browser and opens installed Chrome (or Edge) with a separate saved profile and **no automation connection or debugging switches during sign-in**. Complete the login yourself, then **close that separate window completely** so the profile is saved and unlocked. Click **Open & check** in Connections to reconnect automation to that same profile.
+In Connections, expand the account’s **Settings** and use **Manual sign-in** for ManyChat or YouTube. This closes the tool's connected browser and opens installed Chrome (or Edge) with a separate saved profile and **no automation connection or debugging switches during sign-in**. Complete the login yourself, then click **Finish sign-in & check** in Studio’s sign-in notice. It gracefully closes only the dedicated sign-in browser and checks that saved Web session, without requiring an offline phone. **Cancel sign-in** closes that window and unlocks the workspace without starting a check. Closing the window yourself also unlocks the controls immediately; the notice stays available to check the saved session. Instagram transport, music and Story controls update without reloading or losing your draft.
 
 The worker now prefers installed Chrome, then Edge, then bundled Chromium. Install/update Chrome if needed. Google can impose additional account, device, or organization restrictions; this feature does not guarantee authentication or bypass Google's checks. Keep normal account security and two-factor authentication enabled.
 

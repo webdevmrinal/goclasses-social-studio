@@ -235,12 +235,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/android/intervention', async (req,res)=>{res.json(await queue.interventions.act(req.body));});
   app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });
   app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
-  app.post('/api/logins', (req, res) => {
-    const selected = req.body.selected;
-    let instagram;try{instagram=instagramOptions(req.body.instagram);}catch(error){return res.status(400).json({error:error.message});}
-    if (!Array.isArray(selected) || !selected.length || selected.length > PLATFORMS.length || new Set(selected).size !== selected.length || selected.some(id => !PLATFORMS.some(p => p.id === id))) return res.status(400).json({ error: 'Select valid destinations to check.' });
-    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });
-    queue.checkLogins(config, selected, async (id, detected) => {
+  const beginLoginCheck = (selected, instagram) => queue.checkLogins(config, selected, async (id, detected) => {
       const updated = structuredClone(config);
       const field = id.startsWith('youtube') ? 'channelId' : id === 'x' ? 'handle' : null;
       if (!field || updated.platforms[id][field] || typeof detected[field] !== 'string') return;
@@ -248,7 +243,13 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
       const valid = validateConfig(updated);
       await atomicWrite(path.join(dataDir, 'config.json'), valid);
       config = valid; queue.settings = config;
-    },{instagram}).catch(error => console.error(error)); res.status(202).json({ ok: true });
+    },{instagram});
+  app.post('/api/logins', (req, res) => {
+    const selected = req.body.selected;
+    let instagram;try{instagram=instagramOptions(req.body.instagram);}catch(error){return res.status(400).json({error:error.message});}
+    if (!Array.isArray(selected) || !selected.length || selected.length > PLATFORMS.length || new Set(selected).size !== selected.length || selected.some(id => !PLATFORMS.some(p => p.id === id))) return res.status(400).json({ error: 'Select valid destinations to check.' });
+    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });
+    beginLoginCheck(selected, instagram).catch(error => console.error(error)); res.status(202).json({ ok: true });
   });
   app.post('/api/manual-login', async (req, res) => {
     if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check first.' });
@@ -257,9 +258,26 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     queue.login.running = true; queue.emit('change', queue.state());
     try {
       const label = await browser.manualLogin(destinationUrl(id, config));
-      queue.login.items[id] = { status: 'manual_login', message: `Sign in using ${label}, then close that separate browser window completely. Return here and click Open & check to connect the saved session.` };
+      queue.manualLogin = { platform: id, browser: label };
+      queue.login.items[id] = { status: 'manual_login', message: `Sign in using ${label}, then click Finish sign-in & check in Studio. Only the separate sign-in window will close.` };
       res.json({ ok: true, browser: label });
     } finally { queue.login.running = false; queue.emit('change', queue.state()); }
+  });
+  app.post('/api/manual-login/finish', async (req, res) => {
+    const pending = queue.manualLogin;
+    if (!pending || req.body.platform !== pending.platform || !['check','cancel'].includes(req.body.action)) return res.status(400).json({ error: 'Choose the current sign-in window and a valid action.' });
+    if (queue.active || queue.login.running || queue.processing || instagramWorker.busy || phoneTools.scanning || phoneTools.pairing) return res.status(409).json({ error: 'Wait for the current activity to finish.' });
+    queue.login.running = true; queue.emit('change', queue.state());
+    try {
+      await browser.finishManualLogin();
+      queue.manualLogin = null;
+      if (req.body.action === 'cancel') queue.login.items[pending.platform] = { status: 'needs_login', message: 'Sign-in cancelled. Check the saved session or sign in again.', ...(pending.platform === 'instagram' ? { transport:'web' } : {}) };
+    } finally { queue.login.running = false; queue.emit('change', queue.state()); }
+    if (req.body.action === 'check') {
+      // A manual browser sign-in verifies Web only; never require an offline phone here.
+      beginLoginCheck([pending.platform], {postingMethod:'web',music:{enabled:false},story:{enabled:false}}).catch(error => console.error(error));
+    }
+    res.status(202).json({ ok:true });
   });
   app.use('/vendor/webawesome', express.static(path.join(ROOT, 'node_modules/@awesome.me/webawesome/dist-cdn'), { dotfiles: 'deny', index: false }));
   app.use('/shared', express.static(path.join(ROOT, 'shared')));

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { promisify } from 'node:util';
 import { createServer } from 'node:net';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -40,14 +42,35 @@ async function freePort() {
   return port;
 }
 
-export class BrowserManager {
+const runFile = promisify(execFile);
+export async function closeManualProcess(child, { platform = process.platform, run = runFile, timeout = 8000 } = {}) {
+  if (!child || child.exitCode !== null) return;
+  if (!Number.isSafeInteger(child.pid) || child.pid < 1) throw new Error('The sign-in browser could not be identified. Close its window manually.');
+  let timer, onExit;
+  const exited = new Promise(resolve => {
+    const done = () => { clearTimeout(timer); child.off('exit', done); resolve(true); };
+    onExit = done; child.once('exit', done);
+    timer = setTimeout(() => { child.off('exit', done); resolve(false); }, timeout);
+  });
+  try {
+    if (platform === 'win32') {
+      // This PID comes only from our own spawned, dedicated-profile browser.
+      // WM_CLOSE lets Chrome save its session; never force-kill a browser tree.
+      await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$p=Get-Process -Id '+child.pid+' -ErrorAction SilentlyContinue; $until=(Get-Date).AddSeconds(3); while($p -and $p.MainWindowHandle -eq 0 -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 200; $p.Refresh()}; if($p -and $p.MainWindowHandle -ne 0){[void]$p.CloseMainWindow()}'], { windowsHide: true, timeout: 5000 });
+    } else child.kill('SIGTERM');
+    if (child.exitCode !== null) return;
+    if (!await exited) throw new Error('Close all windows in the separate sign-in browser, then try Finish sign-in again. Your saved session is kept.');
+  } finally { clearTimeout(timer); child.off('exit', onExit); }
+}
+
+export class BrowserManager extends EventEmitter {
   context = null;
   connection = null;
   launching = null;
   child = null;
   manualProcess = null;
   pages = new Map();
-  constructor({ dataDir = DATA } = {}) { this.dataDir = dataDir; }
+  constructor({ dataDir = DATA } = {}) { super(); this.dataDir = dataDir; }
   async open() {
     if (this.manualProcess) throw new Error('Finish signing in and close the separate sign-in browser window, then click Check logins again.');
     if (this.context) return this.context;
@@ -117,11 +140,16 @@ export class BrowserManager {
     const profile = path.join(this.dataDir, 'browser-profiles', browser.key);
     await fs.mkdir(profile, { recursive: true });
     // No automation connection or debugging switches during manual authentication.
-    const child = spawn(browser.executable, [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--new-window', url], { stdio: 'ignore', windowsHide: false });
+    const child = spawn(browser.executable, [`--user-data-dir=${profile}`, '--disable-background-mode', '--no-first-run', '--no-default-browser-check', '--new-window', url], { stdio: 'ignore', windowsHide: false });
     this.manualProcess = child;
-    child.once('exit', () => { if (this.manualProcess === child) this.manualProcess = null; });
-    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', error => { this.manualProcess = null; reject(error); }); });
+    child.once('exit', () => { if (this.manualProcess === child) { this.manualProcess = null; this.emit('manual-login-change'); } });
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', error => { this.manualProcess = null; this.emit('manual-login-change'); reject(error); }); });
     return browser.label;
+  }
+  async finishManualLogin() {
+    const child = this.manualProcess;
+    await closeManualProcess(child);
+    if (this.manualProcess === child) { this.manualProcess = null; this.emit('manual-login-change'); }
   }
   async close() {
     if (this.launching) await this.launching.catch(() => {});
