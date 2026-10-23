@@ -18,13 +18,14 @@ import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor, selectionErrors, metadataNeedsReview, metadataConsentValid } from '../shared/media.js';
 import {discoverPhones} from './android-devices.js';
+import {PhoneTools} from './phone-tools.js';
 import {captionReviewAccepted} from '../shared/caption-review.js';
 import { InstagramAndroidWorker } from './automation/instagram-android.js';
 import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '../shared/instagram.js';
 import { destinationReadiness } from '../shared/readiness.js';
 import { UpdateBridge } from './updates.js';
 
-export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, updateBridge = new UpdateBridge() } = {}) {
+export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, updateBridge = new UpdateBridge(), phoneTools = new PhoneTools({home:process.env.STUDIO_HOME||ROOT}) } = {}) {
   await fs.mkdir(path.join(dataDir, 'uploads'), { recursive: true });
   await fs.mkdir(path.join(dataDir, 'incoming'), { recursive: true });
   const app = express();
@@ -54,6 +55,10 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const instagramWorker=new InstagramAndroidWorker({dataDir});await instagramWorker.init();
   const queue = new Queue(browser, { dataDir, instagramWorker, ...queueOptions });
   queue.settings = config;
+  await phoneTools.configure(config.androidDevice);
+  phoneTools.canRefresh=()=>!queue.active&&!queue.processing&&!queue.login.running&&!instagramWorker.busy;
+  phoneTools.on('change',()=>queue.emit('change',queue.state()));
+  const studioState=()=>{const state=queue.state();return {...state,workerBusy:state.workerBusy||phoneTools.scanning||phoneTools.pairing===true,phone:phoneTools.state()};};
   await queue.init();
   queue.updateState=updateBridge.state;
   updateBridge.on('change',state=>{queue.updateState=state;queue.maintenance=['installing','restarting'].includes(state.phase);queue.emit('change',queue.state());});
@@ -61,20 +66,26 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.get('/api/updates',(req,res)=>res.json(updateBridge.state));
   app.post('/api/updates/check',async(req,res)=>res.json(await updateBridge.request('check')));
   app.post('/api/updates/apply',async(req,res)=>{
-    if(queue.active||queue.processing||queue.login.running||browser.manualProcess||instagramWorker.busy||queue.instagramWorker?.busy||queue.maintenance)return res.status(409).json({error:'Finish or stop the current run, login check or music picker before updating.'});
+    if(queue.active||queue.processing||queue.login.running||browser.manualProcess||instagramWorker.busy||queue.instagramWorker?.busy||phoneTools.scanning||phoneTools.pairing||phoneTools.screen.opening||queue.maintenance)return res.status(409).json({error:'Finish or stop the current run, login check or music picker before updating.'});
     if(!updateBridge.state.available)return res.status(400).json({error:'Check for an available update first.'});
     queue.maintenance=true;try{await updateBridge.request('apply');res.status(202).json({ok:true});}catch(error){queue.maintenance=false;throw error;}
   });
   instagramWorker.onProgress=()=>queue.emit('change',queue.state());
   queue.on('workerError', error => console.error('Worker error:', error));
   const xLength = text => twitterText.parseTweet(text).weightedLength;
-  app.get('/api/bootstrap', (req, res) => res.json({ config, media, ...queue.state(), author: 'Mrinal', protected: security.enabled,revision:process.env.STUDIO_REVISION||'',capabilities:{instagramAndroid:process.platform==='win32'} }));
+  app.get('/api/bootstrap', (req, res) => res.json({ config, media, ...studioState(), author: 'Mrinal', protected: security.enabled,revision:process.env.STUDIO_REVISION||'',capabilities:{instagramAndroid:process.platform==='win32'} }));
   app.get('/api/android/devices',async(req,res)=>res.json({devices:await discoverPhones()}));
-  app.get('/api/status', (req, res) => res.json(queue.state()));
+  const requirePhoneIdle=()=>{if(queue.processing||queue.login.running||instagramWorker.busy||phoneTools.scanning||phoneTools.pairing)throw Object.assign(Error('Finish the current activity before scanning or pairing phones.'),{status:409});};
+  app.post('/api/android/scan',async(req,res)=>{requirePhoneIdle();await phoneTools.scan(config.androidDevice);res.json(phoneTools.state());});
+  app.post('/api/android/pair',async(req,res)=>{requirePhoneIdle();await phoneTools.pair(req.body.address,req.body.code,config.androidDevice);res.json(phoneTools.state());});
+  app.post('/api/android/screen',async(req,res)=>{res.json(await phoneTools.show(config.androidDevice));});
+  app.post('/api/android/screen/close',async(req,res)=>{await phoneTools.screen.close();res.json(phoneTools.state());});
+  app.use('/api',(req,res,next)=>{if((phoneTools.scanning||phoneTools.pairing)&&req.method!=='GET'&&/^\/(runs|config|logins|instagram\/music)/.test(req.path))return res.status(409).json({error:'Wait for the phone connection check to finish.'});next();});
+  app.get('/api/status', (req, res) => res.json(studioState()));
   app.get('/api/events', (req, res) => {
     res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.flushHeaders();
-    const send = state => res.write(`data: ${JSON.stringify(state)}\n\n`);
+    const send = state => res.write(`data: ${JSON.stringify({...state,workerBusy:state.workerBusy||phoneTools.scanning||phoneTools.pairing===true,phone:phoneTools.state()})}\n\n`);
     send(queue.state()); queue.on('change', send);
     const heartbeat = setInterval(() => {
       if (!security.authenticated(req)) { res.write('event: expired\ndata: {}\n\n'); res.end(); }
@@ -83,14 +94,14 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     req.on('close', () => { clearInterval(heartbeat); queue.off('change', send); });
   });
   app.put('/api/config', async (req, res) => {
-    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy) return res.status(409).json({ error: 'Finish the current run or login check before changing account settings.' });
+    if (queue.active || queue.login.running || queue.processing || browser.manualProcess || instagramWorker.busy || phoneTools.screen.opening) return res.status(409).json({ error: 'Finish the current run or login check before changing account settings.' });
     const updated = validateConfig(req.body);
     await atomicWrite(path.join(dataDir, 'config.json'), updated);
     for (const id of Object.keys(updated.platforms)) {
       if (JSON.stringify(config.platforms[id]) !== JSON.stringify(updated.platforms[id])) delete queue.login.items[id];
     }
     if(JSON.stringify(config.androidDevice)!==JSON.stringify(updated.androidDevice)){delete queue.login.items.instagramNative;if(queue.login.items.instagram?.transport==='android')delete queue.login.items.instagram;}
-    config = updated; queue.settings = config; queue.emit('change', queue.state()); res.json(config);
+    config = updated; queue.settings = config; await phoneTools.configure(config.androidDevice); if(config.androidDevice.type==='phone')await phoneTools.refresh(); queue.emit('change', queue.state()); res.json(config);
   });
   const upload = multer({ dest: path.join(dataDir, 'incoming'), limits: { fileSize: 20 * 1024 * 1024, files: 10, fields: 0, parts: 10 }, fileFilter: (req, file, cb) => cb(['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype) ? null : new Error('Choose JPG, PNG, or WEBP images.'), true) });
   app.post('/api/upload', (req, res, next) => upload.array('images', 10)(req, res, error => { if (error) next(error); else next(); }), async (req, res) => {
@@ -257,16 +268,16 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.use((error, req, res, next) => {
     console.error(error.message);
     if (res.headersSent) return next(error);
-    res.status(error instanceof multer.MulterError ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Each image must be 20 MB or smaller.' : error.message || 'The request could not be completed.' });
+    res.status(error.status===409?409:error instanceof multer.MulterError ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Each image must be 20 MB or smaller.' : error.message || 'The request could not be completed.' });
   });
-  return { app, queue, browser };
+  return { app, queue, phoneTools, browser };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const host = process.env.HOST || '127.0.0.1';
   const port = Number(process.env.PORT || 3000);
   if ((host !== '127.0.0.1' && host !== 'localhost' || process.env.APP_ORIGIN) && (process.env.APP_PASSWORD || '').length < 16) throw new Error('Shared access requires APP_PASSWORD with at least 16 characters. Set it in .env first.');
-  const { app, queue, browser } = await createApp();
+  const { app, queue, browser, phoneTools } = await createApp();
   const server = app.listen(port, host, () => console.log(`\nGO Classes Social Studio Â· Created by Mrinal\nhttp://${host}:${port}\nTEST mode is always the default.\n`));
   let closing = false;
   const shutdown = async () => {
@@ -274,7 +285,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log('Saving run state and closing the worker browserâ€¦');
     server.close();
     // Keep the persisted in-flight state intact: init() will require an operator review.
-    await queue.persist(); await browser.close();
+    await queue.persist(); await phoneTools.close(); await browser.close();
     process.exit(0);
   };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);

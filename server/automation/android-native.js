@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import {androidDevice,EMULATOR_SERIAL,EMULATOR_AVD} from '../../shared/android-device.js';
+import {resolveWifiPhone} from '../android-devices.js';
 import { ANDROID_DRIVER_SETTINGS } from '../../shared/android-performance.js';
 import { InterventionError } from './utils.js';
 const exec = promisify(execFile);
@@ -124,8 +125,9 @@ export class AndroidSession {
     // Warm workers skip the launcher, repeated PowerShell ownership queries and tuning.
     let ready=false;try{const response=await fetch(ANDROID_URL+'/status',{signal:AbortSignal.timeout(1200)});ready=response.ok&&(await response.json()).value?.ready===true;}catch{}
     if(this.device.type==='phone'){
-      if(await this.adb(['get-state']).catch(()=>'')!=='device')throw new InterventionError('Connect and unlock the selected USB phone, then allow USB debugging. No other device was selected.');
-      if(await this.adb(['shell','getprop','ro.kernel.qemu'])==='1')throw new InterventionError('The selected phone is an emulator. Select the intended USB phone.');
+      if(this.device.transport==='wifi'){try{this.serial=await resolveWifiPhone(this.device,{run:async args=>{this.signal?.throwIfAborted();const result=await exec(this.adbPath,args,{windowsHide:true,timeout:5000,maxBuffer:1024*1024,signal:this.signal});return result.stdout.trim();}});}catch(error){throw new InterventionError(error.message);}}
+      if(await this.adb(['get-state']).catch(()=>'')!=='device')throw new InterventionError(this.device.transport==='wifi'?'Unlock the selected Wi-Fi phone, enable Wireless debugging, then use Scan for phone. No other device was selected.':'Connect and unlock the selected USB phone, then allow USB debugging. No other device was selected.');
+      if(await this.adb(['shell','getprop','ro.kernel.qemu'])==='1')throw new InterventionError('The selected phone is an emulator. Select the intended physical phone.');
       if(!ready)await exec(process.execPath,[path.resolve('scripts/android-worker.mjs'),'server-start'],{windowsHide:true,timeout:70000,maxBuffer:1024*1024,signal:this.signal});
     }else{
     const existing=ready?await this.adb(['emu','avd','name']).catch(()=>''):'';
@@ -150,7 +152,7 @@ export class AndroidSession {
       // Reset only our automation instrumentation, preserving Instagram data,
       // its signed-in account and every unsent editor. No publication is retried.
       for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
-    },this.device.type==='phone'?'Reconnect and unlock the selected USB phone, allow debugging, then retry.':'Run android:start and try again.');
+    },this.device.type==='phone'?'Reconnect and unlock the selected phone, allow debugging, then retry.':'Run android:start and try again.');
     this.signal?.throwIfAborted();
     this.ratingPromptDismissed=false;
     await this.request('/appium/settings','POST',{settings:ANDROID_DRIVER_SETTINGS});

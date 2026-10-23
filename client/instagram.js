@@ -7,7 +7,7 @@ export function instagramTabs(tab='feed'){
   return '<div class="ig-tabs" role="tablist" aria-label="Instagram format">'+['feed','story'].map(id=>'<button type="button" role="tab" data-ig-tab="'+id+'" aria-selected="'+(tab===id)+'" class="'+(tab===id?'active':'')+'">'+(id==='feed'?'Feed':'Story')+'</button>').join('')+'</div>';
 }
 export function nativeDeviceControl(config,busy){
- const d=androidDevice(config?.androidDevice);return '<div class="native-device-control"><span>Music &amp; Story device: <strong>'+(d.type==='phone'?'USB phone':'Emulator')+'</strong></span><button type="button" class="button small" data-native-device '+(busy?'disabled':'')+'>Change device</button></div>';
+ const d=androidDevice(config?.androidDevice);return '<div class="native-device-control"><span>Music &amp; Story device: <strong>'+(d.type==='phone'?(d.transport==='wifi'?'Wi-Fi phone':'USB phone'):'Emulator')+'</strong></span><button type="button" class="button small" data-native-device '+(busy?'disabled':'')+'>Change device</button></div>';
 }
 export function postingMethodControl(options,busy,config){
  const method=instagramMethod(options),device=androidDevice(config?.androidDevice),route=method==='web'?'web':device.type==='phone'?'phone':'emulator';

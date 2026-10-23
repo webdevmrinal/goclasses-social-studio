@@ -4,6 +4,7 @@ import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraf
 import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
 import {storyPresetLayout,selectedStoryPreset} from '/shared/story-layouts.js';
+import {phoneToolbar,phoneRows,phoneSetup} from './phone-controls.js';
 import {platformPostPreview} from './platform-previews.js';
 import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
 import { freshDraft, workspaceFingerprint, reconcilePublishedDraft, restartChoices, draftFromRun } from '/shared/draft.js';
@@ -159,7 +160,7 @@ function shell() {
       <nav class="navigation" aria-label="Main navigation">${Object.entries(titles).map(([id, title]) => `<button class="nav-item ${view === id ? 'active' : ''}" data-view="${id}" ${view === id ? 'aria-current="page"' : ''} title="${title}">${icon(id === 'preview' ? 'eye' : id === 'settings' ? 'settings' : id)}<span>${title}</span></button>`).join('')}</nav>
       <div class="sidebar-bottom"><div class="credit"><div class="avatar">M</div><div><p>Created by</p><strong>Mrinal</strong></div></div></div>
     </aside>
-    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
+    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
     <main id="main" class="main" tabindex="-1">${page()}</main></div>
     ${actionbar()}
   </div>`;
@@ -627,8 +628,11 @@ document.addEventListener('click', async e => {
         document.querySelector('#enable-live').onclick = () => { mode = 'LIVE'; modal.close(); shell(); };
       } return;
     }
+    if(button.hasAttribute('data-phone-scan')){await scanPhoneDialog();return;}
+    if(button.hasAttribute('data-phone-show')){await showPhoneScreen();return;}
+    if(button.hasAttribute('data-phone-hide')){state.phone=await api('/api/android/screen/close',{method:'POST',body:{}});renderPhoneToolbar();if(modal.open&&modal.contains(button))modal.close();return;}
     if(button.hasAttribute('data-native-device')){await nativeDeviceDialog();return;}
-    if(button.dataset.nativeType){const updated=structuredClone(state.config);updated.androidDevice={type:button.dataset.nativeType,serial:button.dataset.nativeSerial||''};state.config=await api('/api/config',{method:'PUT',body:updated});if(updated.androidDevice.type==='phone')draft.instagram.music.source='manual';if(nativePostingChoice)draft.instagram.postingMethod='android';saveDraft();modal.close();await refresh();shell();toast('Android device selected.');return;}
+    if(button.dataset.nativeType){const updated=structuredClone(state.config);updated.androidDevice={type:button.dataset.nativeType,serial:button.dataset.nativeSerial||'',...(button.dataset.nativeTransport==='wifi'?{transport:'wifi',hardwareSerial:button.dataset.nativeHardware}:{})};state.config=await api('/api/config',{method:'PUT',body:updated});if(updated.androidDevice.type==='phone')draft.instagram.music.source='manual';if(nativePostingChoice)draft.instagram.postingMethod='android';saveDraft();modal.close();await refresh();shell();toast('Android device selected.');return;}
     if(button.hasAttribute('data-native-open')){androidProgressDismissed='';renderAndroidProgress();if(androidProgressDialog&&!androidProgressDialog.open)androidProgressDialog.showModal();return;}
     if(button.dataset.nativeAction){
       const run=activeRun(),item=run?.items.find(i=>i.status==='waiting_for_input'),handoff=item?.intervention;if(!handoff)return;
@@ -762,8 +766,9 @@ function applyStatus(data) {
   const changedBusy=state.workerBusy!==data.workerBusy;
   const changedRuns = JSON.stringify(state.runs) !== JSON.stringify(data.runs);
   state.runs = data.runs;
+  if(data.phone)state.phone=data.phone;
   const completed=reconcilePublishedDraft(draft,state.runs.find(run=>run.id===draft.submission?.runId));if(completed){draft=completed.draft;saveDraft();if(completed.cleared)toast('Published. Workspace cleared.');}
-  state.login = data.login; state.workerBusy = data.workerBusy;
+  state.login = data.login; state.workerBusy = data.workerBusy;renderPhoneToolbar();
   const freshButton=document.querySelector('[data-action="fresh-workspace"]');if(freshButton)freshButton.disabled=workerBusy()||uploading;
    state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
@@ -967,7 +972,7 @@ function renderAndroidProgress(){
   const key=run.id+':'+item.id+':'+(item.intervention?.id||'working');
   if(!androidProgressDialog){
     androidProgressDialog=document.createElement('dialog');androidProgressDialog.id='android-progress';androidProgressDialog.className='android-progress-dialog';androidProgressDialog.setAttribute('aria-labelledby','android-progress-title');document.body.append(androidProgressDialog);
-    androidProgressDialog.innerHTML='<div class="android-progress-heading"><span class="android-spinner" aria-hidden="true"></span><h2 id="android-progress-title">Instagram on Android</h2></div><p id="android-step" role="status"></p><p class="android-progress-note">Working on your selected Android device. You can keep using the workspace.</p><div id="android-manual"></div><div class="android-progress-meta"><span id="android-run-mode"></span><span id="android-elapsed"></span></div><div class="android-progress-actions"><button class="button" id="android-progress-hide">Keep in background</button><button class="button subtle" data-kill-run="'+escape(run.id)+'">Stop now</button></div>';
+    androidProgressDialog.innerHTML='<div class="android-progress-heading"><span class="android-spinner" aria-hidden="true"></span><h2 id="android-progress-title">Instagram on Android</h2></div><p id="android-step" role="status"></p><p class="android-progress-note">Working on your selected Android device. You can keep using the workspace.</p><div id="android-manual"></div><button class="button small" data-phone-show>Show phone screen</button><div class="android-progress-meta"><span id="android-run-mode"></span><span id="android-elapsed"></span></div><div class="android-progress-actions"><button class="button" id="android-progress-hide">Keep in background</button><button class="button subtle" data-kill-run="'+escape(run.id)+'">Stop now</button></div>';
     const hide=()=>{androidProgressDismissed=androidProgressKey;androidProgressDialog.close();};androidProgressDialog.querySelector('#android-progress-hide').onclick=hide;androidProgressDialog.oncancel=e=>{e.preventDefault();hide();};
     setInterval(()=>{const clock=androidProgressDialog.querySelector('#android-elapsed');if(clock?.dataset.startedAt)clock.textContent=elapsed(clock.dataset.startedAt);},1000);
   }
@@ -1005,9 +1010,26 @@ async function updatesDialog(){
 }
 
 let nativePostingChoice=false,changingPostingRoute=false;
+function phoneScanBusy(){const run=activeRun();return state.workerBusy||state.login.running||Boolean(run&&!['attention','paused'].includes(run.status));}
+function renderPhoneToolbar(){
+ const target=document.querySelector('[data-phone-tools]');if(target){const html=phoneToolbar(state.phone,workerBusy(),state.capabilities?.instagramAndroid!==false);if(target.innerHTML!==html)target.innerHTML=html;}
+ const progress=document.querySelector('[data-phone-screen-progress]');if(progress)progress.textContent=state.phone?.mirror?.message||'Opening phone screen…';
+}
+function phoneDialogContent(devices){return phoneRows(devices,state.config.androidDevice)+(!devices.length?'<p class="phone-screen-hint">No phone found. Unlock it and enable Wireless debugging on the same Wi-Fi, or connect USB and allow debugging.</p>':'')+phoneSetup();}
+function bindPhonePairing(){const button=document.querySelector('#pair-wifi-phone');if(!button)return;button.onclick=async()=>{button.disabled=true;const error=document.querySelector('.phone-pair-error'),code=document.querySelector('#phone-pair-code'),address=document.querySelector('#phone-pair-address').value.trim();error.textContent='';try{const value=code.value.trim();code.value='';state.phone=await api('/api/android/pair',{method:'POST',body:{address,code:value}});renderPhoneToolbar();showPhoneChoices(state.phone.devices);}catch(e){error.textContent=e.message;}finally{button.disabled=false;}};}
+function showPhoneChoices(devices){showDialog('Phone connection',phoneDialogContent(devices),'<button class="button" data-phone-scan>Scan again</button><button class="button" data-phone-show '+(!state.phone?.connected?'disabled':'')+'>Show screen</button><button class="button subtle" data-dialog-close>Done</button>');bindPhonePairing();}
+async function scanPhoneDialog(){
+ if(phoneScanBusy())return toast('Finish the current activity before scanning.',true);nativePostingChoice=false;
+ showDialog('Find your phone','<div class="phone-scan-spinner" aria-hidden="true"></div><p role="status">Scanning USB and paired Wi-Fi phones…</p>','<button class="button" data-dialog-close>Close</button>');
+ try{state.phone=await api('/api/android/scan',{method:'POST',body:{}});renderPhoneToolbar();showPhoneChoices(state.phone.devices);}catch(error){showDialog('Phone connection','<p class="phone-error" role="alert">'+escape(error.message)+'</p>'+phoneSetup(),'<button class="button" data-phone-scan>Try again</button><button class="button subtle" data-dialog-close>Close</button>');bindPhonePairing();renderPhoneToolbar();}
+}
+async function showPhoneScreen(){
+ showDialog('Phone screen','<div class="phone-screen-progress" role="status" data-phone-screen-progress>Opening phone screen…</div><p class="phone-screen-hint">A separate phone window opens on this PC. Use it to check the connection or choose music when Studio pauses.</p>','<button class="button" data-dialog-close>Keep in background</button>');
+ try{state.phone=await api('/api/android/screen',{method:'POST',body:{}});renderPhoneToolbar();if(modal.open&&document.querySelector('[data-phone-screen-progress]'))showDialog('Phone screen','<p class="phone-screen-progress">Screen open on this PC.</p><p class="phone-screen-hint">Choose music when Studio asks, then use Check selected song and Continue. Closing the viewer leaves Instagram open.</p>','<button class="button" data-phone-hide>Hide screen</button><button class="button primary" data-dialog-close>Done</button>');}catch(error){if(modal.open)showDialog('Phone screen','<p class="phone-error" role="alert">'+escape(error.message)+'</p>','<button class="button" data-phone-scan>Scan for phone</button><button class="button subtle" data-dialog-close>Close</button>');else toast(error.message,true);}
+}
 async function nativeDeviceDialog({posting=false}={}){
  nativePostingChoice=posting;
- const {devices}=await api('/api/android/devices');showDialog('Music & Story device','<p>Choose the device used for native Instagram steps.</p>'+devices.map(d=>'<div class="native-device-row"><span>'+escape(d.model)+' <small>'+escape(d.state)+'</small></span><button class="button primary" data-native-type="phone" data-native-serial="'+escape(d.serial)+'" '+(d.state!=='device'?'disabled':'')+'>Use phone</button></div>').join('')+(!devices.length?'<p>No USB phone detected. Connect and unlock it, then allow USB debugging.</p>':'')+'<button class="button" data-native-type="emulator">Use dedicated emulator</button>','<button class="button" data-dialog-close>Cancel</button>');
+ const {devices}=await api('/api/android/devices');showDialog('Music & Story device','<p>Choose the device used for native Instagram steps.</p>'+phoneRows(devices,state.config.androidDevice)+(!devices.length?'<p>No USB phone detected. Connect and unlock it, then allow USB debugging, or use Scan for phone in the dashboard.</p>':'')+'<button class="button" data-native-type="emulator">Use dedicated emulator</button>','<button class="button" data-dialog-close>Cancel</button>');
 }
 
 async function selectPostingRoute(route){
