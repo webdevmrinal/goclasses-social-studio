@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import sharp from 'sharp';
+import {storyReadbackAvailable,verifyOwnPublishedStory} from './native-story-readback.js';
 import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
 import {digest} from './native-photos.js';
@@ -109,11 +110,12 @@ export function nativeStoryPublicationEvidence(nodes){
  if(current.filter(n=>n['resource-id']===nativeId('direct_recipient_add_to_highlights_row')).length!==1||!exact('add_to_highlights_label','Add to highlights')||!completionDone(current))return null;
  return {verifiedBy:'native_story_completion_sheet',instagramAccepted:true,acknowledgement:'also_share_to_done'};
 }
-export async function confirmNativeStoryPublication(s,{onDiagnostic,timeout=30000}={}){
+export async function confirmNativeStoryPublication(s,{onDiagnostic,timeout=30000,handle,preview,submittedAt}={}){
  s.signal?.throwIfAborted();
  const report=async details=>{await onDiagnostic?.(details);s.signal?.throwIfAborted();};
  await report({phase:'waiting_for_acknowledgement'});
- const evidence=await s.until(nodes=>nativeStoryPublicationEvidence(nodes),'Story submission began. Check Instagram before retrying; no duplicate send was attempted.',timeout);
+ const evidence=await s.until(nodes=>nativeStoryPublicationEvidence(nodes)||(preview&&storyReadbackAvailable(nodes)?{readback:true}:null),'Story submission began. Check Instagram before retrying; no duplicate send was attempted.',timeout);
+ if(evidence.readback){const receipt=await verifyOwnPublishedStory(s,{handle,preview,submittedAt});await report({phase:'acknowledged',...receipt});return receipt;}
  const receipt={...evidence,verifiedAt:new Date().toISOString(),completionDismissed:false};
  await report({phase:'acknowledged',...receipt});
  if(evidence.verifiedBy!=='native_story_completion_sheet')return receipt;

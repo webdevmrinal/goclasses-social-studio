@@ -276,6 +276,7 @@ export class AndroidSession {
     for(let i=0;i<12;i++){
       const current=(await this.screen()).filter(n=>n.displayed==='true');
       if(await dismissInstagramRatingPrompt(this,current))continue;
+      if(current.some(n=>n['resource-id']===nativeId('reel_viewer_root'))&&current.some(n=>n['resource-id']===nativeId('reel_viewer_title')&&n.text===expected)&&current.some(n=>n['resource-id']===nativeId('self_toolbar_menu_button'))){await this.request('/back','POST',{});await delay(300);continue;}
       if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view')||n['resource-id']===nativeId('direct_private_share_container_view'))){
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
         await this.request('/back','POST',{});await delay(400);continue;

@@ -216,7 +216,7 @@ export class Queue extends EventEmitter {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
       if(nativeItem&&(nativeItem.id!=='instagramMusic'||run.config.androidDevice?.type==='phone')&&this.instagramWorker&&run.status!=='stopping'){
         await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
-        try{await this.instagramWorker.checkAccount(run.config,{runId:run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
+        try{await this.instagramWorker.checkAccount(run.config,{runId:run.config.androidDevice?.type==='phone'||run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');

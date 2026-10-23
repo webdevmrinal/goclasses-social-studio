@@ -3,6 +3,7 @@ import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, 
 import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
 import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
+import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
 import { freshDraft, workspaceFingerprint, reconcilePublishedDraft, restartChoices, draftFromRun } from '/shared/draft.js';
 import { mediaFor, mediaIdsFor, updateDraftMedia, setTextOnly, metadataNeedsReview, TEXT_ONLY_PLATFORMS } from '/shared/media.js';
 import { destinationReadiness, setupIssues } from '/shared/readiness.js';
@@ -82,7 +83,7 @@ let connected = false;
 let events, pollTimer, saveTimer, sending = false, uploading = false, reviewValid = false;
 let pendingMedia = [], mediaPreviewIndex = 0;
 let cleaningMedia = null, lastMediaOrder = null;
-let liveMetadataConsent={};
+let liveMetadataConsent={},captionConsent=null;
 let remoteReadiness = null, reviewDraft = null, reviewBlocked = [], readinessTimer, readinessVersion = 0;
 const platformPreviewIndex = {};
 const runExpansion = new Map();
@@ -136,7 +137,7 @@ async function api(url, { method = 'GET', body, ...options } = {}) {
 // Persist the final route and edits even when the page closes before debounce.
 window.addEventListener('pagehide',()=>{try{localStorage.setItem('mrinal.social-studio.draft',JSON.stringify(draft));}catch{/* Normal save status reports unavailable storage. */}});
 function saveDraft() {
-  liveMetadataConsent={};
+  captionConsent=null;liveMetadataConsent={};
   reviewValid = false;
   reviewDraft = null; remoteReadiness = null;
   readinessVersion++;
@@ -305,7 +306,7 @@ function actionbar() {
 }
 function previewPage() {
   const ready = readiness(), images = selectedMedia();
-  return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
+  return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}${captionReviewBanner(reviewDraft||draft)}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
     const images = platformMedia(p.id), caption = draft.captions[p.id] || '';
     const valid = ready[p.id].ready;
     return `<article class="panel preview-card ${valid ? '' : 'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div>${p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle}):p.id === 'manychat' ? `<div class="preview-placeholder">${icon('message')} New comment-to-DM automation</div>` : `<div data-carousel-view="review-${p.id}">${mediaCarousel(p, images, 'review')}</div>`}<div class="preview-caption">${p.id==='instagram'?(instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' &middot; Android music: '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details'):''):'Android'+(draft.instagram.music.enabled?' &middot; '+escape(draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Choose song'):''))+'<br>':''}${p.id==='instagramStory'?'Instagram'+(draft.instagram.story.linkEnabled!==false?' &middot; '+escape(draft.instagram.story.label)+' &middot; '+escape(draft.instagram.story.url):''):escape(caption || 'Add a caption in Compose.')}</div>${p.id === 'manychat' ? manychatReview() : ''}${!valid ? `<div class="excluded-reasons">${ready[p.id].errors.map(error => `<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>` : ''}<div class="preview-meta"><span class="badge ${valid ? '' : 'warn'}">${icon(valid ? 'check' : 'info')}${valid ? 'Included in run' : 'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
@@ -501,7 +502,7 @@ async function startRun(confirmation) {
   sending = true;
   try {
     const fingerprint=workspaceFingerprint(draft),live=mode==='LIVE';
-    const started=await api('/api/runs', { method: 'POST', body: { draft: reviewDraft, mode, confirmation, metadataConsent:liveMetadataConsent } });
+    const started=await api('/api/runs', { method: 'POST', body: { draft: reviewDraft, mode, confirmation, metadataConsent:liveMetadataConsent,captionConsent } });
     if(live){draft.submission={runId:started.id,fingerprint};saveDraft();}
     mode = 'TEST'; // Live authorization is one run only.
     await refresh(); navigate('activity');
@@ -635,7 +636,7 @@ document.addEventListener('click', async e => {
       const runId = button.dataset.retry;
       const retryPlatform = button.dataset.retryPlatform;
       const retry = async confirmation => {
-        await api(`/api/runs/${runId}/retry`, { method: 'POST', body: { mode: confirmation === 'POST' ? 'LIVE' : 'TEST', confirmation, platform: retryPlatform, metadataConsent:liveMetadataConsent } });
+        await api(`/api/runs/${runId}/retry`, { method: 'POST', body: { mode: confirmation === 'POST' ? 'LIVE' : 'TEST', confirmation, platform: retryPlatform, metadataConsent:liveMetadataConsent,captionConsent } });
         await refresh(); shell(); toast(retryPlatform ? `${platform(retryPlatform).name} queued.` : 'Failed destinations queued.');
       };
       const saved=state.runs.find(run=>run.id===runId),routeNote=saved?.items.some(item=>item.id==='instagram'&&item.status==='failed')&&(!retryPlatform||retryPlatform==='instagram')?`<p>Instagram feed: <strong>${instagramMethod(saved.instagram)==='web'?'Web':'Android'}</strong> (saved route). Change the route in Compose for a new reviewed run.</p>`:'';
@@ -643,7 +644,7 @@ document.addEventListener('click', async e => {
       document.querySelector('#retry-test').onclick = async () => { try { await retry(); modal.close(); } catch (error) { toast(error.message, true); } };
       document.querySelector('#retry-live').onclick = () => {
         const selected = state.runs.find(r => r.id === runId).items.filter(i => i.status === 'failed' && (!retryPlatform || i.id === retryPlatform));
-        const source=state.runs.find(r=>r.id===runId),candidate={selected:selected.map(i=>i.id),mediaByPlatform:source.mediaByPlatform,mediaIds:source.media.map(m=>m.id)};metadataPrompt(()=>confirmLive(retry,`Publish ${selected.length} failed destination${selected.length===1?'':'s'}`,candidate.selected),candidate,source.media,source);
+        const source=state.runs.find(r=>r.id===runId),candidate={selected:selected.map(i=>i.id),captions:source.captions,mediaByPlatform:source.mediaByPlatform,mediaIds:source.media.map(m=>m.id)};reviewCaptionFacts(()=>metadataPrompt(()=>confirmLive(retry,`Publish ${selected.length} failed destination${selected.length===1?'':'s'}`,candidate.selected),candidate,source.media,source),candidate);
       }; return;
     }
     if (button.dataset.resolve) {
@@ -681,7 +682,8 @@ document.addEventListener('click', async e => {
     if (button.dataset.action === 'import') importDialog();
     if (button.dataset.action === 'export') exportText();
     if (button.dataset.action === 'preview') await preview();
-    if (button.dataset.action === 'run') { if (mode === 'LIVE') metadataPrompt(()=>confirmLive(startRun,'Publish selected',reviewDraft.selected)); else await startRun(); }
+    if(button.hasAttribute('data-caption-facts')){reviewCaptionFacts(()=>{},reviewDraft||draft);return;}
+    if (button.dataset.action === 'run') { if (mode === 'LIVE') reviewCaptionFacts(()=>metadataPrompt(()=>confirmLive(startRun,'Publish selected',reviewDraft.selected)),reviewDraft); else await startRun(); }
     if (button.dataset.action === 'logins') await checkLogins();
     if (button.dataset.action === 'logout') { await api('/api/logout', { method: 'POST', body: {} }); showLogin(); }
     if (button.dataset.action === 'download-log') download('social-studio-report.json', JSON.stringify({ application: 'GO Classes Social Studio', createdBy: 'Mrinal', exportedAt: new Date().toISOString(), runs: state.runs }, null, 2), 'application/json');
@@ -985,4 +987,14 @@ async function selectPostingRoute(route){
   if(route==='emulator'&&state.config.androidDevice?.type!=='emulator'){const updated=structuredClone(state.config);updated.androidDevice={type:'emulator',serial:''};state.config=await api('/api/config',{method:'PUT',body:updated});}
   draft.instagram.postingMethod=route==='web'?'web':'android';if(route==='phone')draft.instagram.music.source='manual';saveDraft();shell();
  }finally{changingPostingRoute=false;}
+}
+
+function captionReviewBanner(candidate){
+ const {issues}=captionFacts(candidate);if(!issues.length)return '';
+ return '<div class="notice caption-facts-notice"><div><strong>'+issues.length+' caption fact'+(issues.length===1?'':'s')+' to review</strong><p>Possible number or date differences.</p></div><button class="button small" data-caption-facts>Review facts</button></div>';
+}
+function reviewCaptionFacts(proceed,candidate){
+ const {issues}=captionFacts(candidate),key=captionReviewKey(candidate);if(!issues.length||captionConsent?.reviewed===true&&captionConsent.key===key){proceed();return;}
+ showDialog('Review caption facts','<p>Check these values against your source before publishing.</p><div class="caption-facts-list">'+issues.map(issue=>'<section><strong>'+escape(issue.title)+'</strong><p>'+escape(issue.message)+'</p><ul>'+issue.sources.map(source=>'<li><b>'+escape(platform(source.id)?.name||source.id)+': '+escape(source.value)+'</b><span>'+escape(source.snippet)+'</span></li>').join('')+'</ul></section>').join('')+'</div><p class="text-muted">Compares supplied captions. It does not verify the official notice or image text.</p><label class="ig-check"><input type="checkbox" id="caption-facts-confirm"><span>I checked these values against my source.</span></label>','<button class="button" id="caption-facts-edit">Fix in Compose</button><button class="button primary" id="caption-facts-approve" disabled>Keep reviewed values</button>');
+ const approve=modal.querySelector('#caption-facts-approve');modal.querySelector('#caption-facts-confirm').onchange=e=>{approve.disabled=!e.target.checked;};approve.onclick=()=>{captionConsent={reviewed:true,key};modal.close();proceed();};modal.querySelector('#caption-facts-edit').onclick=()=>{captionTab=issues[0].sources[0].id;instagramTab='feed';modal.close();navigate('compose');document.querySelector('#caption-'+captionTab)?.focus();};
 }

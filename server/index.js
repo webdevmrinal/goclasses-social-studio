@@ -18,6 +18,7 @@ import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor, selectionErrors, metadataNeedsReview, metadataConsentValid } from '../shared/media.js';
 import {discoverPhones} from './android-devices.js';
+import {captionReviewAccepted} from '../shared/caption-review.js';
 import { InstagramAndroidWorker } from './automation/instagram-android.js';
 import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '../shared/instagram.js';
 import { destinationReadiness } from '../shared/readiness.js';
@@ -180,6 +181,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     for (const id of draft.selected) errors.push(...readiness[id].errors);
     if (errors.length) return res.status(400).json({ error: errors.join('\n') });
     if(mode==='LIVE'&&!metadataConsentValid(metadataNeedsReview(draft,selectedMedia),req.body.metadataConsent))return res.status(409).json({error:'Review the embedded origin metadata before publishing. Clean the selected images or explicitly keep the originals.'});
+    if(mode==='LIVE'&&!captionReviewAccepted(draft,req.body.captionConsent))return res.status(409).json({error:'Review the caption facts before publishing. Check conflicting numbers, dates and possible numeric typos.'});
     const run = await queue.start({ draft, config, mode, confirmation, media: selectedMedia });
     res.status(201).json({ id: run.id });
   });
@@ -199,6 +201,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const draftErrors = validateDraft(retryDraft, original.media, xLength);
     if (draftErrors.length) return res.status(400).json({ error: draftErrors.join('\n') });
     if(req.body.mode==='LIVE'&&!metadataConsentValid(metadataNeedsReview(retryDraft,original.media),req.body.metadataConsent))return res.status(409).json({error:'Review the embedded origin metadata before this live retry. Clean in Compose or explicitly keep the originals.'});
+    if(req.body.mode==='LIVE'&&!captionReviewAccepted(retryDraft,req.body.captionConsent))return res.status(409).json({error:'Review the saved caption facts before this live retry.'});
     const run = await queue.start({ draft: retryDraft, config, mode: req.body.mode || 'TEST', confirmation: req.body.confirmation, media: original.media, retryOf: original.id, sourceInstagramPublication });
     res.status(201).json({ id: run.id });
   });

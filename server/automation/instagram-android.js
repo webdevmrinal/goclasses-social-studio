@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import {openEditInfo,readEditMusic,editInfoState,editPhotoProof,chooseEditMusic,discardOwnedEdit,sameMusic} from './native-edit-music.js';
 import {randomUUID} from 'node:crypto';
+import {storyPreviewPixels} from './native-story-readback.js';
 import path from 'node:path';
-import {AndroidSession,nativeId} from './android-native.js';
+import {AndroidSession,nativeId,nativeBounds} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
 import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,publishStory,confirmNativeStoryPublication,discardStory} from './native-story.js';
 import {matchesMusicReference,resolveMusic,previewMusicChoice,assistNativeStage,musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
@@ -224,13 +225,13 @@ export class InstagramAndroidWorker {
         const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story visible. Do not tap it; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
         const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};
         await ctx.recordPreparation(preparation);
-        let publication;
+        let publication,submittedAt;const preview=await storyPreviewPixels(await s.screenshot(),nativeBounds({bounds:evidence.bounds}));
         await snapshot('story-preview');
         const status=await finishPost({...ctx,snapshot,
           preflight:async()=>{ctx.signal?.throwIfAborted();if(JSON.stringify(await storyAudienceEvidence(s,options.story))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');},
-          publish:async()=>{submitted=true;await publishStory(s,evidence,options.story);},
+          publish:async()=>{submitted=true;submittedAt=Date.now();await publishStory(s,evidence,options.story);},
           verify:async()=>{
-            const receipt=await confirmNativeStoryPublication(s,{onDiagnostic:async receipt=>ctx.recordPreparation({...preparation,receipt})});
+            const receipt=await confirmNativeStoryPublication(s,{handle:ctx.config.platforms.instagram.handle,preview,submittedAt,onDiagnostic:async receipt=>ctx.recordPreparation({...preparation,receipt})});
             publication={...receipt,sourcePostUrl:url,requestedDestinations:evidence.destinations};
           }
         });
