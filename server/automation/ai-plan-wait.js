@@ -5,6 +5,7 @@ export async function planNavigation(ai,input,{deadline,step=async()=>{},now=Dat
  const state=ai.state?.(),remaining=state?.today?.remaining;
  const delay=Number(state?.cooldownUntil)-now()+75;
  if(state?.status!=='cooldown'||!Number.isFinite(delay)||delay<=0||delay>35000||remaining===0||!Number.isFinite(deadline)||now()+delay+1000>=deadline)return null;
+ await input.onEvent?.({phase:'waiting',message:'Waiting briefly for the Gemini free-tier request window; no new API call yet.'});
  await step('Gemini recovery is waiting '+Math.ceil(delay/1000)+' seconds for the free-tier request window.');
  await wait(delay,input.signal);input.signal?.throwIfAborted();if(now()>=deadline)return null;
  result=await ai.plan(input);input.signal?.throwIfAborted();return result;

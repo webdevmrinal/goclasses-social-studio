@@ -50,7 +50,9 @@
     "test:manual-login-ui": "node tests/manual-login-ui.js",
     "test:dependencies-ui": "node tests/dependencies-ui.js",
     "test:manychat-login": "node tests/manychat-login-smoke.js",
-    "test:navigation-ai-ui": "node tests/navigation-ai-ui.js"
+    "test:navigation-ai-ui": "node tests/navigation-ai-ui.js",
+    "test:recovery-ui": "node tests/recovery-progress-ui.js",
+    "test:recovery-practice": "node --test tests/recovery-practice.test.js tests/recovery-practice-api.test.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

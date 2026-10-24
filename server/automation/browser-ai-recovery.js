@@ -123,7 +123,7 @@ async function scrollControl(page,snapshot,control,direction){
 
 // AI decisions are hints over stable c1/c2 bindings. Every mutation is followed
 // by the caller's read-only expected-state proof. Submission is not an action.
-export async function recoverBrowserNavigation({page,ai,platform,goal,isComplete,signal,step=async()=>{},maxSteps=3,wait=pause}={}){
+export async function recoverBrowserNavigation({page,ai,platform,goal,isComplete,signal,step=async()=>{},reportRecovery=async()=>{},maxSteps=3,wait=pause}={}){
   const trace=[];let actions=0;
   const finish=(completed,reason,value)=>({completed,reason,actions,trace,...(completed?{proof:value}:{})});
   const emit=async event=>{trace.push(event);await step(event.message);};
@@ -138,7 +138,7 @@ export async function recoverBrowserNavigation({page,ai,platform,goal,isComplete
     const controls=browserNavigationControls(snapshot);if(!controls.length)return finish(false,'no_safe_controls');
     await emit({type:'planning',message:'Gemini is checking the available navigation controls.'});abort(signal);
     let planned;
-    try{planned=await planNavigation(ai,{platform,stage:goal,controls,signal},{deadline,step});}catch(error){abort(signal);return finish(false,'model_unavailable');}
+    try{planned=await planNavigation(ai,{platform,stage:goal,controls,signal,onEvent:reportRecovery},{deadline,step});}catch(error){abort(signal);return finish(false,'model_unavailable');}
     abort(signal);
     const action=planned?.action;
     if(!action||!['click','scroll','wait','stop'].includes(action.type))return finish(false,'model_unavailable');
@@ -148,6 +148,7 @@ export async function recoverBrowserNavigation({page,ai,platform,goal,isComplete
     const chosen=current.controls.find(control=>control.id===action.controlId);
     if(action.type!=='wait'&&(!chosen||(action.type==='scroll')!==Boolean(chosen.scrollable)))return finish(false,'invalid_control');
     if(action.type==='scroll'&&!['up','down'].includes(action.direction))return finish(false,'invalid_control');
+    await reportRecovery({phase:'executing',fix:planned.fix,action:action.type==='click'?'Click '+chosen.label:action.type==='scroll'?'Scroll '+action.direction:'Wait for the screen',model:planned.model,message:'Trying the locally verified action suggested by Gemini.'});
     seen.add(snapshot.stamp);abort(signal);
     if(action.type==='click'){
       const handle=await bindControl(page,current,chosen);if(!handle)return finish(false,'screen_changed');
@@ -157,6 +158,7 @@ export async function recoverBrowserNavigation({page,ai,platform,goal,isComplete
       await emit({type:'action',action:'scroll',message:`Gemini navigation: scroll ${action.direction}.`});abort(signal);const final=await collectBrowserNavigationSnapshot(page,platform,goal);if(!final.safe||final.stamp!==current.stamp)return finish(false,'screen_changed');actions++;
       if(!await scrollControl(page,current,chosen,action.direction))return finish(false,'unchanged_screen');
     }else{await emit({type:'action',action:'wait',message:'Gemini navigation: wait briefly for the screen.'});actions++;}
+    await reportRecovery({phase:'verifying',message:'Checking whether the expected screen is ready.'});
     for(let observation=0;observation<4;observation++){
       abort(signal);await wait(250);abort(signal);
       const after=await collectBrowserNavigationSnapshot(page,platform,goal);if(!after.safe)return finish(false,after.reason);

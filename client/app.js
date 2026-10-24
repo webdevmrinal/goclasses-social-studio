@@ -171,7 +171,7 @@ function shell() {
       <nav class="navigation" aria-label="Main navigation">${Object.entries(titles).map(([id, title]) => `<button class="nav-item ${view === id ? 'active' : ''}" data-view="${id}" ${view === id ? 'aria-current="page"' : ''} title="${title}">${icon(id === 'preview' ? 'eye' : id === 'settings' ? 'settings' : id)}<span>${title}</span></button>`).join('')}</nav>
       <div class="sidebar-bottom"><div class="credit"><div class="avatar">M</div><div><p>Created by</p><strong>Mrinal</strong></div></div></div>
     </aside>
-    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
+    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><div data-recovery-shortcut>${recoveryShortcut()}</div><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
     <div data-manual-login-host>${manualLoginNotice()}</div><main id="main" class="main" tabindex="-1">${page()}</main></div>
     ${actionbar()}
   </div>`;
@@ -337,7 +337,7 @@ function statusBadge(item) {
   return `<span class="badge ${bad ? 'bad' : warn ? 'warn' : good ? '' : 'neutral'}">${icon(item.status === 'running' ? 'refresh' : good ? 'check' : warn || bad ? 'info' : 'clock', item.status === 'running' ? 'spin' : '')}${statusLabels[item.status] || item.status}</span>`;
 }
 function activityPage() {
-  return `<div class="hero"><div><h1>Activity</h1></div><div class="hero-actions"><button class="button danger" data-kill-run="${activeRun()?.id||''}" ${!activeRun()||activeRun()?.status==='stopping'?'disabled':''} title="Stop this activity now. A submission already sent may still finish.">${icon('stop')} Stop now</button><button class="button" data-action="download-log">${icon('download')}<span>Export report</span></button></div></div><div id="activity-runs">${renderRuns()}</div>${footer()}`;
+  return `<div class="hero"><div><h1>Activity</h1></div><div class="hero-actions"><button class="button danger" data-kill-run="${activeRun()?.id||''}" ${!activeRun()||activeRun()?.status==='stopping'?'disabled':''} title="Stop this activity now. A submission already sent may still finish.">${icon('stop')} Stop now</button><button class="button" data-action="download-log">${icon('download')}<span>Export report</span></button></div></div><div id="recovery-progress-host">${recoveryPanel()}</div><div id="activity-runs">${renderRuns()}</div>${footer()}`;
 }
 function runMessage(item) {
   if(item.id==='instagramMusic'&&item.status==='uncertain')return 'Feed is published. Verify its music before retrying.';
@@ -369,6 +369,43 @@ function renderRuns() {
     }).join('')}</div></details>`;
   }).join('');
 }
+
+const recoveryPhases={detected:'Problem detected',calling:'Calling Gemini',waiting:'Waiting for Gemini',proposed:'Fix suggested',executing:'Trying the fix',verifying:'Checking the result',succeeded:'Recovered',paused:'Manual help needed',failed:'Recovery stopped'};
+function recoveryEvents(recovery){return Array.isArray(recovery?.events)?recovery.events.slice(-20).filter(event=>event&&typeof event==='object'):[];}
+function recoveryShortcut(){
+ const recovery=state.recovery;if(!recovery)return '';
+ const active=recovery.status==='running',label=active?'Recovery in progress':recovery.status==='succeeded'?'Recovery complete':'Recovery needs attention';
+ return '<button class="button subtle small recovery-shortcut" data-view="activity" aria-label="Open recovery progress">'+icon(active?'refresh':recovery.status==='succeeded'?'check':'info',active?'spin':'')+'<span>'+label+'</span></button>';
+}
+function recoveryPanel(){
+ const recovery=state.recovery;if(!recovery)return '';
+ const events=recoveryEvents(recovery),last=events.at(-1),phase=recovery.phase||'detected',active=recovery.status==='running';
+ const latest=key=>[...events].reverse().find(event=>event[key])?.[key];
+ const model=recovery.model||latest('model'),fix=recovery.fix||latest('fix'),action=recovery.action||latest('action');
+ const apiEvent=[...events].reverse().find(event=>['calling','proposed'].includes(event.phase));
+ const gemini=phase==='calling'?'Calling Gemini'+(model?' · '+model:''):apiEvent?.message||(phase==='detected'?'Waiting for a navigation check':'No API call recorded');
+ const current=phase==='executing'?(action||last?.message||'Trying the permitted navigation step'):phase==='verifying'?(last?.message||'Checking the expected screen'):['succeeded','paused','failed'].includes(phase)?(last?.message||recoveryPhases[phase]):phase==='calling'?'Waiting for Gemini':phase==='proposed'?(action||'Preparing the permitted steps'):(last?.message||'Inspecting the current screen');
+ const checkpoints=[['detected','Problem'],['calling','Gemini'],['proposed','Fix'],['executing','Try'],['verifying','Check']];
+ const reached=new Set(events.map(event=>event.phase));reached.add(phase);
+ const isPractice=recovery.practice===true||recovery.kind==='practice';
+ const ready=state.navigationAI?.configured&&state.navigationAI?.enabled&&state.navigationAI?.automatic;
+ return '<section class="panel recovery-panel" data-recovery-id="'+escape(recovery.id)+'" data-recovery-phase="'+escape(phase)+'" aria-labelledby="recovery-title"><div class="recovery-heading"><div><span class="recovery-symbol">'+icon(active?'refresh':'sparkle',active?'spin':'')+'</span><h2 id="recovery-title">'+(isPractice?'Gemini practice test':'Automatic recovery')+'</h2></div><span class="badge '+(recovery.status==='succeeded'?'':active?'neutral':'warn')+'" data-recovery-state role="status">'+escape(recoveryPhases[phase]||'Recovery update')+'</span></div><ol class="recovery-checkpoints" aria-label="Recovery stages">'+checkpoints.map(([key,label])=>'<li class="'+(phase===key?'current':reached.has(key)?'reached':'')+'" '+(phase===key?'aria-current="step"':'')+'>'+escape(label)+'</li>').join('')+'</ol><dl class="recovery-fields"><div><dt>Problem</dt><dd data-recovery-problem>'+escape(recovery.problem||'A navigation step needs attention.')+'</dd></div><div><dt>Gemini</dt><dd data-recovery-api>'+escape(gemini)+'</dd></div><div><dt>Suggested fix</dt><dd data-recovery-fix>'+escape(fix||(phase==='detected'||phase==='calling'?'Waiting for a suggestion':'No fix was suggested'))+'</dd></div><div><dt>Currently trying</dt><dd data-recovery-action aria-live="polite">'+escape(current)+'</dd></div></dl>'+(events.length?disclosure('recovery-'+recovery.id,'Recovery log','<ol class="recovery-events">'+events.map(event=>'<li><strong>'+escape(recoveryPhases[event.phase]||'Update')+'</strong><span>'+escape(event.message||event.action||event.fix||'')+'</span>'+(event.fix&&event.fix!==event.message?'<small>Fix: '+escape(event.fix)+'</small>':'')+(event.action&&event.action!==event.message?'<small>Action: '+escape(event.action)+'</small>':'')+'</li>').join('')+'</ol>',false,'recovery-log'):'')+(active&&recovery.canStop?'<div class="recovery-practice-footer"><button class="button small" data-action="recovery-stop">Stop recovery</button></div>':'')+(isPractice?'<div class="recovery-practice-footer"><small>Practice only. No social post is sent.</small>'+(!active?'<button type="button" class="button small" data-action="recovery-test" '+(workerBusy()||!ready?'disabled':'')+'>'+icon('refresh')+' Retry practice test</button>':'')+'</div>':'')+'</section>';
+}
+function renderRecovery(){
+ const host=document.querySelector('#recovery-progress-host');if(host){const html=recoveryPanel();if(host.dataset.rendered!==html){const y=window.scrollY,x=window.scrollX;host.dataset.rendered=html;host.innerHTML=html;window.scrollTo({left:x,top:y,behavior:'instant'});}}
+ const shortcut=document.querySelector('[data-recovery-shortcut]');if(shortcut){const html=recoveryShortcut();if(shortcut.innerHTML!==html)shortcut.innerHTML=html;}
+ const ready=state.navigationAI?.configured&&state.navigationAI?.enabled&&state.navigationAI?.automatic;
+ document.querySelectorAll('[data-action="recovery-test"]').forEach(button=>{button.disabled=workerBusy()||!ready;});
+}
+async function startRecoveryPractice(){
+ if(workerBusy())return toast('Finish the current activity first.',true);
+ const settings=state.navigationAI;if(!settings?.configured||!settings.enabled||!settings.automatic)return toast('Save enabled automatic recovery in Navigation help first.',true);
+ const buttons=[...document.querySelectorAll('[data-action="recovery-test"]')];buttons.forEach(button=>button.disabled=true);
+ try{await api('/api/navigation-ai/test',{method:'POST',body:{}});if(modal.open)modal.close();await refresh();navigate('activity');}
+ catch(error){const status=modal.querySelector('#navigation-ai-status');if(modal.open&&status)status.textContent=error.message;else toast(error.message,true);}
+ finally{renderRecovery();}
+}
+
 function restartDraftDialog(run){
  if(workerBusy()||uploading)return toast('Stop the current activity or finish the upload first.',true);
  const choices=restartChoices(run),feed=choices.find(c=>c.id==='instagram'),feedChecked=feed?.available&&feed.checked;
@@ -385,9 +422,10 @@ async function navigationHelp(){
   '<label class="check"><input type="checkbox" name="automatic" '+(settings.enabled&&settings.automatic?'checked ':'')+(!settings.enabled?'disabled':'')+'> Let Gemini recover navigation automatically</label>'+
   '<small>Checks each bounded step. Pauses if uncertain, busy or quota-limited. Studio keeps the final publishing checks.</small>'+
   '<label class="field"><span>Gemini API key</span><input type="password" name="apiKey" autocomplete="new-password" spellcheck="false" placeholder="'+(settings.configured?'Key configured; leave blank to keep it':'Paste your API key here')+'"></label>'+
-  '<small>'+(settings.keySource==='environment'?'Using the key from this computer�s environment.':'Saved only on this worker computer. Never included in drafts or shared settings.')+'</small>'+
+  '<small>'+(settings.keySource==='environment'?'Using the environment key on this computer.':'Saved only on this worker computer. Never included in drafts or shared settings.')+'</small>'+
   '<p class="text-muted">Use an eligible free-tier project without billing. Only limited navigation control names are sent. No captions, messages or images. Google may use free-tier data to improve its products.</p>'+
   '<p class="text-muted">At most 2 requests a minute and 10 a day, with cached guidance and cooldowns. Busy models switch once when appropriate, then return to manual help.</p>'+
+  '<div class="navigation-practice"><button type="button" class="button small" data-action="recovery-test" '+(workerBusy()||!settings.enabled||!settings.automatic||!settings.configured?'disabled':'')+'>Try Gemini recovery</button><small>Safe practice test. No social post is sent; API limits apply. Save enabled automatic recovery first.</small></div>'+
   '<p><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Get a Gemini API key</a></p><p id="navigation-ai-status" role="status">'+escape(settings.message||'Optional. Local recovery works without Gemini.')+'</p></form>',
   '<button class="button" data-dialog-close>Cancel</button>'+(settings.configured&&settings.keySource!=='environment'?'<button class="button subtle" id="navigation-ai-remove">Remove key</button>':'')+'<button class="button primary" type="submit" form="navigation-ai-form">Save settings</button>');
  const form=modal.querySelector('#navigation-ai-form');
@@ -398,7 +436,7 @@ async function navigationHelp(){
 }
 function navigationAdvice(handoff){
  const ai=handoff?.ai;if(!ai)return '';
- if(ai.status==='loading')return '<p class="navigation-ai-note" role="status">'+icon('refresh','spin')+' Checking navigation options�</p>';
+ if(ai.status==='loading')return '<p class="navigation-ai-note" role="status">'+icon('refresh','spin')+' Checking navigation options...</p>';
  if(ai.status==='ready'&&Array.isArray(ai.steps))return '<aside class="navigation-ai-advice"><strong>'+icon('sparkle')+' Gemini suggestion</strong><ol>'+ai.steps.slice(0,3).map(step=>'<li>'+escape(step)+'</li>').join('')+'</ol><small>Follow only the relevant navigation step. Leave Save and Share to Studio.</small></aside>';
  return '<p class="navigation-ai-note" role="status">'+escape(ai.message||'Gemini is unavailable. Continue manually using the instructions above.')+'</p>';
 }
@@ -678,6 +716,8 @@ document.addEventListener('click', async e => {
     if (button.dataset.move) { const ids = [...draft.mediaIds], i = ids.indexOf(button.dataset.move), target = i + Number(button.dataset.direction || -1); if (i >= 0 && target >= 0 && target < ids.length) { [ids[target], ids[i]] = [ids[i], ids[target]]; changeMediaOrder(ids, 'Image order updated.'); } return; }
     if (button.hasAttribute('data-media-preview')) { mediaPreviewIndex = Number(button.dataset.mediaPreview); shell(); return; }
     if (button.dataset.action === 'navigation-help') { await navigationHelp(); return; }
+    if (button.dataset.action === 'recovery-stop') { await api('/api/navigation-ai/test/stop',{method:'POST',body:{}});await refresh();return; }
+    if (button.dataset.action === 'recovery-test') { await startRecoveryPractice(); return; }
     if (button.dataset.action === 'continue-compose') {
       if (document.querySelector('#settings-form')?.dataset.dirty === 'true') return toast('Save your connection changes before continuing.', true);
       draft.selected=draft.selected.filter(id=>id==='instagramStory'||draft.captions[id]?.trim());syncStorySelection(draft);
@@ -845,7 +885,7 @@ function applyStatus(data) {
   const signInHost=document.querySelector('[data-manual-login-host]');if(signInHost)signInHost.innerHTML=manualLoginNotice();
   updateWorkerControls();
   const freshButton=document.querySelector('[data-action="fresh-workspace"]');if(freshButton)freshButton.disabled=workerBusy()||uploading;
-   state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;state.navigationAI=data.navigationAI;
+   state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;state.navigationAI=data.navigationAI;state.recovery=data.recovery||null;renderRecovery();
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
   if(musicPickerOpen&&data.androidProgress?.picker)musicPickerUi?.progress(data.androidProgress);
   if (data.config) {
@@ -891,7 +931,7 @@ async function load() {
   const completed=reconcilePublishedDraft(draft,state.runs.find(run=>run.id===draft.submission?.runId));if(completed){draft=completed.draft;saveDraft();}
   for (const [id, ids] of Object.entries(draft.mediaByPlatform)) { if (!platform(id) || !Array.isArray(ids)) delete draft.mediaByPlatform[id]; else draft.mediaByPlatform[id] = ids.filter(key => draft.mediaIds.includes(key)); }
   connected = true;
-  if (activeRun()) view = 'activity';
+  if (activeRun() || state.recovery?.status === 'running') view = 'activity';
   shell(); connect();
 }
 function showLogin() {

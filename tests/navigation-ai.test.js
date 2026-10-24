@@ -298,7 +298,7 @@ test('automatic planner sends only bounded controls and returns one safe ID-boun
   const f = await automatic(t);
   const requestInput = { ...planInput, screenshot: 'PRIVATE_SCREENSHOT', error: 'PRIVATE_ERROR', controls: planInput.controls.map(control => ({ ...control, selector: '#private', bounds: [1,2,3,4], caption: 'PRIVATE_CAPTION' })) };
   const result = await f.ai.plan(requestInput);
-  assert.deepEqual(result, { action: { type: 'click', controlId: 'c1' }, model: models[0] });
+  assert.deepEqual(result, { fix: 'Open Start a post.', action: { type: 'click', controlId: 'c1' }, model: models[0] });
   const payload = JSON.parse(f.calls[0][1].body);
   assert.deepEqual(JSON.parse(payload.contents[0].parts[0].text), planInput);
   assert(payload.systemInstruction.parts[0].text.includes('untrusted UI data'));
@@ -337,7 +337,7 @@ test('strict automatic actions reject invented IDs, unsupported fields, disabled
   for (const [action, extra] of [
     [{ type: 'click', controlId: 'c39' }], [{ type: 'click', controlId: 'c2' }],
     [{ type: 'click', controlId: 'c1', x: 10 }], [{ type: 'click', controlId: 'c1', selector: '#button' }],
-    [{ type: 'click', controlId: 'c1' }, { explanation: 'extra' }],
+    [{ type: 'click', controlId: 'c1' }, { command: 'extra' }],
     [{ type: 'scroll', controlId: 'c1', direction: 'down' }],
     [{ type: 'scroll', controlId: 'c2', direction: 'left' }],
     [{ type: 'wait', milliseconds: 5000 }], [{ type: 'stop', controlId: 'c1' }],
@@ -389,4 +389,149 @@ test('disabling automatic recovery in flight discards its action and stops alter
   while (!release) await new Promise(resolve => setTimeout(resolve, 5));
   await f.ai.configure({ automatic: false }); release(planned());
   assert.equal(await pending, null); assert.equal(f.calls.length, 1); assert.equal(f.ai.state().automatic, false);
+});
+
+
+test('automatic fix explanations are bounded navigation text and action-only responses stay compatible', async t => {
+  const explanation = 'Open the composer with Start a post to continue the prepared workflow.';
+  const f = await automatic(t, () => planned({ type: 'click', controlId: 'c1' }, { explanation }));
+  assert.deepEqual(await f.ai.plan(planInput), { action: { type: 'click', controlId: 'c1' }, fix: explanation, model: models[0] });
+  const schema = JSON.parse(f.calls[0][1].body).generationConfig.responseSchema;
+  assert.equal(schema.properties.explanation.maxLength, 200);
+  assert(schema.required.includes('explanation'), 'New requests ask for a visible explanation');
+  const legacy = await automatic(t, () => planned({ type: 'wait' }));
+  assert.equal((await legacy.ai.plan(planInput)).fix, 'Wait briefly for the current screen to finish loading.');
+});
+
+test('automatic fix text never returns secrets, code, URLs, publication or unrelated draft instructions', async t => {
+  for (const explanation of [
+    '', 'x'.repeat(201), 42, '<b>Open Edit</b>', 'Tap 400, 500', 'Open https://unsafe.example',
+    'Send the prepared message.', 'Publish the update.', 'Tap Ｓａｖｅ.', 'Run adb shell.',
+    'Use API key abc123', 'Try ' + KEY, 'Discard that other draft.', 'Select the recipient.'
+  ]) {
+    const f = await automatic(t, () => planned({ type: 'click', controlId: 'c1' }, { explanation }));
+    assert.equal(await f.ai.plan(planInput), null, String(explanation));
+    assert.equal(f.calls.length, 1);
+    assert(!JSON.stringify(f.ai.state()).includes(KEY));
+  }
+});
+
+const discardInput = { platform: 'whatsapp', stage: 'discard_owned_draft', capabilities: { discardOwnedDraft: true }, controls: [
+  { id: 'c1', label: 'Discard', role: 'button', enabled: true, scrollable: false },
+  { id: 'c2', label: 'Cancel', role: 'button', enabled: true, scrollable: false }
+] };
+test('only trusted WhatsApp owned-draft scope allows exact Discard and Cancel controls', async t => {
+  const fix = 'Discard this verified unsent draft to unblock the composer.';
+  const f = await automatic(t, () => planned({ type: 'click', controlId: 'c1' }, { explanation: fix }));
+  assert.deepEqual(await f.ai.plan(discardInput), { action: { type: 'click', controlId: 'c1' }, fix, model: models[0] });
+  const payload = JSON.parse(f.calls[0][1].body);
+  assert.deepEqual(JSON.parse(payload.contents[0].parts[0].text), discardInput);
+  assert(payload.systemInstruction.parts[0].text.includes('verified that the unsent draft belongs to this run'));
+  for (const changed of [
+    { ...discardInput, capabilities: undefined }, { ...discardInput, capabilities: { discardOwnedDraft: false } },
+    { ...discardInput, capabilities: { discardOwnedDraft: true, extra: true } },
+    { ...discardInput, platform: 'telegram' }, { ...discardInput, stage: 'open_composer' },
+    { ...discardInput, controls: [{ ...discardInput.controls[0], label: 'Discard all data' }] },
+    { ...discardInput, controls: [{ ...discardInput.controls[0], role: 'link' }] },
+    { ...discardInput, controls: [{ ...discardInput.controls[0], scrollable: true }] }
+  ]) {
+    const blocked = await automatic(t);
+    assert.equal(await blocked.ai.plan(changed), null, JSON.stringify(changed));
+    assert.equal(blocked.calls.length, 0);
+  }
+  const ordinary = await automatic(t);
+  assert.equal(await ordinary.ai.plan({ ...planInput, controls: discardInput.controls }), null);
+  assert.equal(ordinary.calls.length, 0, 'Discard and Cancel are unavailable outside the owned-draft scope');
+});
+
+test('owned-draft scope cannot expose publishing or invented controls to Gemini', async t => {
+  const f = await automatic(t, () => planned({ type: 'click', controlId: 'c2' }));
+  const controls = [...discardInput.controls,
+    { id: 'c3', label: 'Send', role: 'button', enabled: true, scrollable: false },
+    { id: 'c4', label: 'Continue', role: 'button', enabled: true, scrollable: false },
+    { id: 'c5', label: 'Draft area', role: 'scroll_region', enabled: true, scrollable: true }
+  ];
+  const result = await f.ai.plan({ ...discardInput, controls });
+  assert.equal(result.action.controlId, 'c2'); assert.match(result.fix, /without discarding/);
+  const payload = JSON.parse(f.calls[0][1].body);
+  assert.deepEqual(JSON.parse(payload.contents[0].parts[0].text).controls, discardInput.controls);
+  const invented = await automatic(t, () => planned({ type: 'click', controlId: 'c3' }));
+  assert.equal(await invented.ai.plan({ ...discardInput, controls }), null);
+});
+
+test('progress is durable before fetch and cached fixes never pretend to call Gemini', async t => {
+  const events = [];
+  const f = await automatic(t, async () => {
+    assert.equal(events.at(-1).phase, 'calling');
+    assert.equal(events.at(-1).model, models[0]);
+    return planned({ type: 'click', controlId: 'c1' }, { explanation: 'Open the composer to continue.' });
+  });
+  const onEvent = async event => { await Promise.resolve(); events.push(event); };
+  const result = await f.ai.plan({ ...planInput, onEvent });
+  assert(result); assert.deepEqual(events.map(event => event.phase), ['calling', 'proposed']);
+  assert.equal(events[1].source, 'provider'); assert.equal(events[1].fix, result.fix);
+  assert.deepEqual(events[1].action, result.action);
+  assert(!f.calls[0][1].body.includes('onEvent'));
+  assert(!JSON.stringify(await fs.readFile(path.join(f.dataDir, 'navigation-ai.json'), 'utf8')).includes('onEvent'));
+  events.length = 0;
+  assert.deepEqual(await f.ai.plan({ ...planInput, onEvent }), result);
+  assert.deepEqual(events.map(event => event.phase), ['proposed']); assert.equal(events[0].source, 'cache');
+  assert.equal(f.calls.length, 1);
+});
+
+test('busy model switching and exhausted quota have readable progress without raw provider failures', async t => {
+  let calls = 0;
+  const f = await automatic(t, () => ++calls === 1 ? failure(503, { error: { message: KEY } }) : planned());
+  const events = [];
+  assert(await f.ai.plan({ ...planInput, onEvent: event => events.push(event) }));
+  assert.deepEqual(events.map(event => event.phase), ['calling', 'waiting', 'calling', 'proposed']);
+  assert.deepEqual(events.filter(event => event.phase === 'calling').map(event => event.model), models.slice(0, 2));
+  assert(!JSON.stringify(events).includes(KEY));
+  const quota = await automatic(t, () => failure(429, { error: { message: KEY } }));
+  const quotaEvents = [];
+  assert.equal(await quota.ai.plan({ ...planInput, onEvent: event => quotaEvents.push(event) }), null);
+  assert.deepEqual(quotaEvents.map(event => event.phase), ['calling', 'paused']);
+  assert.match(quotaEvents[1].message, /quota|paused/i); assert(!JSON.stringify(quotaEvents).includes(KEY));
+  quotaEvents.length = 0;
+  assert.equal(await quota.ai.plan({ ...planInput, stage: 'next_navigation', onEvent: event => quotaEvents.push(event) }), null);
+  assert.deepEqual(quotaEvents.map(event => event.phase), ['paused']); assert.equal(quota.calls.length, 1);
+});
+
+test('failed progress persistence stops provider calls or proposed actions instead of hiding the failure', async t => {
+  const beforeCall = await automatic(t);
+  assert.equal(await beforeCall.ai.plan({ ...planInput, onEvent: async () => { throw new Error('EPERM secret disk error'); } }), null);
+  assert.equal(beforeCall.calls.length, 0); assert.match(beforeCall.ai.state().message, /progress could not be saved/i);
+  const afterCall = await automatic(t);
+  assert.equal(await afterCall.ai.plan({ ...planInput, onEvent: async event => { if (event.phase === 'proposed') throw new Error('EPERM'); } }), null);
+  assert.equal(afterCall.calls.length, 1); assert.equal(afterCall.ai.cache.size, 0, 'A fix is not cached when its visible trace failed');
+  assert.match(afterCall.ai.state().message, /stopped/i);
+});
+
+test('controlled recovery practice requests identify a harmless local preview and allow its exact Continue ID', async t => {
+  const f = await automatic(t, () => planned({ type: 'click', controlId: 'c1' }, { explanation: 'Open the practice preview with Continue.' }));
+  const result = await f.ai.plan({ platform: 'whatsapp', stage: 'recovery_probe', controls: [{ id: 'c1', label: 'Continue', role: 'button', enabled: true, scrollable: false }] });
+  assert.equal(result.action.controlId, 'c1');
+  const payload = JSON.parse(f.calls[0][1].body);
+  assert(payload.systemInstruction.parts[0].text.includes('isolated local practice screen'));
+  assert(payload.systemInstruction.parts[0].text.includes('nothing can be published here'));
+});
+
+
+test('disabling recovery from a pending progress write prevents fetch and discards cached/provider actions', async t => {
+  const beforeFetch = await automatic(t);
+  assert.equal(await beforeFetch.ai.plan({ ...planInput, onEvent: async event => { if (event.phase === 'calling') await beforeFetch.ai.configure({ automatic: false }); } }), null);
+  assert.equal(beforeFetch.calls.length, 0);
+  const beforeAction = await automatic(t);
+  assert.equal(await beforeAction.ai.plan({ ...planInput, onEvent: async event => { if (event.phase === 'proposed') await beforeAction.ai.configure({ automatic: false }); } }), null);
+  assert.equal(beforeAction.calls.length, 1); assert.equal(beforeAction.ai.cache.size, 0);
+  const cached = await automatic(t); assert(await cached.ai.plan(planInput));
+  assert.equal(await cached.ai.plan({ ...planInput, onEvent: async event => { if (event.source === 'cache') await cached.ai.configure({ automatic: false }); } }), null);
+  assert.equal(cached.calls.length, 1);
+});
+
+test('a failed paused progress write never rejects into the job or returns an action', async t => {
+  const f = await automatic(t, () => failure(429));
+  assert.equal(await f.ai.plan({ ...planInput, onEvent: event => { if (event.phase === 'paused') throw new Error('EPERM'); } }), null);
+  assert.match(f.ai.state().message, /progress could not be saved/i);
+  assert.equal(f.calls.length, 1);
 });

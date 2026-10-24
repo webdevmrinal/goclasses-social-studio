@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 // Channel UI only. No personal-chat lookup, Enter-to-send, or automatic retries.
 import { randomUUID } from 'node:crypto';
+import { captureWhatsAppOwnedDraft, releaseWhatsAppOwnedDraft, recoverWhatsAppOwnedDraft, collectWhatsAppDiscardControl } from './whatsapp-ai-recovery.js';
 import { whatsappChannelUrl } from '../../shared/whatsapp.js';
 import { navigate, wait, readCaption, pasteCaption, verifyCaption, waitForImages, preparedButton, finishPost, InterventionError, AccountMismatchError, ReadinessError, NetworkError } from './utils.js';
 
@@ -61,13 +62,16 @@ async function verifyChannelLink(page, expected) {
     if (actual !== expected.channelUrl) throw new AccountMismatchError('The WhatsApp channel name matches, but its unique channel link is different. Nothing was sent.');
   } finally { await drawer.getByRole('button', { name: 'Close', exact: true }).click(); }
 }
-export async function openWhatsAppChannel({ page, config, step = async () => {}, requireEmpty = false, readyTimeout = 90000, channelTimeout = 30000 }) {
+export async function openWhatsAppChannel({ page, config, step = async () => {}, requireEmpty = false, readyTimeout = 90000, channelTimeout = 30000, ownedDraftRecovery, ai, signal, reportRecovery }) {
   const expected = config.platforms.whatsapp;
   if (!expected?.channelName || !whatsappChannelUrl(expected.channelUrl)) throw attention('needs_setup', 'Add the exact WhatsApp channel name and public channel URL in Connections.');
   if (!page.url().startsWith('https://web.whatsapp.com/')) await navigate(page, 'https://web.whatsapp.com/', step);
   await step('Waiting for WhatsApp to load and checking its linked session…');
   await waitForWhatsAppReady(page, { timeout: readyTimeout });
-  if (await visible(photoEditor(page))) throw attention('needs_attention', 'WhatsApp already has an unsent media selection. Review or discard it yourself before running automation.');
+  if (await visible(photoEditor(page))) {
+    const recovered = ownedDraftRecovery ? await recoverWhatsAppOwnedDraft({page,config,ownership:ownedDraftRecovery,ai,signal,step,reportRecovery}) : null;
+    if (!recovered?.completed) throw attention('needs_attention', 'WhatsApp already has an unsent media selection. Review it on the worker; only an unchanged app-owned TEST draft can be automatically discarded.');
+  }
   await page.getByRole('button', { name: 'Channels', exact: true }).click();
   const channels = page.getByTestId('newsletter-tab-drawer');
   // This drawer wrapper can have a zero-size box while its positioned children
@@ -154,13 +158,19 @@ async function uploadChannelPhoto(page, file) {
   if (!input) throw new Error('WhatsApp channel photo input was unavailable.');
   try { await input.setInputFiles([file], { timeout: 60000 }); } finally { await input.dispose(); }
 }
-async function discardOwnPreview(page) {
-  await whatsappMediaPreview(page).getByRole('button', { name: 'Close', exact: true }).click();
-  const discard = page.getByRole('dialog').filter({ hasText: 'Discard selection?' });
-  await discard.waitFor({ state: 'visible', timeout: 10000 });
-  await discard.getByRole('button', { name: 'Discard', exact: true }).click();
-  await photoEditor(page).waitFor({ state: 'hidden', timeout: 10000 });
+async function discardOwnPreview(page,ctx,ownership) {
+  if (!await collectWhatsAppDiscardControl(page)) await whatsappMediaPreview(page).getByRole('button', { name: 'Close', exact: true }).click();
+  try {
+    const discard = page.getByRole('dialog').filter({ hasText: 'Discard selection?' });
+    await discard.waitFor({ state: 'visible', timeout: 10000 });
+    await discard.getByRole('button', { name: 'Discard', exact: true }).click();
+    await photoEditor(page).waitFor({ state: 'hidden', timeout: 10000 });
+  } catch (error) {
+    const recovered=await recoverWhatsAppOwnedDraft({...ctx,ownership,verifyContext:ctx.verifyOwnedContext,problem:'WhatsApp could not close its TEST media selection because the Discard confirmation matched multiple dialogs.'});
+    if(!recovered.completed)throw error;
+  }
 }
+
 async function clearOwnText(page, caption) {
   const editor = compose(page), current = canonical(await readCaption(editor));
   if (!current) return;
@@ -202,7 +212,8 @@ export async function prepareWhatsApp(ctx) {
   // never become part of the pre-publication baseline.
   const before = await main(page).locator('[data-id]').evaluateAll(els => els.map(el => el.getAttribute('data-id')));
   const guard = await installGuard(page, expected);
-  let editor, preview, result, publishedUpdateId, publication;
+  let editor, preview, result, publishedUpdateId, publication, ownedDraft;
+  const cleanupCtx={...ctx,verifyOwnedContext:()=>verifyGuard(page,guard),editContext:operation=>editOwnDraft(page,guard,operation)};
   try {
     if (files.length) {
       await step('Preparing one image in the verified WhatsApp channel…');
@@ -214,6 +225,10 @@ export async function prepareWhatsApp(ctx) {
     } else { editor = compose(page); preview = main(page).locator('footer'); }
     await assertWhatsAppSession(page); await verifyGuard(page, guard);
     await editOwnDraft(page, guard, () => pasteCaption(page, editor, caption));
+    if(ctx.mode==='TEST') {
+      ownedDraft=await captureWhatsAppOwnedDraft({page,config,caption,hasImage:Boolean(files.length),ownership:{mode:'TEST',source:'current_test',runId:ctx.runId,channelName:channel.channelName,channelUrl:channel.channelUrl},verifyContext:()=>verifyGuard(page,guard)});
+      if(ownedDraft)await ctx.recordOwnedDraft?.(ownedDraft);
+    }
     const send = files.length ? preview.getByRole('button', { name: 'Send 1 selected', exact: true }) : main(page).getByRole('button', { name: 'Send', exact: true });
     const preflight = async () => {
       await assertWhatsAppSession(page); await verifyGuard(page, guard); await verifyChannelSurface(page, expected);
@@ -247,12 +262,15 @@ export async function prepareWhatsApp(ctx) {
     });
     if (result === 'dry_run') {
       await verifyGuard(page, guard); await verifyCaption(editor, caption);
-      if (files.length) await discardOwnPreview(page);
+      if (files.length) await discardOwnPreview(page,cleanupCtx,ownedDraft);
       // WhatsApp can copy a discarded photo's caption back into the ordinary
       // update box. Clear it only when it is exactly our rehearsal text.
       await editOwnDraft(page, guard, () => clearOwnText(page, caption));
+      await releaseWhatsAppOwnedDraft(page,ownedDraft);
+      await ctx.recordOwnedDraft?.(null);
       await step('TEST complete · Send was blocked and never clicked. Only this rehearsal draft was discarded.');
     }
+    if(result==='posted')await releaseWhatsAppOwnedDraft(page,ownedDraft);
     return { status: result, ...(publication ? { publication } : {}) };
   } finally {
     if (ctx.mode !== 'LIVE' && result !== 'dry_run' && editor) {
@@ -260,7 +278,7 @@ export async function prepareWhatsApp(ctx) {
         await verifyGuard(page, guard);
         const current = canonical(await readCaption(editor));
         if (!current || current === canonical(caption)) {
-          if (files.length && await visible(editor)) { await discardOwnPreview(page); await editOwnDraft(page, guard, () => clearOwnText(page, caption)); }
+          if (files.length && await visible(editor)) { await discardOwnPreview(page,cleanupCtx,ownedDraft); await editOwnDraft(page, guard, () => clearOwnText(page, caption)); }
           else if (!files.length && current) await editOwnDraft(page, guard, () => clearOwnText(page, caption));
         }
       } catch { /* Changed identity or user-edited text is preserved for review. */ }

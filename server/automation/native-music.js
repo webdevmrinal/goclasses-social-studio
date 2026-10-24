@@ -61,7 +61,9 @@ export async function assistNativeStage(s,ctx,details,attempt,inspect){
   catch(checkError){s.signal?.throwIfAborted();if(checkError.name==='AccountMismatchError')throw checkError;}
   const transportUnknown=/socket|ECONN|connection (?:lost|closed|reset)|transport|session (?:deleted|not found|does not exist)|device (?:offline|disconnected)|ADB.*(?:fail|offline)/i.test(error.message||'');
   if(details.kind==='navigation'&&!transportUnknown&&ctx.navigationAI?.state().automatic&&ctx.canRecoverNavigation?.()!==false){
-   const recovered=await recoverNativeWithAI({s,ai:ctx.navigationAI,details:{...details,reason:error.message},inspect,step:ctx.step,signal:s.signal});
+   await ctx.reportRecovery?.({phase:'detected',problem:error.message,message:'Android navigation needs a recovery fix.'});
+   const recovered=await recoverNativeWithAI({s,ai:ctx.navigationAI,details:{...details,reason:error.message},inspect,step:ctx.step,reportRecovery:ctx.reportRecovery,signal:s.signal});
+   await ctx.reportRecovery?.({phase:recovered.completed?'succeeded':'paused',message:recovered.completed?'Android navigation recovered. Continuing the reviewed job.':recovered.reason});
    if(recovered.completed)return recovered.proof;
   }
   return ctx.intervene({...details,reason:error.message,aiContext:details.kind==='navigation'&&nodes?navigationAIContext(nodes,details):null},async()=>{s.signal?.throwIfAborted();return inspect(await s.screen());});

@@ -2,6 +2,7 @@
 import {androidDeviceKey} from '../shared/android-device.js';
 import { EventEmitter } from 'node:events';
 import {NativeInterventions} from './native-interventions.js';
+import {RecoveryStatus} from './recovery-status.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import { publicationUrl } from './automation/publication.js';
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual', 'waiting_for_input'];
 export class Queue extends EventEmitter {
   constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline, instagramWorker } = {}) {
-    super(); this.interventions=new NativeInterventions(this); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.nativeDeadline=deadline??300000; this.channelDeadline = deadline ?? 240000;
+    super(); this.recoverySave=Promise.resolve();this.recoveryLog=new RecoveryStatus(value=>{this.emit('change',this.state());this.recoverySave=this.recoverySave.catch(()=>{}).then(()=>atomicWrite(path.join(this.dataDir,'recovery-latest.json'),value));this.recoverySave.catch(()=>{});});this.recoveryTaskActive=false; this.interventions=new NativeInterventions(this); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.nativeDeadline=deadline??300000; this.channelDeadline = deadline ?? 240000;
     this.runs = []; this.login = { running: false, items: {} }; this.persistChain = Promise.resolve(); this.processing = false;
     this.manualLogin = null;
     browser.on?.('manual-login-change', () => {
@@ -28,6 +29,7 @@ export class Queue extends EventEmitter {
   get active() { return this.runs.find(run => busyStates.includes(run.status)); }
   async init() {
     this.runs = await readJson(path.join(this.dataDir, 'runs.json'), []);
+    this.recoveryLog.restore(await readJson(path.join(this.dataDir,'recovery-latest.json'),null));
     this.replyRotation = await readJson(path.join(this.dataDir, 'manychat-rotation.json'), { offset: 0 });
     if (!Number.isSafeInteger(this.replyRotation.offset) || this.replyRotation.offset < 0) this.replyRotation = { offset: 0 };
     for (const run of this.runs) {
@@ -47,7 +49,7 @@ export class Queue extends EventEmitter {
     await this.persist();
   }
   state() {
-    return { navigationAI:this.navigationAI?.state()||null,manualLogin:this.manualLogin ? {...this.manualLogin,open:Boolean(this.browser.manualProcess)} : null,update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
+    return { recovery:this.recoveryLog.state(),navigationAI:this.navigationAI?.state()||null,manualLogin:this.manualLogin ? {...this.manualLogin,open:Boolean(this.browser.manualProcess)} : null,update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.recoveryTaskActive || this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
   }
   persist() {
     const snapshot = structuredClone(this.runs);
@@ -56,7 +58,7 @@ export class Queue extends EventEmitter {
   }
   async change() { await this.persist(); this.emit('change', this.state()); }
   async start({ draft, config, mode = 'TEST', confirmation, media, retryOf = null, sourceInstagramPublication }) {
-    if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
+    if (this.recoveryTaskActive || this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
     if (mode !== 'TEST' && mode !== 'LIVE') throw new Error('Invalid run mode.');
     if (mode === 'LIVE' && confirmation !== 'POST') throw new Error('Type POST to authorize this live run.');
     const ordered=draft.selected.filter(id=>!['instagramStory','manychat'].includes(id)&&!(id==='instagramMusic'&&draft.selected.includes('instagram')&&instagramNeedsMusicEdit(draft.instagram))).flatMap(id=>id==='instagram'?[id,...(instagramNeedsMusicEdit(draft.instagram)?['instagramMusic']:[]),...(draft.selected.includes('instagramStory')?['instagramStory']:[])]:[id]);
@@ -196,6 +198,21 @@ export class Queue extends EventEmitter {
     item.message = message;
     await this.change();
   }
+  async reportRecovery(run,item,event){
+    const current=this.recoveryLog.state();
+    if(!current||current.runId!==run.id||current.itemId!==item.id||event.phase==='detected'&&current.status!=='running')this.recoveryLog.begin({problem:event.problem||event.message||'Automation navigation failed.',runId:run.id,itemId:item.id});
+    const action=event.action&&typeof event.action==='object'?[event.action.type,event.action.direction].filter(Boolean).join(' '):event.action;
+    const value=this.recoveryLog.report({...event,action});item.recovery=value;
+    try{await this.persist();}catch(error){this.recoveryLog.report({phase:'paused',message:'The recovery audit could not be saved. No further automatic action is allowed.'});throw error;}
+    return value;
+  }
+  ownedWhatsAppDraft(config){
+    for(const previous of this.runs){
+      const item=previous.items.find(value=>value.id==='whatsapp'),proof=item?.preparation?.ownedDraft;
+      if(previous.mode!=='TEST'||!proof||item.submitting||!['failed','attention','skipped'].includes(item.status))continue;
+      if(proof.channelName===config.platforms.whatsapp.channelName&&proof.channelUrl===config.platforms.whatsapp.channelUrl)return proof;
+    }
+  }
   async advanceReplies(run, item) {
     if (run.mode !== 'LIVE' || item.id !== 'manychat' || run.manychatRotationAdvanced) return;
     this.replyRotation.offset += 3;
@@ -230,10 +247,12 @@ export class Queue extends EventEmitter {
         let checked;
         try {
           const page = await this.browser.page(channelId);
-          checked = await this.loginChecker({ page, id: channelId, config: run.config, requireEmpty: true, step: message => this.log(run, channelItem, message) });
+          checked = await this.loginChecker({ page, id: channelId, config: run.config, requireEmpty: true, ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:channelId==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,signal:runController.signal,reportRecovery:event=>this.reportRecovery(run,channelItem,event),step: message => this.log(run, channelItem, message) });
         } catch (error) { checked = { status: 'needs_attention', message: error.message }; }
         this.login.items[channelId] = { ...checked, checkedAt: new Date().toISOString() };
         if (checked.status !== 'verified' && run.status !== 'stopping') {
+          if(this.recoveryLog.state()?.runId!==run.id)await this.reportRecovery(run,channelItem,{phase:'detected',problem:checked.message,message:checked.message});
+          if(this.recoveryLog.state()?.status==='running')await this.reportRecovery(run,channelItem,{phase:'paused',message:'The session or draft ownership needs review before Gemini can act. No API call was made for an unverified draft.'});
           channelItem.status = 'attention'; channelItem.message = checked.message; run.status = 'attention'; await this.change(); return;
         }
         await this.change();
@@ -271,7 +290,7 @@ export class Queue extends EventEmitter {
           task = this.runner({
             page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
             mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
-            navigationAI:this.navigationAI,canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),
+            navigationAI:this.navigationAI,ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:item.id==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,recordOwnedDraft:async proof=>{item.preparation={...item.preparation,ownedDraft:proof};await this.change();},reportRecovery:event=>this.reportRecovery(run,item,event),canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
             instagramMusicPublication:run.items.find(i=>i.id==='instagramMusic'&&i.status==='posted')?.publication,
@@ -279,7 +298,7 @@ export class Queue extends EventEmitter {
             captureInstagramPost: run.items.some(i=>['instagramStory','instagramMusic'].includes(i.id)) || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
             step: message => { controller.signal.throwIfAborted(); return this.log(run, item, message); }, snapshot: (label, target = page) => { controller.signal.throwIfAborted(); return this.snapshot(run, item, page, label, false, target); },
             intervene: native ? (details,inspect)=>this.interventions.wait(run,item,controller.signal,details,inspect,{pause:()=>clearTimeout(timer),resume:armDeadline}) : undefined,
-            recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = details; await this.change(); },
+            recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = {...details,...(item.preparation?.ownedDraft?{ownedDraft:item.preparation.ownedDraft}:{})}; await this.change(); },
             markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping'||run.status==='waiting_for_input')throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
           });
           const result = await Promise.race([task, timeout]);
@@ -327,6 +346,11 @@ export class Queue extends EventEmitter {
           item.status = item.submitting ? 'uncertain' : run.killRequested ? 'skipped' : 'failed';
           const message = error.message.replace(/\u001b\[[0-9;]*m/g, '');
           item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
+          const recovery=this.recoveryLog.state();
+          if(!recovery||recovery.runId!==run.id||recovery.itemId!==item.id){
+            this.recoveryLog.begin({problem:item.message,runId:run.id,itemId:item.id});
+            item.recovery=this.recoveryLog.report({phase:'paused',message:item.submitting?'Publication outcome is uncertain. Gemini will not retry a send or create a duplicate.':'This failure has no verified recovery action yet. The problem is preserved for review; Gemini was not called blindly.'});
+          }
           item.finishedAt = new Date().toISOString();
           if (!item.submitting && run.status !== 'stopping' && (native || error instanceof InterventionError || error instanceof NetworkError)) {
             // A native driver error can leave an unfinished editor even when

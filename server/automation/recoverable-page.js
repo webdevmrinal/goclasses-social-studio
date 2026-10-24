@@ -11,7 +11,7 @@ export function browserNavigationGoal(role,name){
  return null;
 }
 function selectorFailure(error){return error?.name==='TimeoutError'||/strict mode violation|no such element|element not found|did not resolve/i.test(error?.message||'');}
-export function recoverablePage(page,{ai,platform,signal,step,canRecover=()=>true,recover=recoverBrowserNavigation}={}){
+export function recoverablePage(page,{ai,platform,signal,step,reportRecovery=async()=>{},canRecover=()=>true,recover=recoverBrowserNavigation}={}){
  const attempted=new Set();let remaining=3;
  const enabled=()=>{const state=ai?.state();return state?.enabled&&state.automatic&&state.configured&&remaining>0&&!signal?.aborted&&canRecover();};
  const complete=async(goal,target,method)=>{
@@ -33,8 +33,10 @@ export function recoverablePage(page,{ai,platform,signal,step,canRecover=()=>tru
    catch(error){
     signal?.throwIfAborted();if(!eligible||!enabled()||!selectorFailure(error)||attempted.has(goal))throw error;
     attempted.add(goal);
-    const result=await recover({page,ai,platform,goal,signal,step,maxSteps:remaining,isComplete:()=>complete(goal,object,key)});
+    await reportRecovery({phase:'detected',problem:error.message,message:'A navigation control failed. Asking Gemini for a bounded fix.'});
+    const result=await recover({page,ai,platform,goal,signal,step,reportRecovery,maxSteps:remaining,isComplete:()=>complete(goal,object,key)});
     remaining-=Math.max(1,result?.actions||0);
+    await reportRecovery({phase:result?.completed?'succeeded':'paused',message:result?.completed?'The expected screen is confirmed. Automation can continue.':'Recovery paused: '+(result?.reason||'no verified action is available')});
     if(result?.completed)return undefined;
     throw new InterventionError('Gemini could not complete this navigation safely. '+(result?.reason||'Continue manually on the expected screen.')+' The posting action was not retried.');
    }

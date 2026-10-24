@@ -14,6 +14,8 @@ import { createSecurity } from './security.js';
 import { BrowserManager } from './automation/browser.js';
 import { Queue } from './queue.js';
 import { NavigationAI } from './navigation-ai.js';
+import {runRecoveryPractice} from './automation/recovery-practice.js';
+import {captureWhatsAppOwnedDraft,expectedWhatsAppImageProof,recoverWhatsAppOwnedDraft} from './automation/whatsapp-ai-recovery.js';
 import { destinationUrl } from './automation/platforms.js';
 import { manychatLoginUrl } from './automation/manychat-login.js';
 import { validateManychatDraft } from '../shared/manychat.js';
@@ -27,7 +29,7 @@ import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '.
 import { destinationReadiness } from '../shared/readiness.js';
 import { UpdateBridge } from './updates.js';
 
-export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, navigationAI, updateBridge = new UpdateBridge(), phoneTools = new PhoneTools({home:process.env.STUDIO_HOME||ROOT}) } = {}) {
+export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, navigationAI, recoveryPracticeRunner=runRecoveryPractice, updateBridge = new UpdateBridge(), phoneTools = new PhoneTools({home:process.env.STUDIO_HOME||ROOT}) } = {}) {
   await fs.mkdir(path.join(dataDir, 'uploads'), { recursive: true });
   await fs.mkdir(path.join(dataDir, 'incoming'), { recursive: true });
   const app = express();
@@ -66,6 +68,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   await queue.init();
   queue.updateState=updateBridge.state;
   updateBridge.on('change',state=>{queue.updateState=state;queue.maintenance=['installing','restarting'].includes(state.phase);queue.emit('change',queue.state());});
+  app.use('/api',(req,res,next)=>queue.recoveryTaskActive&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/navigation-ai/test/stop')?res.status(409).json({error:'Wait for the recovery test to finish, or stop recovery first.'}):next());
   app.use('/api',(req,res,next)=>queue.maintenance&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/updates')?res.status(409).json({error:'An app update is being prepared. Wait for it to finish.'}):next());
   app.get('/api/updates',(req,res)=>res.json(updateBridge.state));
   app.post('/api/updates/check',async(req,res)=>res.json(await updateBridge.request('check')));
@@ -75,7 +78,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     queue.maintenance=true;try{await updateBridge.request('apply');res.status(202).json({ok:true});}catch(error){queue.maintenance=false;throw error;}
   });
   instagramWorker.onProgress=()=>queue.emit('change',queue.state());
-  queue.on('workerError', error => console.error('Worker error:', error));
+  queue.on('workerError', error => {queue.recoveryLog.begin({problem:error.message});queue.recoveryLog.report({phase:'paused',message:'The worker stopped before it could continue. No new publishing action was authorized by recovery.'});console.error('Worker error:', error);});
   const xLength = text => twitterText.parseTweet(text).weightedLength;
   app.get('/api/bootstrap', (req, res) => res.json({ config, media, ...studioState(), author: 'Mrinal', protected: security.enabled,revision:process.env.STUDIO_REVISION||'',capabilities:{instagramAndroid:process.platform==='win32'} }));
   app.get('/api/android/devices',async(req,res)=>res.json({devices:await discoverPhones()}));
@@ -85,9 +88,43 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/android/screen',async(req,res)=>{res.json(await phoneTools.show(config.androidDevice));});
   app.post('/api/android/screen/close',async(req,res)=>{await phoneTools.screen.close();res.json(phoneTools.state());});
   app.use('/api',(req,res,next)=>{if((phoneTools.scanning||phoneTools.pairing)&&req.method!=='GET'&&/^\/(runs|config|logins|instagram\/music)/.test(req.path))return res.status(409).json({error:'Wait for the phone connection check to finish.'});next();});
+  const requireRecoveryIdle=()=>{if(queue.active||queue.processing||queue.login.running||queue.recoveryTaskActive||browser.manualProcess||instagramWorker.busy||phoneTools.scanning||phoneTools.pairing)throw Object.assign(Error('Finish or stop the current activity before starting recovery practice.'),{status:409});};
+  const requireAutomaticAI=()=>{const value=navigationAI.state();if(!value.enabled||!value.configured||!value.automatic)throw Error('Enable automatic Gemini recovery and configure a key first.');};
+  const startRecoveryTask=(context,work)=>{
+    queue.recoveryTaskActive=true;const controller=new AbortController();queue.recoveryController=controller;
+    const record=queue.recoveryLog.begin({...context,canStop:true});
+    const reportRecovery=async event=>{controller.signal.throwIfAborted();queue.recoveryLog.report({...event,action:event.action&&typeof event.action==='object'?[event.action.type,event.action.direction].filter(Boolean).join(' '):event.action});await queue.recoverySave;controller.signal.throwIfAborted();};
+    Promise.resolve().then(async()=>{await queue.recoverySave;controller.signal.throwIfAborted();return work({signal:controller.signal,reportRecovery});}).then(async result=>{
+      if(!['succeeded','paused','failed'].includes(queue.recoveryLog.state()?.phase))await reportRecovery({phase:result?.completed?'succeeded':'paused',message:result?.completed?'Recovery completed. Nothing was published.':'Gemini could not complete this recovery. The draft was preserved.'});
+    }).catch(error=>queue.recoveryLog.report({phase:controller.signal.aborted?'paused':'failed',message:controller.signal.aborted?'Recovery stopped by you. No further actions are allowed.':error.message})).finally(async()=>{await queue.recoverySave.catch(()=>{});queue.recoveryTaskActive=false;if(queue.recoveryController===controller)queue.recoveryController=null;queue.emit('change',queue.state());});
+    return record;
+  };
+  app.post('/api/navigation-ai/test',async(req,res)=>{
+    requireRecoveryIdle();requireAutomaticAI();
+    const record=startRecoveryTask({practice:true,problem:'Practice: a nested Discard confirmation blocks an app-owned TEST draft.'},async context=>{
+      const page=await browser.page('geminiPractice');context.signal.throwIfAborted();return recoveryPracticeRunner({page,ai:navigationAI,...context,step:async()=>{}});
+    });res.status(202).json({id:record.id});
+  });
+  app.post('/api/navigation-ai/test/stop',(req,res)=>{if(!queue.recoveryController)return res.status(409).json({error:'No recovery task is running.'});queue.recoveryController.abort(Error('Stopped by operator.'));res.json({ok:true});});
+  app.post('/api/navigation-ai/whatsapp/repair',async(req,res)=>{
+    requireRecoveryIdle();requireAutomaticAI();
+    const run=queue.runs.find(value=>value.id===req.body.runId),item=run?.items.find(value=>value.id==='whatsapp'),proof=item?.preparation,expected=config.platforms.whatsapp;
+    if(!run||run.mode!=='TEST'||item?.submitting||!['failed','attention','skipped'].includes(item?.status)||proof?.channelName!==expected.channelName||proof?.channelUrl!==expected.channelUrl||proof?.imageCount!==1)throw Error('Choose a failed, unsubmitted WhatsApp TEST with the same verified channel.');
+    const images=mediaFor({mediaByPlatform:run.mediaByPlatform},run.media,'whatsapp');if(images.length!==1)throw Error('The original TEST image is not uniquely available.');await verifyMediaIntegrity(images,dataDir);requireRecoveryIdle();
+    const record=startRecoveryTask({runId:run.id,itemId:'whatsapp',problem:'A previous WhatsApp TEST is blocked at its Discard confirmation.'},async context=>{
+      const page=await browser.page('whatsapp');context.signal.throwIfAborted();
+      let ownership=proof.ownedDraft;
+      if(ownership){if(ownership.runId!==run.id||ownership.itemId!=='whatsapp'||ownership.caption!==run.captions.whatsapp.replace(/\r\n/g,'\n').trim())throw Error('The saved TEST ownership does not match this rehearsal. The draft was preserved.');}
+      else {const expectedImageProof=await expectedWhatsAppImageProof(page,path.join(dataDir,'uploads',images[0].filename));ownership=await captureWhatsAppOwnedDraft({page,config,caption:run.captions.whatsapp,hasImage:true,ownership:{source:'prior_failed_test',mode:'TEST',runId:run.id,channelName:expected.channelName,channelUrl:expected.channelUrl,expectedImageProof}});}
+      if(!ownership)throw Error('This preview no longer matches the exact TEST caption, image and channel. It was preserved.');
+      item.preparation={...item.preparation,ownedDraft:ownership};await queue.change();
+      const result=await recoverWhatsAppOwnedDraft({page,config,ownership,ai:navigationAI,...context,step:async()=>{}});
+      if(result.completed)item.preparation.ownedDraft=null;item.recovery=queue.recoveryLog.state();await queue.change();return result;
+    });res.status(202).json({id:record.id});
+  });
   app.get('/api/navigation-ai', (req,res)=>res.json(navigationAI.state()));
   app.put('/api/navigation-ai', async(req,res)=>{
-    if(queue.active||queue.processing||queue.login.running||browser.manualProcess||instagramWorker.busy) return res.status(409).json({error:'Finish or stop the current activity before changing navigation help.'});
+    if(queue.active||queue.processing||queue.login.running||queue.recoveryTaskActive||browser.manualProcess||instagramWorker.busy) return res.status(409).json({error:'Finish or stop the current activity before changing navigation help.'});
     try { await navigationAI.configure(req.body); queue.emit('change',queue.state()); res.json(navigationAI.state()); }
     catch { res.status(400).json({error:'Check the navigation settings and enter a valid Gemini API key.'}); }
   });

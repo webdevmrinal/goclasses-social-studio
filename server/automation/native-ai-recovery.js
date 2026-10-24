@@ -64,7 +64,7 @@ function bindingsFor(nodes,details){
  return bindings.length?{stage:context.stage,stamp:stamp(nodes),bindings:bindings.map((binding,index)=>({...binding,id:'c'+(index+1)}))}:null;
 }
 function validatedAction(plan,snapshot){
- if(!plan||typeof plan!=='object'||Array.isArray(plan)||Object.keys(plan).some(key=>!['action','model'].includes(key)))return null;
+ if(!plan||typeof plan!=='object'||Array.isArray(plan)||Object.keys(plan).some(key=>!['action','model','fix'].includes(key)))return null;
  const value=plan.action;if(!value||typeof value!=='object'||Array.isArray(value))return null;
  const keys=Object.keys(value).sort().join(',');
  if(value.type==='wait'||value.type==='stop')return keys==='type'?{type:value.type}:null;
@@ -76,7 +76,7 @@ function validatedAction(plan,snapshot){
 
 // A plan is advisory until it passes the fresh local allowlist. No cloud text,
 // coordinates, selectors, URLs, scripts, song choices or final buttons execute.
-export async function recoverNativeWithAI({s,ai,details,inspect,step=async()=>{},signal,maxSteps=3}={}){
+export async function recoverNativeWithAI({s,ai,details,inspect,step=async()=>{},reportRecovery=async()=>{},signal,maxSteps=3}={}){
  const trace=[];let actions=0;
  const result=(reason,proof)=>({completed:Boolean(proof),...(proof?{proof}:{}),reason,trace,actions});
  const requestedSignals=[s?.signal,signal].filter(Boolean),cancelled=()=>{for(const value of requestedSignals)value.throwIfAborted();};
@@ -106,13 +106,14 @@ export async function recoverNativeWithAI({s,ai,details,inspect,step=async()=>{}
   await step('Gemini recovery '+(index+1)+'/'+limit+': checking navigation...');
   let plan;
   try{
-   timeLeft();plan=await planNavigation(ai,{platform:'instagram_android',stage:snapshot.stage,controls:snapshot.bindings.map(binding=>({id:binding.id,label:binding.label,role:binding.scrollable?'scroll_region':'button',enabled:true,scrollable:Boolean(binding.scrollable)})),signal:combined},{deadline,step});timeLeft();
+   timeLeft();plan=await planNavigation(ai,{platform:'instagram_android',stage:snapshot.stage,controls:snapshot.bindings.map(binding=>({id:binding.id,label:binding.label,role:binding.scrollable?'scroll_region':'button',enabled:true,scrollable:Boolean(binding.scrollable)})),signal:combined,onEvent:reportRecovery},{deadline,step});timeLeft();
   }catch(error){cancelled();if(error?.name==='AccountMismatchError')throw error;return result(budget.aborted?'Automatic navigation reached its time limit. Continue manually.':'Gemini is unavailable. Continue manually.');}
   if(!plan)return result('Gemini is unavailable or resting. Continue manually.');
   const action=validatedAction(plan,snapshot);
   if(!action)return result('Gemini did not identify a verified navigation action. Continue manually.');
   const record={step:index+1,type:action.type,...(action.binding?{label:action.binding.label}:{}),...(modelName(plan.model)?{model:plan.model}:{}),status:'planned'};trace.push(record);
   if(action.type==='stop'){record.status='stopped';return result('Gemini needs manual help with this screen.');}
+  await reportRecovery({phase:'executing',fix:plan.fix,model:plan.model,action:action.type==='click'?'Open '+action.binding.label:action.type==='scroll'?'Scroll '+action.direction:'Wait for the screen',message:'Trying the verified navigation fix suggested by Gemini.'});
   try{
    nodes=await read();const proof=await check(nodes);if(proof){record.status='already_completed';return result('The expected screen is ready.',proof);}
    const fresh=bindingsFor(nodes,details),binding=action.binding&&fresh?.bindings.find(value=>value.id===action.binding.id);
@@ -137,6 +138,7 @@ export async function recoverNativeWithAI({s,ai,details,inspect,step=async()=>{}
     else{const moved=await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{elementId,direction:action.direction,percent:.65}]},{deadline});if(typeof moved!=='boolean')throw Error('Unknown scroll outcome');}
     record.status='acted';
    }
+   await reportRecovery({phase:'verifying',message:'Checking the expected Android screen.'});
    nodes=await read();const afterProof=await check(nodes);if(afterProof){record.status='completed';return result('Navigation recovered and verified.',afterProof);}
    if(stamp(nodes)===snapshot.stamp){record.status='no_progress';return result('Navigation did not make progress. Continue manually.');}
   }catch(error){

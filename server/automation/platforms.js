@@ -112,9 +112,9 @@ async function verifyIdentity(page, id, config, maySwitch = true, step = async (
   }
 }
 
-export async function checkLogin({ page, id, config, step, requireEmpty }) {
+export async function checkLogin({ page, id, config, step, requireEmpty, ai, ownedDraftRecovery, signal, reportRecovery }) {
   if (id === 'telegram') return checkTelegramLogin({ page, config, step, requireEmpty });
-  if (id === 'whatsapp') return checkWhatsAppLogin({ page, config, step, requireEmpty });
+  if (id === 'whatsapp') return checkWhatsAppLogin({ page, config, step, requireEmpty, ai, ownedDraftRecovery, signal, reportRecovery });
   let discoveredId, discoveredHandle, detectedSettings;
   const resolved = structuredClone(config);
   try {
@@ -148,7 +148,7 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
 }
 
 export async function automate(ctx) {
-  if(ctx.page&&ctx.navigationAI?.state().automatic)ctx={...ctx,page:recoverablePage(ctx.page,{ai:ctx.navigationAI,platform:ctx.id.startsWith('youtube')?'youtube':ctx.id==='instagram'?'instagram_web':ctx.id,signal:ctx.signal,step:ctx.step,canRecover:ctx.canRecoverNavigation})};
+  if(ctx.page&&ctx.navigationAI?.state().automatic)ctx={...ctx,page:recoverablePage(ctx.page,{ai:ctx.navigationAI,platform:ctx.id.startsWith('youtube')?'youtube':ctx.id==='instagram'?'instagram_web':ctx.id,signal:ctx.signal,step:ctx.step,reportRecovery:ctx.reportRecovery,canRecover:ctx.canRecoverNavigation})};
   if(usesInstagramAndroid(ctx.instagram,ctx.id)){
     if(!ctx.instagramWorker)throw new InterventionError('The Android Instagram worker is unavailable.');
     return ctx.instagramWorker.run(ctx);
