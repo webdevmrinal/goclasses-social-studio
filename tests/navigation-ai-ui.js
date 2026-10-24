@@ -12,14 +12,16 @@ const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'mrinal-navigation-ai-ui-')
 const secret='offline-gemini-secret-MUST-NEVER-LEAVE-SETTINGS';
 const malicious='Open Edit. <img src=x onerror="window.__navigationAiXss=true">';
 const errors=[],external=[],configured=[],resumed=[];
-let key='',enabled=false,current=null,suggestCalls=0;
+let key='',enabled=false,automatic=false,current=null,suggestCalls=0;
 const navigationAI={
  async init(){},
- state(){return {enabled,configured:!!key,status:enabled&&key?'ready':'disabled',message:enabled&&key?'Ready for limited navigation suggestions.':'Manual recovery remains available.',models:['gemini-offline-fixture']};},
+ state(){return {enabled,automatic:enabled&&automatic,configured:!!key,status:enabled&&key?'ready':'disabled',message:enabled&&key?'Ready for limited navigation suggestions.':'Manual recovery remains available.',models:['gemini-offline-fixture']};},
  async configure(value){
   configured.push({...value});
   if(value.clearKey)key='';else if(typeof value.apiKey==='string'&&value.apiKey.trim())key=value.apiKey.trim();
   if(typeof value.enabled==='boolean')enabled=value.enabled;
+  if(typeof value.automatic==='boolean')automatic=value.automatic;
+  if(!enabled)automatic=false;
   return this.state();
  },
  async suggest(){suggestCalls++;return {status:'unavailable',message:'Suggestions are unavailable. Continue manually.'};}
@@ -52,15 +54,20 @@ try{
  const modal=page.locator('#modal'),form=modal.locator('#navigation-ai-form');
  await modal.getByRole('heading',{name:'Navigation help',exact:true}).waitFor();
  assert.equal(await form.getByLabel('Use Gemini suggestions',{exact:true}).isChecked(),false);
+ const automaticOption=form.getByLabel('Let Gemini recover navigation automatically',{exact:true});
+ assert.equal(await automaticOption.isChecked(),false,'Automatic recovery is opt-in');assert.equal(await automaticOption.isDisabled(),true,'Automatic recovery requires Gemini suggestions');
  assert.equal(await form.getByLabel('Gemini API key',{exact:true}).getAttribute('type'),'password');
  const explanation=await modal.innerText();assert.match(explanation,/control|navigation/i);assert.match(explanation,/caption|message/i);assert.match(explanation,/image|screenshot/i);assert.match(explanation,/quota|limit|busy/i);assert.match(explanation,/Google|data|improve/i);
- await form.getByLabel('Use Gemini suggestions',{exact:true}).check();await form.getByLabel('Gemini API key',{exact:true}).fill(secret);
+ await form.getByLabel('Use Gemini suggestions',{exact:true}).check();assert.equal(await automaticOption.isDisabled(),false);assert.equal(await automaticOption.isChecked(),false);await automaticOption.check();await form.getByLabel('Gemini API key',{exact:true}).fill(secret);
  await modal.getByRole('button',{name:'Save settings',exact:true}).click();await modal.waitFor({state:'hidden'});
- assert.equal(configured.at(-1).apiKey,secret);assert.equal(configured.at(-1).enabled,true);assert.equal((await api('/api/navigation-ai')).body.configured,true);
+ assert.equal(configured.at(-1).apiKey,secret);assert.equal(configured.at(-1).enabled,true);assert.equal(configured.at(-1).automatic,true);assert.equal((await api('/api/navigation-ai')).body.configured,true);assert.equal((await api('/api/navigation-ai')).body.automatic,true);
  await assertPublic();await firstEvent();
  await page.getByRole('button',{name:'Navigation help',exact:true}).click();await modal.getByRole('heading',{name:'Navigation help',exact:true}).waitFor();
  assert.equal(await modal.getByLabel('Gemini API key',{exact:true}).inputValue(),'','Saved key must never be placed back into the DOM');assert(!await modal.innerText().then(text=>text.includes(secret)));
- await page.keyboard.press('Escape');
+ assert.equal(await automaticOption.isChecked(),true,'Saved automatic recovery preference is visible');
+ await form.getByLabel('Use Gemini suggestions',{exact:true}).uncheck();assert.equal(await automaticOption.isChecked(),false);assert.equal(await automaticOption.isDisabled(),true);
+ await form.getByLabel('Use Gemini suggestions',{exact:true}).check();assert.equal(await automaticOption.isChecked(),false,'Re-enabling suggestions must not silently re-enable automatic recovery');
+ await modal.getByRole('button',{name:'Save settings',exact:true}).click();await modal.waitFor({state:'hidden'});assert.equal(configured.at(-1).automatic,false);assert.equal(configured.at(-1).apiKey,undefined,'Keeping the key must not send it back through the UI');
  const run=await queue.start({draft:{selected:['instagramMusic'],captions:{instagram:'Reviewed'},instagram:{postingMethod:'web',music:{enabled:true,source:'details',reference:{title:'Hype',artist:'VastPenguin'}}}},sourceInstagramPublication:{postUrl:'https://www.instagram.com/p/EXACT_OFFLINE_SOURCE/'},config:defaults,media:[],mode:'TEST'});
  await page.getByRole('heading',{name:'Open Edit info in Instagram',exact:true}).waitFor();
  const manual=page.locator('#android-manual');await manual.getByText('Gemini suggestion',{exact:true}).waitFor();
@@ -74,7 +81,7 @@ try{
  await page.emulateMedia({colorScheme:'dark'});await page.setViewportSize({width:390,height:844});await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/navigation-ai-dark-mobile.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),JSON.stringify(await page.evaluate(()=>({viewport:innerWidth,width:document.documentElement.scrollWidth,overflow:[...document.querySelectorAll('body *')].map(e=>({tag:e.tagName,id:e.id,class:e.className,left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right,width:e.getBoundingClientRect().width})).filter(e=>e.right>innerWidth+1).slice(0,12)}))));
  current={screen:'music-library'};await page.getByRole('button',{name:'I’m on that screen · continue',exact:true}).click();await page.locator('#android-progress').waitFor({state:'hidden'});assert.equal(run.status,'completed');assert.equal(resumed.length,2);
  assert.equal((await api('/api/navigation-ai',{enabled:false,clearKey:true})).status,200);assert.equal((await api('/api/navigation-ai')).body.configured,false);assert.equal(key,'');assert.equal(suggestCalls,0,'UI fixtures must never contact an AI provider');assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
- console.log('Navigation AI UI passed: opt-in settings, hidden credentials across API/events/DOM, idle-only configuration, escaped suggestions, explicit validated manual resume, friendly busy fallback, responsive dialog. No provider, Android or social connection.');
+ console.log('Navigation AI UI passed: opt-in bounded automatic recovery settings, hidden credentials across API/events/DOM, idle-only configuration, escaped suggestions, explicit validated manual resume, friendly busy fallback, responsive dialog. No provider, Android or social connection.');
 }finally{
  if(queue.active)await queue.control('kill',queue.active.id);await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await queue.persistChain;
  assert.equal(path.dirname(dataDir),path.resolve(os.tmpdir()));assert(path.basename(dataDir).startsWith('mrinal-navigation-ai-ui-'));await fs.rm(dataDir,{recursive:true,force:true});

@@ -10,6 +10,7 @@ import { telegramWebUrl } from '../../shared/telegram.js';
 import { checkTelegramLogin, prepareTelegram } from './telegram.js';
 import { publicationBaseline, confirmPublication } from './publication.js';
 import { prepareXSubmit } from './x-submit.js';
+import { recoverablePage } from './recoverable-page.js';
 
 export function destinationUrl(id, config) {
   const p = config.platforms[id];
@@ -147,6 +148,7 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
 }
 
 export async function automate(ctx) {
+  if(ctx.page&&ctx.navigationAI?.state().automatic)ctx={...ctx,page:recoverablePage(ctx.page,{ai:ctx.navigationAI,platform:ctx.id.startsWith('youtube')?'youtube':ctx.id==='instagram'?'instagram_web':ctx.id,signal:ctx.signal,step:ctx.step,canRecover:ctx.canRecoverNavigation})};
   if(usesInstagramAndroid(ctx.instagram,ctx.id)){
     if(!ctx.instagramWorker)throw new InterventionError('The Android Instagram worker is unavailable.');
     return ctx.instagramWorker.run(ctx);

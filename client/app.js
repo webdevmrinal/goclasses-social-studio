@@ -381,17 +381,20 @@ async function navigationHelp(){
  const settings=await api('/api/navigation-ai');state.navigationAI=settings;
  showDialog('Navigation help',
   '<form id="navigation-ai-form"><label class="check"><input type="checkbox" name="enabled" '+(settings.enabled?'checked':'')+'> Use Gemini suggestions</label>'+
-  '<p>When Android navigation needs help, Gemini can suggest up to three steps. The run stays paused for you.</p>'+
+  '<p>Gemini can suggest a short recovery path when navigation needs help.</p>'+
+  '<label class="check"><input type="checkbox" name="automatic" '+(settings.enabled&&settings.automatic?'checked ':'')+(!settings.enabled?'disabled':'')+'> Let Gemini recover navigation automatically</label>'+
+  '<small>Checks each bounded step. Pauses if uncertain, busy or quota-limited. Studio keeps the final publishing checks.</small>'+
   '<label class="field"><span>Gemini API key</span><input type="password" name="apiKey" autocomplete="new-password" spellcheck="false" placeholder="'+(settings.configured?'Key configured; leave blank to keep it':'Paste your API key here')+'"></label>'+
   '<small>'+(settings.keySource==='environment'?'Using the key from this computer�s environment.':'Saved only on this worker computer. Never included in drafts or shared settings.')+'</small>'+
-  '<p class="text-muted">Use an eligible free-tier project without billing. Only limited Instagram control names are sent. No captions, messages or images. Google may use free-tier data to improve its products.</p>'+
+  '<p class="text-muted">Use an eligible free-tier project without billing. Only limited navigation control names are sent. No captions, messages or images. Google may use free-tier data to improve its products.</p>'+
   '<p class="text-muted">At most 2 requests a minute and 10 a day, with cached guidance and cooldowns. Busy models switch once when appropriate, then return to manual help.</p>'+
   '<p><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Get a Gemini API key</a></p><p id="navigation-ai-status" role="status">'+escape(settings.message||'Optional. Local recovery works without Gemini.')+'</p></form>',
   '<button class="button" data-dialog-close>Cancel</button>'+(settings.configured&&settings.keySource!=='environment'?'<button class="button subtle" id="navigation-ai-remove">Remove key</button>':'')+'<button class="button primary" type="submit" form="navigation-ai-form">Save settings</button>');
  const form=modal.querySelector('#navigation-ai-form');
+ form.elements.enabled.onchange=()=>{form.elements.automatic.disabled=!form.elements.enabled.checked;if(!form.elements.enabled.checked)form.elements.automatic.checked=false;};
  const save=async body=>{const button=modal.querySelector('[type="submit"]');button.disabled=true;try{state.navigationAI=await api('/api/navigation-ai',{method:'PUT',body});form.elements.apiKey.value='';modal.close();toast('Navigation help saved.');}catch(error){modal.querySelector('#navigation-ai-status').textContent=error.message;}finally{button.disabled=false;}};
- form.onsubmit=event=>{event.preventDefault();const key=form.elements.apiKey.value.trim();save({enabled:form.elements.enabled.checked,...(key?{apiKey:key}:{})});};
- const remove=modal.querySelector('#navigation-ai-remove');if(remove)remove.onclick=()=>save({enabled:false,clearKey:true});
+ form.onsubmit=event=>{event.preventDefault();const key=form.elements.apiKey.value.trim();save({enabled:form.elements.enabled.checked,automatic:form.elements.enabled.checked&&form.elements.automatic.checked,...(key?{apiKey:key}:{})});};
+ const remove=modal.querySelector('#navigation-ai-remove');if(remove)remove.onclick=()=>save({enabled:false,automatic:false,clearKey:true});
 }
 function navigationAdvice(handoff){
  const ai=handoff?.ai;if(!ai)return '';

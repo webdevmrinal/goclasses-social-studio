@@ -4,6 +4,7 @@ import {nativeId,nativeBounds,xpathLiteral,isPhotoAccessPicker,cancelInstagramPh
 import {InterventionError} from './utils.js';
 import {recoverNativeNavigation} from './native-navigation.js';
 import {navigationAIContext} from './navigation-ai-context.js';
+import {recoverNativeWithAI} from './native-ai-recovery.js';
 const present=(nodes,name)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(name));
 export function musicClipPosition(nodes){
   const clips=nodes.filter(n=>n.displayed==='true'&&n.tag==='android.widget.SeekBar'&&n['content-desc']?.startsWith('Select the part of the audio track'));
@@ -58,6 +59,11 @@ export async function assistNativeStage(s,ctx,details,attempt,inspect){
   let nodes;
   try{nodes=await s.screen();const value=await inspect(nodes);s.signal?.throwIfAborted();if(value)return value;}
   catch(checkError){s.signal?.throwIfAborted();if(checkError.name==='AccountMismatchError')throw checkError;}
+  const transportUnknown=/socket|ECONN|connection (?:lost|closed|reset)|transport|session (?:deleted|not found|does not exist)|device (?:offline|disconnected)|ADB.*(?:fail|offline)/i.test(error.message||'');
+  if(details.kind==='navigation'&&!transportUnknown&&ctx.navigationAI?.state().automatic&&ctx.canRecoverNavigation?.()!==false){
+   const recovered=await recoverNativeWithAI({s,ai:ctx.navigationAI,details:{...details,reason:error.message},inspect,step:ctx.step,signal:s.signal});
+   if(recovered.completed)return recovered.proof;
+  }
   return ctx.intervene({...details,reason:error.message,aiContext:details.kind==='navigation'&&nodes?navigationAIContext(nodes,details):null},async()=>{s.signal?.throwIfAborted();return inspect(await s.screen());});
  }
 }

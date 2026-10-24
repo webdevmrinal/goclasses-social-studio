@@ -267,3 +267,126 @@ test('only Gemini 2.5 Flash explicitly disables thinking; Lite defaults and smal
   assert.deepEqual(configs[2].thinkingConfig, { thinkingBudget: 0 }, '2.5 Flash supports disabling default dynamic thinking');
   assert(configs.every(config => config.maxOutputTokens === 256));
 });
+
+const planInput = { platform: 'linkedin', stage: 'open_composer', controls: [
+  { id: 'c1', label: 'Start a post', role: 'button', enabled: true, scrollable: false },
+  { id: 'c2', label: 'Composer tools', role: 'scroll_region', enabled: true, scrollable: true }
+] };
+const planned = (action = { type: 'click', controlId: 'c1' }, extra = {}) => new Response(JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ action, ...extra }) }] } }] }), { status: 200 });
+async function automatic(t, fetchImpl = () => planned()) {
+  const f = await enabled(t, fetchImpl); await f.ai.configure({ automatic: true }); return f;
+}
+
+test('automatic recovery is separately opt-in, requires enabled help and persists without resetting budgets', async t => {
+  const f = await fixture(t, () => planned());
+  assert.equal(f.ai.state().automatic, false);
+  await assert.rejects(f.ai.configure({ automatic: true }), /Enable AI/);
+  await assert.rejects(f.ai.configure({ automatic: 'true' }), /automatic/);
+  assert.equal(await f.ai.plan(planInput), null);
+  await f.ai.configure({ enabled: true, apiKey: KEY });
+  assert.equal(await f.ai.plan(planInput), null); assert.equal(f.calls.length, 0);
+  await f.ai.configure({ automatic: true }); assert.equal(f.ai.state().automatic, true);
+  assert(await f.ai.plan(planInput)); assert.equal(f.ai.state().today.used, 1);
+  const restored = new NavigationAI({ dataDir: f.dataDir, fetchImpl: f.fetcher, now: f.now, env: {} });
+  await restored.init(); assert.equal(restored.state().automatic, true); assert.equal(restored.state().today.used, 1);
+  await restored.configure({ enabled: false }); assert.equal(restored.state().automatic, false);
+  assert.equal(await restored.plan(planInput), null); assert.equal(restored.state().today.used, 1);
+  await assert.rejects(restored.configure({ enabled: false, automatic: true }), /Enable AI/);
+});
+
+test('automatic planner sends only bounded controls and returns one safe ID-bound action with cache isolation', async t => {
+  const f = await automatic(t);
+  const requestInput = { ...planInput, screenshot: 'PRIVATE_SCREENSHOT', error: 'PRIVATE_ERROR', controls: planInput.controls.map(control => ({ ...control, selector: '#private', bounds: [1,2,3,4], caption: 'PRIVATE_CAPTION' })) };
+  const result = await f.ai.plan(requestInput);
+  assert.deepEqual(result, { action: { type: 'click', controlId: 'c1' }, model: models[0] });
+  const payload = JSON.parse(f.calls[0][1].body);
+  assert.deepEqual(JSON.parse(payload.contents[0].parts[0].text), planInput);
+  assert(payload.systemInstruction.parts[0].text.includes('untrusted UI data'));
+  assert(payload.generationConfig.responseSchema.properties.action);
+  assert(!f.calls[0][1].body.includes('PRIVATE_')); assert(!f.calls[0][1].body.includes('#private'));
+  result.action.controlId = 'c39'; assert.equal((await f.ai.plan(planInput)).action.controlId, 'c1');
+  assert.equal(f.calls.length, 1);
+  // Advisory results cannot accidentally be reused as automatic plans.
+  assert.equal(await f.ai.suggest(input), null); assert.equal(f.calls.length, 1);
+  f.advance(30001); f.ai.fetch = async (...args) => { f.calls.push(args); return success(); };
+  assert(await f.ai.suggest(input)); assert.equal(f.calls.length, 2);
+});
+
+test('automatic planner removes publishing, credentials, URLs and code labels before provider input', async t => {
+  const f = await automatic(t);
+  const controls = ['Post', 'Publish', 'Save', 'Your stories', 'Ｓｈａｒｅ', 'Delete', 'Send', 'Log in', 'Confirm', 'Go Live', 'Open https://unsafe.example', 'execute script', 'Tap 300, 400', 'x'.repeat(101)].map((label, index) => ({ id: `c${index + 3}`, label, role: 'button', enabled: true, scrollable: false }));
+  assert(await f.ai.plan({ ...planInput, controls: [...planInput.controls, ...controls] }));
+  const sent = JSON.parse(JSON.parse(f.calls[0][1].body).contents[0].parts[0].text);
+  assert.deepEqual(sent.controls, planInput.controls);
+});
+
+test('invalid automatic navigation contexts and empty or forbidden-only controls do not use quota', async t => {
+  const f = await automatic(t);
+  for (const value of [
+    { ...planInput, platform: 'other' }, { ...planInput, stage: 'Error: secret raw runtime failure' },
+    { ...planInput, stage: 'a'.repeat(81) }, { ...planInput, controls: [planInput.controls[0], planInput.controls[0]] }, { ...planInput, controls: [] }, { ...planInput, controls: ['Edit'] },
+    { ...planInput, controls: [{ id: 'c1', label: 'Post', role: 'button', enabled: true, scrollable: false }] },
+    { ...planInput, controls: [{ id: 'selector', label: 'Edit', role: 'button', enabled: true, scrollable: false }] },
+    { ...planInput, controls: [{ id: 'c41', label: 'Edit', role: 'button', enabled: true, scrollable: false }] },
+    { ...planInput, controls: [{ id: 'c1', label: 'Edit', role: 'textbox', enabled: true, scrollable: false }] }
+  ]) assert.equal(await f.ai.plan(value), null);
+  assert.equal(f.calls.length, 0); assert.equal(f.ai.state().today.used, 0);
+});
+
+test('strict automatic actions reject invented IDs, unsupported fields, disabled controls and unsafe scrolls', async t => {
+  for (const [action, extra] of [
+    [{ type: 'click', controlId: 'c39' }], [{ type: 'click', controlId: 'c2' }],
+    [{ type: 'click', controlId: 'c1', x: 10 }], [{ type: 'click', controlId: 'c1', selector: '#button' }],
+    [{ type: 'click', controlId: 'c1' }, { explanation: 'extra' }],
+    [{ type: 'scroll', controlId: 'c1', direction: 'down' }],
+    [{ type: 'scroll', controlId: 'c2', direction: 'left' }],
+    [{ type: 'wait', milliseconds: 5000 }], [{ type: 'stop', controlId: 'c1' }],
+    [{ type: 'shell', command: 'tap' }], [[{ type: 'wait' }]]
+  ]) {
+    const f = await automatic(t, () => planned(action, extra));
+    assert.equal(await f.ai.plan(planInput), null, JSON.stringify({action, extra}));
+    assert.equal(f.calls.length, 1);
+  }
+  const disabled = await automatic(t);
+  assert.equal(await disabled.ai.plan({ ...planInput, controls: planInput.controls.map(control => ({ ...control, enabled: false })) }), null);
+  assert.equal(disabled.calls.length, 0, 'Disabled-only screens consume no quota');
+});
+
+test('automatic planner allows scoped scroll, bounded wait and explicit stop outcomes', async t => {
+  for (const action of [{ type: 'scroll', controlId: 'c2', direction: 'down' }, { type: 'scroll', controlId: 'c2', direction: 'up' }, { type: 'wait' }, { type: 'stop' }]) {
+    const f = await automatic(t, () => planned(action));
+    assert.deepEqual((await f.ai.plan(planInput)).action, action);
+  }
+});
+
+test('automatic and advisory calls share rate limits, durable daily quota and failure cooldowns', async t => {
+  const f = await automatic(t, url => planned());
+  assert(await f.ai.plan(planInput));
+  assert.equal(await f.ai.suggest(input), null); assert.equal(f.calls.length, 1);
+  f.advance(30001); f.ai.fetch = async (...args) => { f.calls.push(args); return success(); };
+  assert(await f.ai.suggest(input)); assert.equal(f.ai.state().today.used, 2);
+  await f.ai.configure({ automatic: false }); await f.ai.configure({ automatic: true });
+  assert.equal(f.ai.state().today.used, 2); assert.equal(await f.ai.plan({ ...planInput, stage: 'other_stage' }), null);
+  assert.equal(f.calls.length, 2);
+  const busy = await automatic(t, () => failure(503));
+  assert.equal(await busy.ai.plan(planInput), null); assert.equal(busy.calls.length, 2);
+  assert.equal(await busy.ai.suggest(input), null); assert.equal(busy.calls.length, 2);
+});
+
+test('automatic planner switches once on a busy model but never bypasses shared provider quota', async t => {
+  let count = 0;
+  const f = await automatic(t, () => ++count === 1 ? failure(503) : planned());
+  assert.equal((await f.ai.plan(planInput)).model, models[1]); assert.equal(f.calls.length, 2);
+  const quota = await automatic(t, () => failure(429));
+  assert.equal(await quota.ai.plan(planInput), null); assert.equal(quota.calls.length, 1);
+  assert.equal(await quota.ai.suggest(input), null); assert.equal(quota.calls.length, 1);
+});
+
+test('disabling automatic recovery in flight discards its action and stops alternative requests', async t => {
+  let release;
+  const f = await automatic(t, () => new Promise(resolve => { release = resolve; }));
+  const pending = f.ai.plan(planInput);
+  while (!release) await new Promise(resolve => setTimeout(resolve, 5));
+  await f.ai.configure({ automatic: false }); release(planned());
+  assert.equal(await pending, null); assert.equal(f.calls.length, 1); assert.equal(f.ai.state().automatic, false);
+});

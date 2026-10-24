@@ -271,6 +271,7 @@ export class Queue extends EventEmitter {
           task = this.runner({
             page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
             mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
+            navigationAI:this.navigationAI,canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
             instagramMusicPublication:run.items.find(i=>i.id==='instagramMusic'&&i.status==='posted')?.publication,
