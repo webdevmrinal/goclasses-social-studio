@@ -43,7 +43,7 @@ try{
  const malicious='<img src=x onerror="window.__xss=true">';
  await update('proposed','A safe recovery was suggested.',{fix:'Dismiss the stale dialog '+malicious,action:'Click the Discard button'});
  assert.equal(await panel.locator('[data-recovery-fix]').innerText(),'Dismiss the stale dialog '+malicious);assert.equal(await panel.locator('img').count(),0);assert.equal(await page.evaluate(()=>window.__xss),undefined);
- assert.equal(await panel.locator('[data-recovery-api]').innerText(),'A safe recovery was suggested.','Completed model work is not shown as an ongoing API request');
+ assert.equal(await panel.locator('[data-recovery-api]').innerText(),'Gemini responded · gemini-fixture','Completed model work shows a completed request and its model');
  await update('executing','Clicking the exact discard control.',{action:'Click the Discard button'});
  assert.equal(await panel.locator('[data-recovery-action]').innerText(),'Click the Discard button');
  assert.equal(await panel.locator('[aria-current="step"]').innerText(),'Try');
@@ -63,8 +63,8 @@ try{
  assert.match(await panel.locator('[data-recovery-action]').innerText(),/busy.*manually.*cooldown/);
  assert.equal(await panel.locator('[data-recovery-state]').innerText(),'Manual help needed');
  // Cached advice must never claim a new API call.
- snapshot.recovery.events=[{phase:'proposed',message:'Using cached guidance. No API call was made.',fix:'Close the permitted stale dialog.'}];snapshot.recovery.phase='proposed';snapshot.recovery.fix='Close the permitted stale dialog.';await emit();
- assert.equal(await panel.locator('[data-recovery-api]').innerText(),'Using cached guidance. No API call was made.');
+ snapshot.recovery.events=[{phase:'proposed',source:'cache',model:'gemini-fixture',message:'Using cached guidance. No API call was made.',fix:'Close the permitted stale dialog.'}];snapshot.recovery.phase='proposed';snapshot.recovery.fix='Close the permitted stale dialog.';await emit();
+ assert.equal(await panel.locator('[data-recovery-api]').innerText(),'Cached Gemini fix · gemini-fixture (no new API call)');
  // A state update preserves the user's scroll position instead of pulling to the last run.
  snapshot.runs=Array.from({length:18},(_,index)=>({id:'old-'+index,createdAt:new Date().toISOString(),mode:'TEST',status:'completed',captions:{x:'Older fixture run '+index},items:[{id:'x',status:'dry_run',screenshots:[]}]}));await emit();await page.evaluate(()=>scrollTo(0,650));const y=await page.evaluate(()=>scrollY);assert(y>0);
  snapshot.recovery.action='Inspect the allowed control';await emit();assert(Math.abs(await page.evaluate(()=>scrollY)-y)<=1,'Recovery updates preserve scroll position');

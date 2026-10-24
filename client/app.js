@@ -383,7 +383,8 @@ function recoveryPanel(){
  const latest=key=>[...events].reverse().find(event=>event[key])?.[key];
  const model=recovery.model||latest('model'),fix=recovery.fix||latest('fix'),action=recovery.action||latest('action');
  const apiEvent=[...events].reverse().find(event=>['calling','proposed'].includes(event.phase));
- const gemini=phase==='calling'?'Calling Gemini'+(model?' · '+model:''):apiEvent?.message||(phase==='detected'?'Waiting for a navigation check':'No API call recorded');
+ const providerReply=[...events].reverse().find(event=>event.phase==='proposed'&&event.source==='provider'),cachedReply=[...events].reverse().find(event=>event.phase==='proposed'&&event.source==='cache'),lastCall=events.findLastIndex(event=>event.phase==='calling'),lastCache=events.findLastIndex(event=>event.phase==='proposed'&&event.source==='cache');
+ const gemini=phase==='calling'?'Calling Gemini'+(model?' · '+model:''):lastCache>lastCall?'Cached Gemini fix'+(model?' · '+model:'')+' (no new API call)':lastCall>=0&&(providerReply||events.some(event=>event.phase==='proposed'))?'Gemini responded'+(model?' · '+model:''):apiEvent?.message||(phase==='detected'?'Waiting for a navigation check':'No API call recorded');
  const current=phase==='executing'?(action||last?.message||'Trying the permitted navigation step'):phase==='verifying'?(last?.message||'Checking the expected screen'):['succeeded','paused','failed'].includes(phase)?(last?.message||recoveryPhases[phase]):phase==='calling'?'Waiting for Gemini':phase==='proposed'?(action||'Preparing the permitted steps'):(last?.message||'Inspecting the current screen');
  const checkpoints=[['detected','Problem'],['calling','Gemini'],['proposed','Fix'],['executing','Try'],['verifying','Check']];
  const reached=new Set(events.map(event=>event.phase));reached.add(phase);
