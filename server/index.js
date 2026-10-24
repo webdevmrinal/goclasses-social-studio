@@ -66,6 +66,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   phoneTools.on('change',()=>queue.emit('change',queue.state()));
   const studioState=()=>{const state=queue.state();return {...state,workerBusy:state.workerBusy||phoneTools.scanning||phoneTools.pairing===true,phone:phoneTools.state()};};
   await queue.init();
+  if(config.androidDevice.type==='phone'){phoneTools.monitor?.();Promise.resolve().then(()=>phoneTools.refresh?.()).catch(()=>{});}
   queue.updateState=updateBridge.state;
   updateBridge.on('change',state=>{queue.updateState=state;queue.maintenance=['installing','restarting'].includes(state.phase);queue.emit('change',queue.state());});
   app.use('/api',(req,res,next)=>queue.recoveryTaskActive&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/navigation-ai/test/stop')?res.status(409).json({error:'Wait for the recovery test to finish, or stop recovery first.'}):next());
