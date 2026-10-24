@@ -92,9 +92,9 @@ test('confirmed native handoff proceeds directly, while a standalone Story still
 });
 
 test('inherited Story audio returns through the observed music-search control before choosing a track',async()=>{
- const n=(id,extra={})=>({'resource-id':nativeId(id),displayed:'true',...extra}),library=[n('row_search_edit_text')],calls=[];
- let screen=[n('story_share_controls_action_bar'),{'resource-id':'music_button',displayed:'true'}];
- const s={screen:async()=>screen,until:async predicate=>{const result=predicate(screen);assert(result);return result;},click:async(using,id)=>{assert.equal(id,'music_button');calls.push(id);screen=[n('music_editor_done_button'),n('album_art_button',{'content-desc':'Return to music search'})];},clickId:async id=>{assert.equal(id,'album_art_button');calls.push(id);screen=library;}};
+ const n=(id,extra={})=>({'resource-id':nativeId(id),package:'com.instagram.android',displayed:'true',...extra}),library=[n('row_search_edit_text'),n('music_browser_container')],calls=[];
+ let screen=[n('story_share_controls_action_bar'),n('music_button',{'resource-id':'music_button'})];
+ const s={screen:async()=>screen,until:async predicate=>{const result=predicate(screen);assert(result);return result;},click:async(using,id)=>{assert.equal(id,'music_button');calls.push(id);screen=[n('music_editor_done_button',{'content-desc':'Done'}),n('delete_button',{'content-desc':'Remove music'}),n('album_art_button',{'content-desc':'Return to music search'}),n('duration',{'content-desc':'15 second clip'}),n('slider',{tag:'android.widget.SeekBar',text:'12.5','content-desc':'Select the part of the audio track to use'})];},clickId:async id=>{assert.equal(id,'album_art_button');calls.push(id);screen=library;}};
  await openStoryMusicLibrary(s);assert.deepEqual(calls,['music_button','album_art_button']);
  calls.length=0;await openStoryMusicLibrary(s);assert.deepEqual(calls,[]);
  screen=[n('music_editor_done_button')];await assert.rejects(openStoryMusicLibrary(s),/cannot be changed safely/);assert.deepEqual(calls,[]);

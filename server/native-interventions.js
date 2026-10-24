@@ -6,20 +6,31 @@ export class NativeInterventions{
  constructor(queue){this.queue=queue;this.pending=null;}
  async wait(run,item,signal,details,inspect,{pause,resume}){
   signal.throwIfAborted();if(item.submitting||this.pending)throw new InterventionError('Manual preparation is unavailable after submission or during another handoff.');
-  const previous=run.status,intervention={...details,id:randomUUID(),createdAt:new Date().toISOString()};
+  const {aiContext,...publicDetails}=details;
+  const previous=run.status,intervention={...publicDetails,id:randomUUID(),createdAt:new Date().toISOString()};
   pause();item.intervention=intervention;item.status='waiting_for_input';run.status='waiting_for_input';item.message=details.instructions;
   let abort;
   try{
    return await new Promise((resolve,reject)=>{
     abort=()=>reject(signal.reason||new InterventionError('Stopped by operator.'));
-    this.pending={run,item,signal,inspect,resolve,reject,intervention,busy:false};signal.addEventListener('abort',abort,{once:true});
-    if(signal.aborted)abort();else this.queue.change().catch(reject);
+    this.pending={run,item,signal,inspect,resolve,reject,intervention,busy:false,adviceController:new AbortController()};signal.addEventListener('abort',abort,{once:true});
+    if(signal.aborted)abort();else { this.queue.change().catch(reject); this.advice(this.pending,aiContext).catch(()=>{}); }
    });
   }finally{
-   signal.removeEventListener('abort',abort);this.pending=null;delete item.intervention;
+   signal.removeEventListener('abort',abort);this.pending?.adviceController.abort();this.pending=null;delete item.intervention;
    item.status='running';if(run.status==='waiting_for_input')run.status=previous;
    if(!signal.aborted)resume();await this.queue.change();
   }
+ }
+ async advice(p,context){
+  const ai=this.queue.navigationAI,state=ai?.state();
+  if(!context||p.intervention.kind!=='navigation'||!state?.enabled||!state.configured||p.signal.aborted)return;
+  p.intervention.ai={status:'loading',message:'Checking navigation options...'};await this.queue.change();
+  if(this.pending!==p||p.signal.aborted)return;
+  let result;try{result=await ai.suggest({...context,signal:AbortSignal.any([p.signal,p.adviceController.signal])});}catch{ /* provider problems never affect a prepared post */ }
+  if(this.pending!==p||p.signal.aborted||p.run.status!=='waiting_for_input')return;
+  const current=ai.state();p.intervention.ai=result?{status:'ready',steps:result.steps,model:result.model}:{status:current.status,message:current.message||'Gemini is unavailable. Follow the instructions above and continue manually.'};
+  await this.queue.change();
  }
  async act({runId,itemId,id,action,reviewId}){
   const p=this.pending;
@@ -28,7 +39,7 @@ export class NativeInterventions{
   p.busy=true;
   try{
    p.signal.throwIfAborted();const value=await p.inspect();p.signal.throwIfAborted();
-   if(!value){delete p.intervention.review;delete p.review;await this.queue.change();throw new InterventionError(p.intervention.kind==='music'?'Preview a song in the Instagram music library first. Leave the library open.':'The expected screen is not ready. Follow the instructions in the emulator, then check again.');}
+   if(!value){delete p.intervention.review;delete p.review;await this.queue.change();throw new InterventionError(p.intervention.kind==='music'?'Preview a song in the Instagram music library first. Leave the library open.':'The expected screen is not ready. Follow the instructions on the selected Android device, then check again.');}
    if(p.intervention.kind==='music'){
     if(action==='check'){
      const native=structuredClone(value);p.review={value:native,proof:proof(native),id:randomUUID()};

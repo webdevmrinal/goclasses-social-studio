@@ -240,7 +240,12 @@ export class AndroidSession {
       await inspectionPause(this.signal,250,end);if(Date.now()>=end)break;
       nodes=await this.request('/elements','POST',{using,value},{deadline:end});
     }
-    if(nodes.length!==1)throw new InterventionError('Instagram '+(nodes.length?'matched '+nodes.length+' controls':'found no controls')+' for '+locator+'. '+(nodes.length?'The selector is ambiguous.':'The requested control is unavailable.')+' Its unsent draft was preserved.');
+    if(nodes.length!==1){
+      const error=new InterventionError('Instagram '+(nodes.length?'matched '+nodes.length+' controls':'found no controls')+' for '+locator+'. '+(nodes.length?'The selector is ambiguous.':'The requested control is unavailable.')+' Its unsent draft was preserved.');
+      // Only an explicit no-match result proves that no click was attempted.
+      // Recovery must never infer that from a transport or mutation failure.
+      error.code=nodes.length?'ANDROID_CONTROL_AMBIGUOUS':'ANDROID_CONTROL_UNAVAILABLE';throw error;
+    }
     return nodes[0]['element-6066-11e4-a52e-4f735466cecf'];
   }
   async click(using,value) {

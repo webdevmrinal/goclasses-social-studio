@@ -218,7 +218,7 @@ test('HTTP integration: password, origin, image validation, preview and retry pr
   await until(() => queue.runs[0].status === 'completed' && !queue.processing);
   assert.deepEqual(queue.runs[0].items.map(i => i.id), ['x']);
   assert.equal((await request('/api/manual-login', json({ platform: 'manychat' }, cookie))).status, 200);
-  assert.equal(manualUrl, defaults.platforms.manychat.flowUrl);
+  assert.equal(manualUrl, 'https://app.manychat.com/fb5759472/cms');
   assert.equal(queue.state().workerBusy, true);
   assert.equal((await request('/api/runs', json({ draft: validDraft }, cookie))).status, 400);
   httpBrowser.manualProcess = null;

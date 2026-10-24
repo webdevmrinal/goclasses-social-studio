@@ -5,6 +5,7 @@ import {verifyNativePost} from './native-reference.js';
 import {normalizeNativeCaption,resolveMusic,previewMusicChoice,assistNativeStage,musicClipPosition} from './native-music.js';
 import {digest} from './native-photos.js';
 import {InterventionError} from './utils.js';
+import {nativeViewportStamp,nativeNavigationCandidate,recoverNativeNavigation} from './native-navigation.js';
 const visible=nodes=>nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android');
 const one=(nodes,id)=>{const found=visible(nodes).filter(n=>n['resource-id']===nativeId(id));return found.length===1?found[0]:null;};
 const has=(nodes,id)=>Boolean(one(nodes,id));
@@ -33,13 +34,15 @@ function editScrollState(nodes,identity){
 // Instagram removes scrolled-off caption nodes from accessibility. Scroll only
 // within the same account/editor, then require the complete caption again.
 export async function anchorEditInfo(s,identity){
- for(let i=0;i<8;i++){const nodes=await s.screen();if(editInfoState(nodes,identity))return nodes;if(!editScrollState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');await scroll(s,nodes,'top');}
+ const seen=new Set();
+ for(let i=0;i<8;i++){const nodes=await s.screen();if(editInfoState(nodes,identity))return nodes;if(!editScrollState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');const stamp=nativeViewportStamp(nodes);if(seen.has(stamp))break;seen.add(stamp);await scroll(s,nodes,'top');}
  throw new InterventionError('The complete existing-post caption could not be verified. No music save was attempted.');
 }
 export async function readEditMusic(s,identity,{leaveAtRow=false,ctx}={}){
  await anchorEditInfo(s,identity);
  const row=await assistNativeStage(s,ctx,{kind:'navigation',title:'Show the post’s music row',instructions:'In this post’s Edit info, scroll below Add product details until the song or Add music row is visible. Leave it there, then continue. Do not save.'},async()=>{
-  for(let i=0;i<7;i++){const nodes=await s.screen();if(!editScrollState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');const row=editMusicRow(nodes);if(row)return row;await scroll(s,nodes,'bottom');}
+  const seen=new Set();
+  for(let i=0;i<7;i++){const nodes=await s.screen();if(!editScrollState(nodes,identity))throw new InterventionError('The existing post account or caption changed. No music save was attempted.');const row=editMusicRow(nodes);if(row)return row;const stamp=nativeViewportStamp(nodes);if(seen.has(stamp))break;seen.add(stamp);await scroll(s,nodes,'bottom');}
   throw new InterventionError('Scroll below Add product details to check Instagram music. The published feed was not uploaded again.');
  },nodes=>editScrollState(nodes,identity)&&editMusicRow(nodes));
  if(!leaveAtRow)await anchorEditInfo(s,identity);return row;
@@ -74,14 +77,20 @@ function postMenuList(nodes){
 // Called only after the exact post was verified and its own More menu opened.
 // Scroll this menu, then select only its unique Edit row. Never Save or Share.
 export async function selectPostEdit(s){
- let nodes=await s.until(n=>postMenuList(n)&&n,'The existing post action menu is unavailable.',15000),canScroll=true;
+ let nodes=await s.until(n=>postMenuList(n)&&n,'The existing post action menu is unavailable.',15000),canScroll=true;const seen=new Set();
  for(let attempt=0;attempt<=6;attempt++){
   s.signal?.throwIfAborted();const box=postMenuList(nodes);if(!box)throw new InterventionError('The existing post action menu changed. No edit was opened.');
   const matches=visible(nodes).filter(n=>n['resource-id']===nativeId('control_option_text')&&n.text==='Edit');
   if(matches.length>1)throw new InterventionError('The existing post Edit option is ambiguous. No edit was opened.');
   if(matches.length===1){const row=nativeBounds(matches[0]);if(row.x<box.x||row.y<box.y||row.x+row.width>box.x+box.width||row.y+row.height>box.y+box.height)throw new InterventionError('The existing post Edit option is outside its verified menu.');await s.click('xpath','//*[@resource-id='+xpathLiteral(nativeId('control_option_text'))+' and @text="Edit" and @displayed="true"]');return;}
-  if(!canScroll||attempt===6)break;
+  // A changed selector can still expose a unique clickable Edit label inside
+  // this already verified post menu. It has no path to Save/Share/Delete.
+  if(nativeNavigationCandidate(nodes,'post-edit',{guard:n=>Boolean(postMenuList(n))})){
+    await recoverNativeNavigation(s,{action:'post-edit',guard:n=>Boolean(postMenuList(n)),ready:n=>has(n,'layout_edit_media_info_layout')&&one(n,'action_bar_title')?.text==='Edit info'});return;
+  }
+  const stamp=nativeViewportStamp(nodes);if(seen.has(stamp)||!canScroll||attempt===6)break;seen.add(stamp);
   canScroll=await s.request('/execute/sync','POST',{script:'mobile: scrollGesture',args:[{left:box.x+8,top:box.y+8,width:box.width-16,height:box.height-16,direction:'down',percent:.7}]});
+  if(typeof canScroll!=='boolean')throw new InterventionError('The existing post menu did not confirm its scroll position. Continue manually; no edit was opened.');
   nodes=await s.screen();
  }
  throw new InterventionError('The existing post Edit option was not found after scrolling its menu. No edit was opened.');

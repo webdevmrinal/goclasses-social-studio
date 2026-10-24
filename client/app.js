@@ -377,10 +377,32 @@ function restartDraftDialog(run){
  modal.querySelector('#prepare-restart-draft').onclick=()=>{try{if(workerBusy()||uploading)throw Error('Stop the current activity or finish the upload first.');const selected=[...form.querySelectorAll('input:checked:not(:disabled)')].map(el=>el.dataset.restartChoice),next=draftFromRun(run,selected);localStorage.setItem('mrinal.social-studio.previous-draft',JSON.stringify(draft));draft=next;mode='TEST';reviewDraft=null;reviewValid=false;reviewBlocked=[];remoteReadiness=null;lastMediaOrder=null;mediaPreviewIndex=0;instagramTab='feed';captionTab=draft.selected.find(id=>id!=='instagramStory')||'instagram';for(const key of Object.keys(platformPreviewIndex))delete platformPreviewIndex[key];liveMetadataConsent={};saveDraft();modal.close();navigate('compose');toast('Fresh job ready for review. Nothing has been started.');}catch(error){modal.querySelector('#restart-draft-error').textContent=error.message;}};
 }
 function elapsed(start, end) { const seconds = Math.max(0, Math.round(((end ? new Date(end) : Date.now()) - new Date(start)) / 1000)); return `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
+async function navigationHelp(){
+ const settings=await api('/api/navigation-ai');state.navigationAI=settings;
+ showDialog('Navigation help',
+  '<form id="navigation-ai-form"><label class="check"><input type="checkbox" name="enabled" '+(settings.enabled?'checked':'')+'> Use Gemini suggestions</label>'+
+  '<p>When Android navigation needs help, Gemini can suggest up to three steps. The run stays paused for you.</p>'+
+  '<label class="field"><span>Gemini API key</span><input type="password" name="apiKey" autocomplete="new-password" spellcheck="false" placeholder="'+(settings.configured?'Key configured; leave blank to keep it':'Paste your API key here')+'"></label>'+
+  '<small>'+(settings.keySource==='environment'?'Using the key from this computer�s environment.':'Saved only on this worker computer. Never included in drafts or shared settings.')+'</small>'+
+  '<p class="text-muted">Use an eligible free-tier project without billing. Only limited Instagram control names are sent. No captions, messages or images. Google may use free-tier data to improve its products.</p>'+
+  '<p class="text-muted">At most 2 requests a minute and 10 a day, with cached guidance and cooldowns. Busy models switch once when appropriate, then return to manual help.</p>'+
+  '<p><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Get a Gemini API key</a></p><p id="navigation-ai-status" role="status">'+escape(settings.message||'Optional. Local recovery works without Gemini.')+'</p></form>',
+  '<button class="button" data-dialog-close>Cancel</button>'+(settings.configured&&settings.keySource!=='environment'?'<button class="button subtle" id="navigation-ai-remove">Remove key</button>':'')+'<button class="button primary" type="submit" form="navigation-ai-form">Save settings</button>');
+ const form=modal.querySelector('#navigation-ai-form');
+ const save=async body=>{const button=modal.querySelector('[type="submit"]');button.disabled=true;try{state.navigationAI=await api('/api/navigation-ai',{method:'PUT',body});form.elements.apiKey.value='';modal.close();toast('Navigation help saved.');}catch(error){modal.querySelector('#navigation-ai-status').textContent=error.message;}finally{button.disabled=false;}};
+ form.onsubmit=event=>{event.preventDefault();const key=form.elements.apiKey.value.trim();save({enabled:form.elements.enabled.checked,...(key?{apiKey:key}:{})});};
+ const remove=modal.querySelector('#navigation-ai-remove');if(remove)remove.onclick=()=>save({enabled:false,clearKey:true});
+}
+function navigationAdvice(handoff){
+ const ai=handoff?.ai;if(!ai)return '';
+ if(ai.status==='loading')return '<p class="navigation-ai-note" role="status">'+icon('refresh','spin')+' Checking navigation options�</p>';
+ if(ai.status==='ready'&&Array.isArray(ai.steps))return '<aside class="navigation-ai-advice"><strong>'+icon('sparkle')+' Gemini suggestion</strong><ol>'+ai.steps.slice(0,3).map(step=>'<li>'+escape(step)+'</li>').join('')+'</ol><small>Follow only the relevant navigation step. Leave Save and Share to Studio.</small></aside>';
+ return '<p class="navigation-ai-note" role="status">'+escape(ai.message||'Gemini is unavailable. Continue manually using the instructions above.')+'</p>';
+}
 function settingsPage() {
   const field = (id, key, label, hint = '', placeholder = '') => `<label class="field"><span>${label}</span><input name="${id}.${key}" value="${escape(state.config.platforms[id][key])}" placeholder="${escape(placeholder)}" autocomplete="off" ${/Url$/.test(key) ? 'type="url"' : 'type="text"'}>${hint ? `<small>${hint}</small>` : ''}</label>`;
   const fields = p => p.id === 'instagram' || p.id === 'x' ? field(p.id, 'handle', 'Account handle', p.id === 'x' ? 'Leave blank to detect your signed-in account.' : '', 'your-account') : p.id === 'linkedin' ? field(p.id, 'companyPageUrl', 'Company admin URL') + field(p.id, 'companyName', 'Company name') : p.id.startsWith('youtube') ? field(p.id, 'channelId', 'Channel ID', 'Detected when you check the account.', 'UC…') + field(p.id, 'channelName', 'Channel name') + field(p.id, 'handle', 'Channel handle') : ['whatsapp', 'telegram'].includes(p.id) ? field(p.id, 'channelName', 'Channel name') + field(p.id, 'channelUrl', 'Public channel link', 'Use the channel link, not a group or chat.') : manychatConnectionFields();
-  return `<div class="hero"><div><h1>Connections</h1></div><div class="hero-actions"><button class="button" data-action="logins" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')}<span>${state.login.running ? 'Checking…' : 'Check logins'}</span></button></div></div>
+  return `<div class="hero"><div><h1>Connections</h1></div><div class="hero-actions"><button class="button" data-action="navigation-help">${icon('sparkle')}<span>Navigation help</span></button><button class="button" data-action="logins" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')}<span>${state.login.running ? 'Checking…' : 'Check logins'}</span></button></div></div>
     ${disclosure('connection-help', 'Sign-in help', '<p>Sign in on the worker computer, then check again. Check logins checks all eight services. Both YouTube channels share one Google login.</p><p>If Google blocks sign-in, open an account’s Settings and use Manual sign-in. Close that sign-in window before checking again.</p><p>Team access and hosting instructions are in README.md.</p>', false, 'connection-help')}
     <form id="settings-form"><div class="settings-grid">${PLATFORMS.map(p => `<section class="panel settings-card"><div class="settings-title">${platformIcon(p)}<div><h2>${p.name}</h2><small class="settings-identity">${escape(accountLabel(p))}</small></div></div>${p.id==='instagram'?nativeDeviceControl(state.config,workerBusy()):''}<div class="login-status" id="login-status-${p.id}">${loginStatus(p.id)}</div>
       ${disclosure('connection-' + p.id, 'Settings', fields(p) + `<button class="button small" type="button" data-manual-login="${p.id}" ${workerBusy() ? 'disabled' : ''}>${icon('lock')} Manual sign-in</button>`, setupIssues(state.config, p.id).length > 0, 'connection-settings')}</section>`).join('')}</div><div class="settings-footer"><small>Settings are shared with your team.</small><button class="button primary" type="submit" ${workerBusy() ? 'disabled' : ''}>Save connections</button></div></form>${connectionsNext()}`;
@@ -652,6 +674,7 @@ document.addEventListener('click', async e => {
     if (button.dataset.remove) { changeMediaOrder(draft.mediaIds.filter(id => id !== button.dataset.remove)); return; }
     if (button.dataset.move) { const ids = [...draft.mediaIds], i = ids.indexOf(button.dataset.move), target = i + Number(button.dataset.direction || -1); if (i >= 0 && target >= 0 && target < ids.length) { [ids[target], ids[i]] = [ids[i], ids[target]]; changeMediaOrder(ids, 'Image order updated.'); } return; }
     if (button.hasAttribute('data-media-preview')) { mediaPreviewIndex = Number(button.dataset.mediaPreview); shell(); return; }
+    if (button.dataset.action === 'navigation-help') { await navigationHelp(); return; }
     if (button.dataset.action === 'continue-compose') {
       if (document.querySelector('#settings-form')?.dataset.dirty === 'true') return toast('Save your connection changes before continuing.', true);
       draft.selected=draft.selected.filter(id=>id==='instagramStory'||draft.captions[id]?.trim());syncStorySelection(draft);
@@ -819,7 +842,7 @@ function applyStatus(data) {
   const signInHost=document.querySelector('[data-manual-login-host]');if(signInHost)signInHost.innerHTML=manualLoginNotice();
   updateWorkerControls();
   const freshButton=document.querySelector('[data-action="fresh-workspace"]');if(freshButton)freshButton.disabled=workerBusy()||uploading;
-   state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;
+   state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;state.navigationAI=data.navigationAI;
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
   if(musicPickerOpen&&data.androidProgress?.picker)musicPickerUi?.progress(data.androidProgress);
   if (data.config) {
@@ -1032,6 +1055,8 @@ function renderAndroidProgress(){
   androidProgressDialog.querySelector('#android-progress-title').textContent=waiting?handoff.title:'Instagram on Android';
   androidProgressDialog.querySelector('.android-progress-note').textContent=waiting?'Automation is paused here. The timer is paused too. Leave Save and Share to the app.':'Working on your selected Android device. You can keep using the workspace.';
   androidProgressDialog.querySelector('#android-manual').innerHTML=waiting?(handoff.kind==='music'?''+(handoff.requested?'<p class="text-muted">Requested: '+escape(handoff.requested.title)+' · '+escape(handoff.requested.artist)+'</p>':'')+(handoff.review?'<div class="native-song-review"><small>Selected in Instagram</small><strong>'+escape(handoff.review.title)+'</strong><span>'+escape(handoff.review.artist)+'</span></div><button class="button primary" data-native-action="continue">Use this song &amp; continue</button>':'')+'<button class="button" data-native-action="check">'+(handoff.review?'Check a different selection':'Check selected song')+'</button>':'<button class="button primary" data-native-action="continue">I’m on that screen · continue</button>'):'';
+
+  if(waiting&&handoff.kind==='navigation')androidProgressDialog.querySelector('#android-manual').insertAdjacentHTML('afterbegin',navigationAdvice(handoff));
 
   const stop=androidProgressDialog.querySelector('[data-kill-run]');if(stop){stop.dataset.killRun=run.id;stop.disabled=run.status==='stopping';}
   androidProgressDialog.querySelector('#android-run-mode').textContent=run.mode==='TEST'?'TEST - stops before sharing':'LIVE - publication authorized';

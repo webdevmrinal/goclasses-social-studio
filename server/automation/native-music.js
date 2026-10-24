@@ -2,6 +2,8 @@
 import {instagramHashtags} from '../../shared/instagram.js';
 import {nativeId,nativeBounds,xpathLiteral,isPhotoAccessPicker,cancelInstagramPhotoAccess} from './android-native.js';
 import {InterventionError} from './utils.js';
+import {recoverNativeNavigation} from './native-navigation.js';
+import {navigationAIContext} from './navigation-ai-context.js';
 const present=(nodes,name)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(name));
 export function musicClipPosition(nodes){
   const clips=nodes.filter(n=>n.displayed==='true'&&n.tag==='android.widget.SeekBar'&&n['content-desc']?.startsWith('Select the part of the audio track'));
@@ -51,7 +53,12 @@ const candidate=(rows,chosen)=>{const matches=[...new Map(rows.filter(r=>matches
 export async function assistNativeStage(s,ctx,details,attempt,inspect){
  try{return await attempt();}catch(error){
   s.signal?.throwIfAborted();if(!ctx?.intervene||error.name==='AccountMismatchError')throw error;
-  return ctx.intervene({...details,reason:error.message},async()=>{s.signal?.throwIfAborted();return inspect(await s.screen());});
+  // A timed-out wait can finish while its response is in flight. Inspect once
+  // before asking for help; never rerun the action that may already have worked.
+  let nodes;
+  try{nodes=await s.screen();const value=await inspect(nodes);s.signal?.throwIfAborted();if(value)return value;}
+  catch(checkError){s.signal?.throwIfAborted();if(checkError.name==='AccountMismatchError')throw checkError;}
+  return ctx.intervene({...details,reason:error.message,aiContext:details.kind==='navigation'&&nodes?navigationAIContext(nodes,details):null},async()=>{s.signal?.throwIfAborted();return inspect(await s.screen());});
  }
 }
 export async function resolveMusic(s,chosen,ctx={}){
@@ -147,26 +154,54 @@ export function inheritedStoryAudio(nodes){
  const segmentStart=musicClipPosition(own),duration=own.filter(n=>/^\d+ second clip$/.test(n['content-desc']||''));if(segmentStart===null||duration.length!==1)return null;
  return {inherited:true,segmentStart,durationSeconds:Number(duration[0]['content-desc'].split(' ')[0]),verifiedBy:'native_inherited_audio_controls'};
 }
-export async function openStoryMusicLibrary(s){
-  let nodes=await s.screen();
-  if(present(nodes,'row_search_edit_text'))return;
-  if(!present(nodes,'music_editor_done_button')){
-    if(!present(nodes,'story_share_controls_action_bar')||!nodes.some(n=>n.displayed==='true'&&n['resource-id']==='music_button'))throw new InterventionError('The owned Story music controls changed. Nothing was shared.');
-    await s.click('id','music_button');
-    nodes=await s.until(nodes=>(present(nodes,'row_search_edit_text')||present(nodes,'music_editor_done_button'))&&nodes,'Story music did not open.');
+// Pure checkpoint for opening Story music, including verified inherited controls.
+// Handoffs use this reader; they never reopen or finish a clip during inspection.
+export function storyMusicCheckpoint(nodes,{allowInherited=false}={}){
+  if(nodes.some(n=>n.displayed==='true'&&(n.password==='true'||n.package&&n.package!=='com.instagram.android')))return null;
+  const visible=nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android');
+  if(present(visible,'music_editor_done_button')){
+    const audio=allowInherited&&inheritedStoryAudio(visible);return audio?{kind:'inherited',audio}:null;
   }
+  if(present(visible,'music_editor_controls_container'))return null;
+  const search=visible.filter(n=>n['resource-id']===nativeId('row_search_edit_text'));
+  return search.length===1&&(present(visible,'music_browser_container')||present(visible,'music_search_clips_landing_page_container')||visible.some(n=>/^audio_browser_track_\d+_\d+$/.test(n['resource-id']||'')))?{kind:'library'}:null;
+}
+export async function openStoryMusicControls(s){
+  const nodes=await s.screen(),ready=next=>storyMusicCheckpoint(next,{allowInherited:true}),current=ready(nodes);
+  if(current)return current;
+  if(present(nodes,'music_editor_done_button'))throw new InterventionError('The inherited Story music cannot be changed safely. Nothing was shared.');
+  if(!present(nodes,'story_share_controls_action_bar')||nodes.some(n=>n.displayed==='true'&&(n.password==='true'||n.package&&n.package!=='com.instagram.android')))throw new InterventionError('The owned Story music controls changed. Nothing was shared.');
+  const buttons=nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&['music_button',nativeId('music_button')].includes(n['resource-id']));
+  if(buttons.length>1)throw new InterventionError('The Story music control is ambiguous. Nothing was shared.');
+  if(!buttons.length)return recoverNativeNavigation(s,{action:'story-music',ready});
+  try{await s.click('id',buttons[0]['resource-id']);}
+  catch(error){if(error.code!=='ANDROID_CONTROL_UNAVAILABLE')throw error;return recoverNativeNavigation(s,{action:'story-music',ready});}
+  return s.until(ready,'Story music did not open.');
+}
+export async function openStoryMusicLibrary(s){
+  const state=await openStoryMusicControls(s);
   // Reposts can inherit feed audio: Music opens its clip editor, not the library.
   // Use the observed return control, then reselect and verify the exact real ID.
-  if(present(nodes,'music_editor_done_button')){
-    if(!nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('album_art_button')&&n['content-desc']==='Return to music search'))throw new InterventionError('The inherited Story music cannot be changed safely. Nothing was shared.');
+  if(state.kind==='inherited'){
+    const nodes=await s.screen();
+    if(!inheritedStoryAudio(nodes))throw new InterventionError('The inherited Story music cannot be changed safely. Nothing was shared.');
     await s.clickId('album_art_button');
   }
-  await s.until(nodes=>present(nodes,'row_search_edit_text'),'Story music library did not open.');
+  return s.until(nodes=>storyMusicCheckpoint(nodes),'Story music library did not open.');
 }
 export async function openMusicLibrary(s) {
-  await s.until(nodes=>present(nodes,'media_thumbnail_tray_button'),'The Instagram photo editor is still loading.');
-  await s.click('xpath','//android.widget.TextView[@text="Audio"]/parent::*');
-  await s.until(nodes=>present(nodes,'row_search_edit_text'),'Instagram music is unavailable on this account.');
+  const ready=nodes=>present(nodes,'row_search_edit_text');
+  const nodes=await s.until(nodes=>(ready(nodes)||present(nodes,'media_thumbnail_tray_button'))&&nodes,'The Instagram photo editor is still loading.');
+  if(!ready(nodes)){
+    try{await s.click('xpath','//android.widget.TextView[@package="com.instagram.android" and @text="Audio" and @displayed="true"]/parent::*[@clickable="true"]');}
+    catch(error){
+      // A definite no-match is the only failure before a click was dispatched.
+      // Ambiguous selectors and lost action responses always go to handoff.
+      if(error.code!=='ANDROID_CONTROL_UNAVAILABLE')throw error;
+      await recoverNativeNavigation(s,{action:'feed-music',ready});
+    }
+    await s.until(ready,'Instagram music is unavailable on this account.');
+  }
   return expandMusicTray(s);
 }
 export async function searchMusic(s,query) {

@@ -13,7 +13,9 @@ import { PLATFORMS, validateDraft } from '../shared/platforms.js';
 import { createSecurity } from './security.js';
 import { BrowserManager } from './automation/browser.js';
 import { Queue } from './queue.js';
+import { NavigationAI } from './navigation-ai.js';
 import { destinationUrl } from './automation/platforms.js';
+import { manychatLoginUrl } from './automation/manychat-login.js';
 import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor, selectionErrors, metadataNeedsReview, metadataConsentValid } from '../shared/media.js';
@@ -25,7 +27,7 @@ import { instagramOptions, usesInstagramAndroid, instagramMusicEnabled } from '.
 import { destinationReadiness } from '../shared/readiness.js';
 import { UpdateBridge } from './updates.js';
 
-export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, updateBridge = new UpdateBridge(), phoneTools = new PhoneTools({home:process.env.STUDIO_HOME||ROOT}) } = {}) {
+export async function createApp({ browser = new BrowserManager(), dataDir = DATA, securityOptions, queueOptions = {}, navigationAI, updateBridge = new UpdateBridge(), phoneTools = new PhoneTools({home:process.env.STUDIO_HOME||ROOT}) } = {}) {
   await fs.mkdir(path.join(dataDir, 'uploads'), { recursive: true });
   await fs.mkdir(path.join(dataDir, 'incoming'), { recursive: true });
   const app = express();
@@ -55,6 +57,8 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const instagramWorker=new InstagramAndroidWorker({dataDir});await instagramWorker.init();
   const queue = new Queue(browser, { dataDir, instagramWorker, ...queueOptions });
   queue.settings = config;
+  navigationAI ||= new NavigationAI({dataDir}); await navigationAI.init();
+  queue.navigationAI = navigationAI;
   await phoneTools.configure(config.androidDevice);
   phoneTools.canRefresh=()=>!queue.active&&!queue.processing&&!queue.login.running&&!instagramWorker.busy;
   phoneTools.on('change',()=>queue.emit('change',queue.state()));
@@ -81,6 +85,12 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/android/screen',async(req,res)=>{res.json(await phoneTools.show(config.androidDevice));});
   app.post('/api/android/screen/close',async(req,res)=>{await phoneTools.screen.close();res.json(phoneTools.state());});
   app.use('/api',(req,res,next)=>{if((phoneTools.scanning||phoneTools.pairing)&&req.method!=='GET'&&/^\/(runs|config|logins|instagram\/music)/.test(req.path))return res.status(409).json({error:'Wait for the phone connection check to finish.'});next();});
+  app.get('/api/navigation-ai', (req,res)=>res.json(navigationAI.state()));
+  app.put('/api/navigation-ai', async(req,res)=>{
+    if(queue.active||queue.processing||queue.login.running||browser.manualProcess||instagramWorker.busy) return res.status(409).json({error:'Finish or stop the current activity before changing navigation help.'});
+    try { await navigationAI.configure(req.body); queue.emit('change',queue.state()); res.json(navigationAI.state()); }
+    catch { res.status(400).json({error:'Check the navigation settings and enter a valid Gemini API key.'}); }
+  });
   app.get('/api/status', (req, res) => res.json(studioState()));
   app.get('/api/events', (req, res) => {
     res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -257,7 +267,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if (!PLATFORMS.some(p => p.id === id)) return res.status(400).json({ error: 'Choose a valid destination.' });
     queue.login.running = true; queue.emit('change', queue.state());
     try {
-      const label = await browser.manualLogin(destinationUrl(id, config));
+      const label = await browser.manualLogin(id === 'manychat' ? manychatLoginUrl(config) : destinationUrl(id, config));
       queue.manualLogin = { platform: id, browser: label };
       queue.login.items[id] = { status: 'manual_login', message: `Sign in using ${label}, then click Finish sign-in & check in Studio. Only the separate sign-in window will close.` };
       res.json({ ok: true, browser: label });

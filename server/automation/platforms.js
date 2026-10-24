@@ -3,6 +3,7 @@ import { usesInstagramAndroid } from '../../shared/instagram.js';
 import { navigate, firstVisible, clickAny, dismissCookies, assertNoChallenge, pasteCaption, verifyCaption, waitForImages, preparedButton, uploadImages, finishPost, InterventionError, AccountMismatchError, ReadinessError, NetworkError, waitUntilReady } from './utils.js';
 import { setupErrors } from '../config.js';
 import { prepareManychat } from './manychat.js';
+import { manychatLoginUrl, verifyManychatAccount } from './manychat-login.js';
 import { instagramBaseline, instagramPublication } from './instagram-reference.js';
 import { checkWhatsAppLogin, prepareWhatsApp } from './whatsapp.js';
 import { telegramWebUrl } from '../../shared/telegram.js';
@@ -104,9 +105,9 @@ async function verifyIdentity(page, id, config, maySwitch = true, step = async (
       throw new AccountMismatchError(`Active YouTube account is "${name}" (@${handle}). Switch to "${p.channelName}" (@${p.handle}) using YouTube's account menu, then continue.`);
     }
     await page.keyboard.press('Escape');
-  } else {
-    if (!page.url().includes('manychat.com')) throw new InterventionError('Sign in to ManyChat in the worker browser.');
-    await firstVisible([page.getByRole('link', { name: /automation/i }), page.getByText('Automation', { exact: true })], 15000);
+  } else if (id === 'manychat') {
+    await step('Waiting for ManyChat workspace controls...');
+    await verifyManychatAccount(page, config);
   }
 }
 
@@ -117,7 +118,7 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
   const resolved = structuredClone(config);
   try {
     if (id.startsWith('youtube') && (!resolved.platforms[id].handle || !resolved.platforms[id].channelName)) return { status: 'needs_setup', message: 'Add the YouTube channel name and handle in Connections. The channel ID will be detected automatically.' };
-    await navigate(page, destinationUrl(id, resolved), step);
+    await navigate(page, id === 'manychat' ? manychatLoginUrl(resolved) : destinationUrl(id, resolved), step);
     await dismissCookies(page);
     if (id.startsWith('youtube')) {
       await step('Detecting the YouTube channel ID...');
@@ -138,7 +139,7 @@ export async function checkLogin({ page, id, config, step, requireEmpty }) {
     const missingSetup = setupErrors(resolved, [id]);
     if (missingSetup.length) return { status: 'needs_setup', message: missingSetup.join(' '), discoveredId, discoveredHandle, detectedSettings };
     await verifyIdentity(page, id, resolved, true, step);
-    return { status: 'verified', message: id.startsWith('youtube') ? 'Channel identity verified. The worker switches to this channel automatically before its post.' : 'Account identity verified', discoveredId, discoveredHandle, detectedSettings };
+    return { status: 'verified', message: id.startsWith('youtube') ? 'Channel identity verified. The worker switches to this channel automatically before its post.' : id === 'manychat' ? 'Signed-in ManyChat workspace verified. The Instagram connection is checked again in the automation builder.' : 'Account identity verified', discoveredId, discoveredHandle, detectedSettings };
   } catch (error) {
     const status = error instanceof AccountMismatchError ? 'wrong_account' : error instanceof ReadinessError ? 'loading_timeout' : error instanceof NetworkError ? 'network_error' : error instanceof InterventionError ? 'needs_login' : 'verification_failed';
     return { status, message: error instanceof InterventionError || error instanceof NetworkError ? error.message.replace(/then (?:choose )?continue\./gi, 'then click Open & check again.') : 'The account could not be verified. Check the expected account in Connections and the worker browser, then click Open & check again. This does not necessarily mean you are signed out.', discoveredId, discoveredHandle, detectedSettings };

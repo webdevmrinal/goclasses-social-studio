@@ -6,7 +6,7 @@ import path from 'node:path';
 import {AndroidSession,nativeId,nativeBounds} from './android-native.js';
 import {openRepost,placeRepost,stashRepost,restoreRepost} from './native-repost.js';
 import {addStoryLink,prepareStoryAudience,storyAudienceEvidence,publishStory,confirmNativeStoryPublication,discardStory} from './native-story.js';
-import {matchesMusicReference,resolveMusic,previewMusicChoice,assistNativeStage,musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
+import {matchesMusicReference,resolveMusic,previewMusicChoice,assistNativeStage,musicResults,musicPage,scrollMusicPage,revealMusicResult,musicPlayback,setMusicPlayback,searchMusic,applyTrack,openMusicLibrary,openStoryMusicLibrary,openStoryMusicControls,storyMusicCheckpoint,inheritedStoryAudio,waitForMusicClip,nativeCaption,verifyNativeCaption,discardPost} from './native-music.js';
 import {pushAlbum,removeAlbum,openGallery,selectAlbumPhotos,photoEvidence} from './native-photos.js';
 import {nativeInstagramBaseline,nativeInstagramPublication,verifyNativePost} from './native-reference.js';
 import {instagramPostUrl} from '../../shared/manychat.js';
@@ -138,11 +138,12 @@ export class InstagramAndroidWorker {
     }finally{if(!retained)await this.close();}
   }
   async applyStoryMusic(s,music,{allowInherited=false,ctx={}}={}){
-    if(allowInherited){
-      await s.click('id','music_button');const nodes=await s.until(n=>(n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('row_search_edit_text'))||inheritedStoryAudio(n))&&n,'The inherited Story music could not be verified.');
-      const inherited=inheritedStoryAudio(nodes);if(inherited){await s.clickId('music_editor_done_button');await s.until(n=>n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('music_editor_done_button')),'The inherited audio review did not return to Story.');return {...music,...inherited,sourceVerified:true};}
+    const opened=await assistNativeStage(s,ctx,{kind:'navigation',title:'Open Story music',instructions:'Open Music for this prepared Story. Leave the music library'+(allowInherited?' or its inherited audio clip':'')+' visible, then continue here. Do not tap Done, Save, Share or a recipient.'},()=>allowInherited?openStoryMusicControls(s):openStoryMusicLibrary(s),nodes=>storyMusicCheckpoint(nodes,{allowInherited}));
+    if(opened.kind==='inherited'){
+      const inherited=inheritedStoryAudio(await s.screen());
+      if(JSON.stringify(inherited)!==JSON.stringify(opened.audio))throw new InterventionError('The inherited Story audio changed after review. Nothing was shared.');
+      await s.clickId('music_editor_done_button');await s.until(n=>n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x.displayed==='true'&&x['resource-id']===nativeId('music_editor_done_button')),'The inherited audio review did not return to Story.');return {...music,...inherited,sourceVerified:true};
     }
-    await openStoryMusicLibrary(s);
     const match=await resolveMusic(s,music,ctx);
     if(!match)throw new InterventionError('The reviewed song is not available for this Story. Nothing was shared.');
     await previewMusicChoice(s,match);
@@ -222,7 +223,7 @@ export class InstagramAndroidWorker {
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
         }
-        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story or Your stories visible. Do not tap either button; continue here.'},()=>prepareStoryAudience(s,options.story),()=>prepareStoryAudience(s,options.story));
+        const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story or Your stories visible. Do not tap either button; continue here.'},()=>prepareStoryAudience(s,options.story),()=>storyAudienceEvidence(s,options.story));
         const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};
         await ctx.recordPreparation(preparation);
         let publication,submittedAt;const preview=await storyPreviewPixels(await s.screenshot(),nativeBounds({bounds:evidence.bounds}));

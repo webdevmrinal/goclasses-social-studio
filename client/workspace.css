@@ -162,3 +162,15 @@ a.badge:hover{text-decoration:underline}
 
 .selected-story-pill{display:flex;align-items:center;gap:8px;padding:9px 12px;margin:-12px 0 24px;border:1px solid var(--stroke);border-radius:10px;background:var(--surface);font-size:12px;max-width:360px}.selected-story-pill>svg{width:16px;height:16px;color:var(--blue)}.selected-story-pill .text-button{margin-left:auto;display:flex;align-items:center;gap:5px}.selected-story-pill button svg{width:13px;height:13px}.caption-action-group,.preview-action-group{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.preview-action-group{margin-left:auto;justify-content:flex-end;gap:12px}.preview-action-group .text-button{font-size:11px;white-space:nowrap}.dependency-choices{display:grid;gap:12px;margin:18px 0}.dependency-choice{padding:14px;border:1px solid var(--stroke);border-radius:12px;background:var(--surface-soft)}.dependency-toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:14px}.dependency-choice .field{margin:0}.dependency-choice input[type=url]{width:100%;min-width:0}.dependency-choice input:disabled{opacity:.45}@media(max-width:680px){.caption-action-group{gap:5px;justify-content:flex-end}.caption-action-group .button{padding:5px 7px;font-size:10px}.preview-action-group{width:100%;padding-left:35px;justify-content:flex-start}.dependency-choice{padding:12px}.selected-story-pill{margin-top:-8px}}
 #modal:has(.dependency-choices) #dialog-title{color:var(--text)}
+
+/* Optional advisory navigation; the manual checkpoint remains in control. */
+.navigation-ai-advice{margin:16px 0;padding:14px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+.navigation-ai-advice strong,.navigation-ai-note{display:flex;align-items:center;gap:8px}
+.navigation-ai-advice svg,.navigation-ai-note svg{width:18px;height:18px;flex-shrink:0}
+.navigation-ai-advice ol{padding-left:22px;margin:10px 0;line-height:1.5}
+.navigation-ai-advice li+li{margin-top:6px}
+.navigation-ai-note{font-size:13px;line-height:1.5}
+#navigation-ai-form .check{display:flex;align-items:center;gap:10px}
+
+.navigation-ai-advice{width:100%;min-width:0;overflow-wrap:anywhere;border-color:var(--stroke)}
+.hero{flex-wrap:wrap}.hero-actions{flex-wrap:wrap;max-width:100%}

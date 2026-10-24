@@ -47,7 +47,7 @@ export class Queue extends EventEmitter {
     await this.persist();
   }
   state() {
-    return { manualLogin:this.manualLogin ? {...this.manualLogin,open:Boolean(this.browser.manualProcess)} : null,update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
+    return { navigationAI:this.navigationAI?.state()||null,manualLogin:this.manualLogin ? {...this.manualLogin,open:Boolean(this.browser.manualProcess)} : null,update:this.updateState,androidProgress:this.instagramWorker?.progressState||null,runs: this.runs.map(({ confirmedLive, config, ...run }) => run), login: this.login, workerBusy: this.processing || Boolean(this.browser.manualProcess) || Boolean(this.instagramWorker?.busy), ...(this.settings ? { config: this.settings, manychatNextReplies: replyBatch(this.settings.platforms.manychat.replyMessages, this.replyRotation?.offset || 0) } : {}) };
   }
   persist() {
     const snapshot = structuredClone(this.runs);
