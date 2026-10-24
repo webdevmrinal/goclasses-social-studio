@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import {androidDevice,EMULATOR_SERIAL,EMULATOR_AVD} from '../../shared/android-device.js';
-import {resolveWifiPhone} from '../android-devices.js';
+import {resolveWifiPhone,recoverPhoneConnection,isAndroidTransportFailure} from '../android-devices.js';
 import { ANDROID_DRIVER_SETTINGS } from '../../shared/android-performance.js';
 import { InterventionError } from './utils.js';
 const exec = promisify(execFile);
@@ -33,7 +33,7 @@ export async function connectAndroidDriver(create,reset,recovery='Run android:st
     if(ok&&result.value?.sessionId)return result.value.sessionId;
     const message=result.value?.message||'';
     if(attempt===0&&!result.value?.sessionId&&/instrumentation process cannot be initialized within \d+ms timeout/i.test(message)){await reset();continue;}
-    throw new InterventionError('The selected Android driver could not connect. '+recovery);
+    const error=new InterventionError('The selected Android driver could not connect. '+recovery);if(isAndroidTransportFailure(new Error(message)))error.code='ANDROID_PHONE_OFFLINE';throw error;
   }
 }
 const PHOTO_PROVIDER='com.google.android.providers.media.module';
@@ -116,16 +116,48 @@ export class AndroidSession {
     this.root = path.join(process.env.LOCALAPPDATA, 'GoClassesSocialStudio', 'android-worker');
     this.adbPath = path.join(this.root, 'sdk', 'platform-tools', 'adb.exe');
   }
-  async adb(args, timeout=20000) {
-    this.signal?.throwIfAborted();
-    const result = await exec(this.adbPath, ['-s', this.serial, ...args], { windowsHide:true, timeout, maxBuffer:4*1024*1024, signal:this.signal });
-    this.signal?.throwIfAborted();return result.stdout.trim();
+  async hostAdb(args,{timeout=5000,signal=this.signal}={}) {
+    signal?.throwIfAborted();const result=await exec(this.adbPath,args,{windowsHide:true,timeout,maxBuffer:4*1024*1024,signal});signal?.throwIfAborted();return result.stdout.trim();
   }
-  async open({ start = false } = {}) {
+  async adb(args, timeout=20000) {
+    const operation=()=>this.hostAdb(['-s',this.serial,...args],{timeout,signal:this.signal});
+    try{return await operation();}catch(error){
+      this.signal?.throwIfAborted();
+      const read=args[0]==='get-state'||args[0]==='shell'&&['getprop','dumpsys','wm'].includes(args[1])&&!args.slice(2).some(x=>/^(?:size|density)$/.test(x));
+      if(!await this.recoverPhoneTransport(error,read?'read':'action'))throw error;
+      if(read)return operation();throw this.uncertainPhoneAction();
+    }
+  }
+  uncertainPhoneAction(){const error=new InterventionError('The phone reconnected, but the last Android action has an unknown outcome. Check the current preparation screen before continuing; the action was not replayed.');error.code='ANDROID_ACTION_UNCERTAIN';return error;}
+  async ensurePhoneConnection(){
+    if(this.device?.type!=='phone')return;
+    try{
+      if(await this.hostAdb(['-s',this.serial,'get-state'])!=='device'){const error=new Error('Android device offline');error.code='ANDROID_PHONE_OFFLINE';throw error;}
+      const expected=this.device.transport==='wifi'?this.device.hardwareSerial:this.device.serial;
+      if(await this.hostAdb(['-s',this.serial,'shell','getprop','ro.serialno'])!==expected)throw new InterventionError('The connected phone identity changed. Select the intended phone again; no app action was attempted.');
+    }catch(error){this.signal?.throwIfAborted();if(!await this.recoverPhoneTransport(error,'open'))throw error;}
+  }
+  async rebuildPhoneSession(){
+    const serial=await recoverPhoneConnection({...this.device,serial:this.serial},{run:(args,options)=>this.hostAdb(args,options),signal:this.signal,timeout:20000});
+    const oldId=this.id;this.id=null;
+    if(oldId){try{await fetch(ANDROID_URL+'/session/'+oldId,{method:'DELETE',signal:this.signal?AbortSignal.any([this.signal,AbortSignal.timeout(5000)]):AbortSignal.timeout(5000)});}catch{this.signal?.throwIfAborted();}}
+    this.serial=serial;this.device={...this.device,serial};
+    await this.openOnce({start:false});this.connectionGeneration=(this.connectionGeneration||0)+1;return true;
+  }
+  async recoverPhoneTransport(error,kind){
+    if(this.device?.type!=='phone'||this.recoveringPhone||typeof this.onConnectionRecovery!=='function'||!isAndroidTransportFailure(error))return false;
+    this.signal?.throwIfAborted();if((this.phoneRecoveries||0)>=2)throw new InterventionError('The phone connection keeps dropping. Unlock it and check Wireless debugging before continuing.');
+    this.phoneRecoveries=(this.phoneRecoveries||0)+1;this.recoveringPhone=true;const started=Date.now();
+    try{return Boolean(await this.onConnectionRecovery({kind,reconnect:()=>this.rebuildPhoneSession()}));}finally{this.connectionPauseMs=(this.connectionPauseMs||0)+Math.max(0,Date.now()-started);this.recoveringPhone=false;}
+  }
+  async open(options={}){
+    try{return await this.openOnce(options);}catch(error){this.signal?.throwIfAborted();if(!await this.recoverPhoneTransport(error,'open'))throw error;return this;}
+  }
+  async openOnce({ start = false } = {}) {
     // Warm workers skip the launcher, repeated PowerShell ownership queries and tuning.
     let ready=false;try{const response=await fetch(ANDROID_URL+'/status',{signal:AbortSignal.timeout(1200)});ready=response.ok&&(await response.json()).value?.ready===true;}catch{}
     if(this.device.type==='phone'){
-      if(this.device.transport==='wifi'){try{this.serial=await resolveWifiPhone(this.device,{run:async args=>{this.signal?.throwIfAborted();const result=await exec(this.adbPath,args,{windowsHide:true,timeout:5000,maxBuffer:1024*1024,signal:this.signal});return result.stdout.trim();}});}catch(error){throw new InterventionError(error.message);}}
+      if(this.device.transport==='wifi'){try{this.serial=await resolveWifiPhone(this.device,{run:(args,options)=>this.hostAdb(args,options),signal:this.signal});}catch(error){const failure=new InterventionError(error.message);failure.code=error.code;throw failure;}}
       if(await this.adb(['get-state']).catch(()=>'')!=='device')throw new InterventionError(this.device.transport==='wifi'?'Unlock the selected Wi-Fi phone, enable Wireless debugging, then use Scan for phone. No other device was selected.':'Connect and unlock the selected USB phone, then allow USB debugging. No other device was selected.');
       if(await this.adb(['shell','getprop','ro.kernel.qemu'])==='1')throw new InterventionError('The selected phone is an emulator. Select the intended physical phone.');
       if(!ready)await exec(process.execPath,[path.resolve('scripts/android-worker.mjs'),'server-start'],{windowsHide:true,timeout:70000,maxBuffer:1024*1024,signal:this.signal});
@@ -146,7 +178,7 @@ export class AndroidSession {
       'appium:appPackage':'com.instagram.android','appium:autoLaunch':false,'appium:noReset':true,'appium:fullReset':false,
       'appium:skipUnlock':true,'appium:skipDeviceInitialization':packages.includes('package:io.appium.settings'),
       'appium:skipServerInstallation':reusableServer,'appium:uiautomator2ServerLaunchTimeout':60000,'appium:adbExecTimeout':60000,'appium:skipLogcatCapture':true,'appium:printPageSourceOnFindFailure':false,'appium:newCommandTimeout':900
-    }}}), signal:AbortSignal.timeout(120000) });
+    }}}), signal:this.signal?AbortSignal.any([this.signal,AbortSignal.timeout(120000)]):AbortSignal.timeout(120000) });
     return {ok:response.ok,result:await response.json()};
     },async()=>{
       // Reset only our automation instrumentation, preserving Instagram data,
@@ -160,7 +192,7 @@ export class AndroidSession {
   }
   async request(endpoint, method='GET', body, {deadline=Infinity}={}) {
     if (!this.id) throw new Error('No Android inspection session.');
-    const readOnly=readOnlyInspection(endpoint,method),end=Math.min(Date.now()+45000,deadline);
+    const readOnly=readOnlyInspection(endpoint,method);let end=Math.min(Date.now()+45000,deadline);
     let recovering=false;
     for(let attempt=0;attempt<3;attempt++){
       if(this.signal?.aborted && method!=='DELETE')throw new InterventionError('Android operation stopped. Its unsent draft was preserved.');
@@ -179,7 +211,15 @@ export class AndroidSession {
       if(method!=='DELETE')this.signal?.throwIfAborted();
       if(response.ok&&!out.value?.error)return out.value;
       const message=out.value?.message||out.value?.error||response.status;
-      if(!readOnly||!ROOT_ACCESSIBILITY_TIMEOUT.test(String(message)))throw new Error('Android: '+message);
+      if(!readOnly||!ROOT_ACCESSIBILITY_TIMEOUT.test(String(message))){
+        const error=new Error('Android: '+message),transportRead=readOnly||method==='GET'&&['/screenshot','/window/rect'].includes(endpoint)||method==='POST'&&endpoint==='/appium/settings';
+        const recoveryStarted=Date.now();
+        if(method!=='DELETE'&&await this.recoverPhoneTransport(error,transportRead?'read':'action')){
+          end+=Date.now()-recoveryStarted;
+          if(transportRead&&attempt<2)continue;throw this.uncertainPhoneAction();
+        }
+        throw error;
+      }
       if(Date.now()>=end)throw inspectionTimeout();
       if(attempt===2)throw new InterventionError(ANDROID_READ_UNAVAILABLE);
       if(!recovering){
@@ -214,17 +254,18 @@ export class AndroidSession {
     return nodes;
   }
   async until(predicate, message='Instagram is still loading.', timeout=45000) {
-    const end=Date.now()+timeout;
+    let end=Date.now()+timeout,accountedPause=this.connectionPauseMs||0;
+    const extendForConnection=()=>{const total=this.connectionPauseMs||0;end+=Math.max(0,total-accountedPause);accountedPause=total;};
     while(Date.now()<end) {
       let nodes;
       try{nodes=await this.screen({deadline:end});}
       catch(e){
-        this.signal?.throwIfAborted();
+        extendForConnection();this.signal?.throwIfAborted();
         if(e instanceof InterventionError&&e.code==='ANDROID_READ_TIMEOUT'&&Date.now()>=end)throw new InterventionError(message);
         if(!/Unable to find the active topmost window associated with (?:com\.instagram\.android|com\.google\.android\.permissioncontroller|com\.google\.android\.providers\.media\.module) package/.test(e.message))throw e;
         await inspectionPause(this.signal,300,end);continue;
       }
-      if(Date.now()>=end)break;
+      extendForConnection();if(Date.now()>=end)break;
       const value=await predicate(nodes);if(value)return value;
       await inspectionPause(this.signal,250,end);
     }

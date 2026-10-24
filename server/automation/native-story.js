@@ -4,6 +4,7 @@ import {storyReadbackAvailable,verifyOwnPublishedStory} from './native-story-rea
 import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
 import {digest} from './native-photos.js';
+import {assistNativeStage} from './native-music.js';
 const has=(nodes,id)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(id));
 export async function changedSticker(before,after,canvas,lower=false) {
   const left=canvas.x+24,top=Math.round(canvas.y+canvas.height*(lower==='all'?.3:lower?.68:.34));
@@ -20,39 +21,70 @@ export async function changedSticker(before,after,canvas,lower=false) {
   if(count<150||box.width<70||box.height<20||box.width>canvas.width*.88||box.height>canvas.height*.2)throw new InterventionError('The new Story link sticker could not be located safely. Nothing was shared.');
   return box;
 }
-export async function addStoryLink(s,{url,label,layout}) {
+export async function addStoryLink(s,{url,label,layout},ctx={}) {
   let nodes=await s.screen();
   if(!has(nodes,'story_share_controls_action_bar'))throw new InterventionError('Instagram is not in the reviewed Story editor.');
   const canvas=nativeBounds(nodes.find(n=>n['resource-id']===nativeId('camera_photo_texture_view')));
   const before=await s.screenshot();
-  await s.click('id','asset_button');
-  await s.until(nodes=>nodes.some(n=>n['content-desc']==='Link Sticker'),'Link sticker is not available on this account.');
-  await s.click('accessibility id','Link Sticker');
-  await s.until(nodes=>has(nodes,'link_sticker_list_web_url_edit_text'),'Link editor is still loading.');
-  await s.text('id',nativeId('link_sticker_list_web_url_edit_text'),url);
-  await s.clickId('link_sticker_custom_cta_row');
-  await s.until(nodes=>has(nodes,'link_sticker_custom_cta_edit_text'),'Custom link text is not available.');
-  await s.text('id',nativeId('link_sticker_custom_cta_edit_text'),label);
-  nodes=await s.screen();
-  if(nodes.find(n=>n['resource-id']===nativeId('link_sticker_list_web_url_edit_text'))?.text!==url||nodes.find(n=>n['resource-id']===nativeId('link_sticker_custom_cta_edit_text'))?.text!==label)throw new InterventionError('The Story URL or button text differs from the reviewed values.');
-  await s.clickId('link_sticker_list_done_button');
-  await s.until(nodes=>has(nodes,'story_share_controls_action_bar')&&!has(nodes,'link_sticker_list_web_url_edit_text'),'The Story link preview did not load.');
-  let sticker;
-  for(let attempt=0;attempt<12;attempt++){
-    await new Promise(resolve=>setTimeout(resolve,300));
-    try{sticker=await changedSticker(before,await s.screenshot(),canvas);break;}catch(error){if(attempt===11)throw error;}
-  }
+  const field=(current,id)=>{const matches=current.filter(n=>n.displayed==='true'&&n['resource-id']===nativeId(id));return matches.length===1?matches[0]:null;};
+  const storyEditor=current=>has(current,'story_share_controls_action_bar')&&!has(current,'link_sticker_list_web_url_edit_text')&&JSON.stringify(field(current,'camera_photo_texture_view')&&nativeBounds(field(current,'camera_photo_texture_view')))===JSON.stringify(canvas);
+  const exactUrl=current=>field(current,'link_sticker_list_web_url_edit_text')?.text===url;
+  const exactFields=current=>exactUrl(current)&&field(current,'link_sticker_custom_cta_edit_text')?.text===label;
+  // Each action is attempted once. A disconnected/lost response is recovered by
+  // inspecting its outcome, or by a manual checkpoint, never by replaying it.
+  const checkpoint=(title,instructions,attempt,inspect,kind='preparation')=>assistNativeStage(s,ctx,{kind,title,instructions},attempt,inspect);
+  await checkpoint('Open Story stickers','Open the sticker tray for this prepared Story and leave Link visible. Do not tap Your story, Save or Share.',async()=>{
+    await s.click('id','asset_button');return s.until(current=>current.some(n=>n.displayed==='true'&&n['content-desc']==='Link Sticker'),'Link sticker is not available on this account.');
+  },current=>current.some(n=>n.displayed==='true'&&n['content-desc']==='Link Sticker'),'navigation');
+  await checkpoint('Open the Story link editor','Open Link for the prepared Story and leave its URL field visible. Do not share the Story.',async()=>{
+    await s.click('accessibility id','Link Sticker');return s.until(current=>Boolean(field(current,'link_sticker_list_web_url_edit_text')),'Link editor is still loading.');
+  },current=>Boolean(field(current,'link_sticker_list_web_url_edit_text')),'navigation');
+  await checkpoint('Check the Story link','Enter the reviewed Story URL exactly: '+url+'. Leave the link editor open; do not tap Done or Share.',async()=>{
+    await s.text('id',nativeId('link_sticker_list_web_url_edit_text'),url);
+    if(!exactUrl(await s.screen()))throw new InterventionError('The Story URL differs from the reviewed value.');return true;
+  },exactUrl);
+  await checkpoint('Open the link button text','Open Customize sticker text for this link, keeping the reviewed URL unchanged. Leave its text field visible.',async()=>{
+    await s.clickId('link_sticker_custom_cta_row');return s.until(current=>exactUrl(current)&&Boolean(field(current,'link_sticker_custom_cta_edit_text')),'Custom link text is not available.');
+  },current=>exactUrl(current)&&Boolean(field(current,'link_sticker_custom_cta_edit_text')),'navigation');
+  await checkpoint('Check the Story button text','Keep the reviewed URL '+url+' and enter this sticker text exactly: '+label+'. Leave the editor open; do not tap Done or Share.',async()=>{
+    await s.text('id',nativeId('link_sticker_custom_cta_edit_text'),label);
+    if(!exactFields(await s.screen()))throw new InterventionError('The Story URL or button text differs from the reviewed values.');return true;
+  },exactFields);
+  const stickerProof=async current=>{
+    if(!storyEditor(current))return null;
+    try{return await changedSticker(before,await s.screenshot(),canvas);}catch{return null;}
+  };
+  const sticker=await checkpoint('Finish the Story link sticker','Finish only this reviewed link sticker and return to the Story editor. Keep its reviewed URL and button text. Leave Your story and Share untouched.',async()=>{
+    if(!exactFields(await s.screen()))throw new InterventionError('The Story URL or button text differs from the reviewed values.');
+    await s.clickId('link_sticker_list_done_button');
+    await s.until(storyEditor,'The Story link preview did not load.');
+    for(let attempt=0;attempt<12;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const proof=await stickerProof(await s.screen());if(proof)return proof;
+    }
+    throw new InterventionError('The new Story link sticker could not be located safely. Nothing was shared.');
+  },stickerProof);
   const destination={x:canvas.x+canvas.width*(layout?.link.x??.5),y:canvas.y+canvas.height*(layout?.link.y??.81)};
   if(destination.y>=canvas.y+canvas.height-120*(canvas.width/720))throw new Error('Unsafe Story sticker position.');
+  const positioned=box=>Math.abs((box.x+box.width/2)-destination.x)<=canvas.width*.07&&Math.abs((box.y+box.height/2)-destination.y)<=canvas.height*.055;
+  const positionProof=async current=>{
+    if(!storyEditor(current))return null;
+    try{const box=await changedSticker(before,await s.screenshot(),canvas,'all');return positioned(box)?box:null;}catch{return null;}
+  };
   let moved=sticker;
   for(let attempt=0;attempt<3;attempt++){
     const center={x:moved.x+moved.width/2,y:moved.y+moved.height/2};
     if(Math.abs(center.x-destination.x)<canvas.width*.025&&Math.abs(center.y-destination.y)<canvas.height*.025)break;
-    await s.adb(['shell','input','swipe',String(Math.round(center.x)),String(Math.round(center.y)),String(Math.round(destination.x)),String(Math.round(destination.y)),'650']);
-    await new Promise(resolve=>setTimeout(resolve,450));
-    moved=await changedSticker(before,await s.screenshot(),canvas,'all');
+    moved=await checkpoint('Position the Story link','Move the existing link sticker to the position shown in the Studio Story preview, below the post card. Do not add another sticker or share the Story.',async()=>{
+      await s.adb(['shell','input','swipe',String(Math.round(center.x)),String(Math.round(center.y)),String(Math.round(destination.x)),String(Math.round(destination.y)),'650']);
+      await new Promise(resolve=>setTimeout(resolve,450));
+      if(!storyEditor(await s.screen()))throw new InterventionError('The prepared Story editor changed while positioning its link.');
+      return changedSticker(before,await s.screenshot(),canvas,'all');
+    },positionProof,'placement');
   }
-  if(Math.abs((moved.x+moved.width/2)-destination.x)>canvas.width*.07||Math.abs((moved.y+moved.height/2)-destination.y)>canvas.height*.055)throw new InterventionError('The Story link sticker did not move below the image.');
+  if(!positioned(moved)){
+    moved=await checkpoint('Position the Story link','Move the existing link sticker to the position shown in the Studio Story preview, below the post card. Do not add another sticker or share the Story.',async()=>{throw new InterventionError('The Story link sticker did not move below the image.');},positionProof,'placement');
+  }
   return {canvas,sticker:moved,url,label};
 }
 // Your story publishes immediately. Preparation and TEST must never tap it.

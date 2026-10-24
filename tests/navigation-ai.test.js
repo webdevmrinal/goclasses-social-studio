@@ -535,3 +535,106 @@ test('a failed paused progress write never rejects into the job or returns an ac
   assert.match(f.ai.state().message, /progress could not be saved/i);
   assert.equal(f.calls.length, 1);
 });
+
+const reconnectInput = { platform: 'instagram_android', stage: 'reconnect_selected_phone', controls: [
+  { id: 'c1', label: 'Reconnect selected phone', role: 'button', enabled: true, scrollable: false }
+], capabilities: { reconnectSelectedPhone: true } };
+
+test('selected-phone reconnect capability sends only a typed local action and no device or draft data', async t => {
+  const fix = 'Reconnect the same paired phone and verify its identity before continuing.';
+  const events = [];
+  const f = await automatic(t, () => planned({ type: 'click', controlId: 'c1' }, { explanation: fix }));
+  const result = await f.ai.plan({ ...reconnectInput, serial: 'PRIVATE_SERIAL', ip: 'PRIVATE_IP', screenshot: 'PRIVATE_SCREENSHOT', caption: 'PRIVATE_CAPTION', error: 'PRIVATE_RAW_ERROR', onEvent: event => events.push(event) });
+  assert.deepEqual(result, { action: { type: 'click', controlId: 'c1' }, fix, model: models[0] });
+  const payload = JSON.parse(f.calls[0][1].body);
+  assert.deepEqual(JSON.parse(payload.contents[0].parts[0].text), reconnectInput);
+  assert(!f.calls[0][1].body.includes('PRIVATE_'));
+  assert.match(payload.systemInstruction.parts[0].text, /no readable mobile UI/);
+  assert.match(payload.systemInstruction.parts[0].text, /verify the same paired phone identity/);
+  assert.match(payload.systemInstruction.parts[0].text, /Preserve every already-completed action/);
+  assert.deepEqual(events.map(event => event.phase), ['calling', 'proposed']);
+  assert.equal(events[1].source, 'provider');
+  events.length = 0;
+  assert.deepEqual(await f.ai.plan({ ...reconnectInput, onEvent: event => events.push(event) }), result);
+  assert.deepEqual(events.map(event => event.phase), ['proposed']);
+  assert.equal(events[0].source, 'cache');
+  assert.equal(f.calls.length, 1);
+});
+
+test('selected-phone reconnect scope rejects changed capabilities, stages, devices and arbitrary controls before spending quota', async t => {
+  const control = reconnectInput.controls[0];
+  const invalid = [
+    { ...reconnectInput, platform: 'instagram_web' }, { ...reconnectInput, platform: 'whatsapp' },
+    { ...reconnectInput, stage: 'open_composer' }, { ...reconnectInput, capabilities: undefined },
+    { ...reconnectInput, capabilities: { reconnectSelectedPhone: false } },
+    { ...reconnectInput, capabilities: { reconnectSelectedPhone: true, extra: true } },
+    { ...reconnectInput, capabilities: { reconnectSelectedPhone: true, discardOwnedDraft: true } },
+    { ...reconnectInput, controls: [] }, { ...reconnectInput, controls: [control, { ...control, id: 'c2' }] },
+    ...[
+      { id: 'c2' }, { label: 'Reconnect any phone' }, { label: 'reconnect selected phone' },
+      { label: 'Reconnect selected phone ' }, { role: 'link' }, { enabled: false }, { scrollable: true },
+      { serial: 'PRIVATE_SERIAL' }, { ip: '192.168.1.4' }, { selector: '#anything' }, { command: 'reconnect' }
+    ].map(change => ({ ...reconnectInput, controls: [{ ...control, ...change }] }))
+  ];
+  const f = await automatic(t);
+  for (const input of invalid) assert.equal(await f.ai.plan(input), null, JSON.stringify(input));
+  assert.equal(await f.ai.plan({ ...planInput, controls: reconnectInput.controls }), null, 'The application-only control is reserved outside its capability');
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.ai.state().today.used, 0);
+});
+
+test('selected-phone reconnect never accepts model commands, selectors, invented controls or device addresses', async t => {
+  for (const [action, extra] of [
+    [{ type: 'shell', command: 'adb connect' }],
+    [{ type: 'click', controlId: 'c2' }],
+    [{ type: 'click', controlId: 'c1', selector: 'Reconnect' }],
+    [{ type: 'click', controlId: 'c1', serial: 'another-phone' }],
+    [{ type: 'scroll', controlId: 'c1', direction: 'down' }],
+    [{ type: 'click', controlId: 'c1' }, { explanation: 'Run adb shell to reconnect.' }],
+    [{ type: 'click', controlId: 'c1' }, { explanation: 'Reconnect to 192.168.1.4.' }],
+    [{ type: 'click', controlId: 'c1' }, { explanation: 'Use phone aa:bb:cc:dd:ee:ff.' }],
+    [{ type: 'click', controlId: 'c1' }, { explanation: 'Publish the Story after reconnecting.' }],
+    [{ type: 'click', controlId: 'c1' }, { command: 'reconnect' }]
+  ]) {
+    const f = await automatic(t, () => planned(action, extra));
+    assert.equal(await f.ai.plan(reconnectInput), null, JSON.stringify({ action, extra }));
+    assert.equal(f.calls.length, 1);
+  }
+  const compatible = await automatic(t);
+  assert.equal((await compatible.ai.plan(reconnectInput)).fix, 'Reconnect the same paired phone and verify its identity before continuing.');
+  for (const action of [{ type: 'stop' }, { type: 'wait' }]) {
+    const f = await automatic(t, () => planned(action));
+    assert.deepEqual((await f.ai.plan(reconnectInput)).action, action, 'The provider may safely decline or wait');
+  }
+});
+
+test('phone reconnect uses the shared durable rate limit and reports busy/quota without claiming an action', async t => {
+  const events = [];
+  let count = 0;
+  const f = await automatic(t, () => ++count === 1 ? failure(503) : planned());
+  assert.equal((await f.ai.plan({ ...reconnectInput, onEvent: event => events.push(event) })).model, models[1]);
+  assert.deepEqual(events.map(event => event.phase), ['calling', 'waiting', 'calling', 'proposed']);
+  assert.equal(f.ai.state().today.used, 2);
+  assert.equal(await f.ai.plan(planInput), null);
+  assert.equal(f.calls.length, 2, 'Reconnect does not bypass limits for subsequent navigation');
+  const quotaEvents = [];
+  const quota = await automatic(t, () => failure(429, { error: { message: KEY } }));
+  assert.equal(await quota.ai.plan({ ...reconnectInput, onEvent: event => quotaEvents.push(event) }), null);
+  assert.deepEqual(quotaEvents.map(event => event.phase), ['calling', 'paused']);
+  assert(!JSON.stringify(quotaEvents).includes(KEY));
+  assert.equal(quota.calls.length, 1);
+  assert.equal(quota.ai.state().today.used, 1);
+});
+
+test('a stopped or unrecorded phone reconnect request never returns a repair action', async t => {
+  const stopped = new AbortController(); stopped.abort();
+  const f = await automatic(t);
+  assert.equal(await f.ai.plan({ ...reconnectInput, signal: stopped.signal }), null);
+  assert.equal(f.calls.length, 0);
+  assert.equal(await f.ai.plan({ ...reconnectInput, onEvent: async event => { if (event.phase === 'calling') throw new Error('trace unavailable'); } }), null);
+  assert.equal(f.calls.length, 0, 'The API is not called if visible progress cannot be recorded');
+  const afterCall = await automatic(t);
+  assert.equal(await afterCall.ai.plan({ ...reconnectInput, onEvent: async event => { if (event.phase === 'proposed') throw new Error('trace unavailable'); } }), null);
+  assert.equal(afterCall.calls.length, 1);
+  assert.equal(afterCall.ai.cache.size, 0);
+});

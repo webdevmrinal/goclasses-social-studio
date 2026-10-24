@@ -238,7 +238,7 @@ export class Queue extends EventEmitter {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
       if(nativeItem&&(nativeItem.id!=='instagramMusic'||run.config.androidDevice?.type==='phone')&&this.instagramWorker&&run.status!=='stopping'){
         await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
-        try{await this.instagramWorker.checkAccount(run.config,{runId:run.config.androidDevice?.type==='phone'||run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
+        try{await this.instagramWorker.checkAccount(run.config,{runId:run.config.androidDevice?.type==='phone'||run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,connectionContext:{navigationAI:this.navigationAI,signal:runController.signal,canRecoverConnection:()=>!nativeItem.submitting&&!runController.signal.aborted&&run.status!=='stopping',reportRecovery:event=>this.reportRecovery(run,nativeItem,event),step:message=>this.log(run,nativeItem,message)},onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
@@ -290,7 +290,7 @@ export class Queue extends EventEmitter {
           task = this.runner({
             page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
             mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
-            navigationAI:this.navigationAI,ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:item.id==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,recordOwnedDraft:async proof=>{item.preparation={...item.preparation,ownedDraft:proof};await this.change();},reportRecovery:event=>this.reportRecovery(run,item,event),canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),
+            navigationAI:this.navigationAI,ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:item.id==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,recordOwnedDraft:async proof=>{item.preparation={...item.preparation,ownedDraft:proof};await this.change();},reportRecovery:event=>this.reportRecovery(run,item,event),canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),canRecoverConnection:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing','waiting_for_input'].includes(run.status),
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
             instagramMusicPublication:run.items.find(i=>i.id==='instagramMusic'&&i.status==='posted')?.publication,
@@ -347,7 +347,7 @@ export class Queue extends EventEmitter {
           const message = error.message.replace(/\u001b\[[0-9;]*m/g, '');
           item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
           const recovery=this.recoveryLog.state();
-          if(!recovery||recovery.runId!==run.id||recovery.itemId!==item.id){
+          if(!recovery||recovery.runId!==run.id||recovery.itemId!==item.id||recovery.status==='succeeded'){
             this.recoveryLog.begin({problem:item.message,runId:run.id,itemId:item.id});
             item.recovery=this.recoveryLog.report({phase:'paused',message:item.submitting?'Publication outcome is uncertain. Gemini will not retry a send or create a duplicate.':'This failure has no verified recovery action yet. The problem is preserved for review; Gemini was not called blindly.'});
           }

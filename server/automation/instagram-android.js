@@ -13,6 +13,7 @@ import {instagramPostUrl} from '../../shared/manychat.js';
 import {instagramOptions,instagramMusicEnabled,instagramHashtags,musicReference} from '../../shared/instagram.js';
 import {atomicWrite,readJson} from '../config.js';
 import {finishPost,InterventionError} from './utils.js';
+import {recoverPhoneSession} from './phone-session-recovery.js';
 
 export class InstagramAndroidWorker {
   constructor({dataDir,sessionFactory=options=>new AndroidSession(options)}){
@@ -25,15 +26,30 @@ export class InstagramAndroidWorker {
     return structuredClone(chosen);
   }
   chosenMusic(options,handle){return options.music.source==='manual'?{manual:true,source:'manual',durationSeconds:30}:options.music.source==='details'?musicReference(options.music.reference):this.selection(options.music.selection,handle);}
-  async open(config,signal,onProgress){
+  bindSessionContext(s,ctx={},signal=s.signal,onProgress){
+    s.signal=signal;s.onUnresponsive=onProgress||ctx.step||((message)=>this.progress(message));
+    const connectionContext=ctx.step||!onProgress?ctx:{...ctx,step:onProgress};
+    // Refresh the closure at each destination boundary. A held music session
+    // must never retain that item's submission gate when Story starts.
+    s.onConnectionRecovery=details=>recoverPhoneSession({ctx:connectionContext,signal:s.signal,...details});
+    return s;
+  }
+  async open(config,signal,onProgress,ctx={}){
     if(this.busy)throw new InterventionError('Finish choosing Instagram music before starting a run.');
     this.busy=true;
-    try{this.s=this.sessionFactory({signal,device:config.androidDevice});await this.s.open({start:true});this.s.onUnresponsive=onProgress||((message)=>this.progress(message));await this.s.account(config.platforms.instagram.handle);return this.s;}
+    try{this.s=this.bindSessionContext(this.sessionFactory({signal,device:config.androidDevice}),ctx,signal,onProgress);await this.s.open({start:true});await this.s.account(config.platforms.instagram.handle);return this.s;}
     catch(e){await this.close();throw e;}
   }
   async close(){
-    clearTimeout(this.timer);
-    try{await this.s?.close();}finally{this.s=null;this.busy=false;this.picker=null;this.operation=false;this.progressState=null;this.handoff=null;this.preflight=null;}
+    clearTimeout(this.timer);this.timer=null;
+    const session=this.s;if(session)this.cleanupWarning=null;
+    try{await session?.close();}
+    catch{
+      // Driver DELETE is cleanup, not a publication result. Losing Wi-Fi here
+      // must not replace the original preparation error or a verified receipt.
+      // Keep a bounded local diagnostic without captions, command text or keys.
+      this.cleanupWarning={code:'ANDROID_DRIVER_CLEANUP_FAILED',message:'The Android driver did not finish disconnecting. Its local session was released; Instagram and any draft were preserved.',at:new Date().toISOString()};
+    }finally{this.s=null;this.busy=false;this.picker=null;this.opening=false;this.operation=false;this.progressState=null;this.handoff=null;this.preflight=null;}
   }
   async closePicker(){if(!this.picker)return;if(this.picker.album){await discardPost(this.s,'');await removeAlbum(this.s,this.picker.album);}else if(this.picker.owned)await discardPost(this.s,'');}
   expirePicker(){clearTimeout(this.timer);this.timer=setTimeout(()=>{if(this.operation)this.expirePicker();else this.cancelPicker().catch(()=>{});},5*60*1000);this.timer.unref();}
@@ -155,13 +171,13 @@ export class InstagramAndroidWorker {
     return {...match,segmentStart:segment,style:'Music Only'};
   }
   async openForRun(ctx){
-    if(!this.preflight)return this.open(ctx.config,ctx.signal,ctx.step);
+    if(!this.preflight)return this.open(ctx.config,ctx.signal,ctx.step,ctx);
     const held=this.preflight;this.preflight=null;
     if(!this.s||held.runId!==ctx.runId||held.account!==ctx.config.platforms.instagram.handle){await this.close();throw new InterventionError('The Android preflight changed. Review this run before retrying.');}
-    this.s.signal=ctx.signal;this.s.onUnresponsive=ctx.step;
+    this.bindSessionContext(this.s,ctx,ctx.signal,ctx.step);
     // Verify the account and absence of user drafts again; reuse only the
     // expensive driver connection, never a stale UI/account assertion.
-    try{await this.s.account(held.account);return this.s;}catch(error){await this.close();throw error;}
+    try{await this.s.ensurePhoneConnection?.();await this.s.account(held.account);return this.s;}catch(error){await this.close();throw error;}
   }
   async openStory(ctx,url){
     if(!this.handoff)return this.openForRun(ctx);
@@ -169,17 +185,22 @@ export class InstagramAndroidWorker {
     if(!this.s||held.runId!==ctx.runId||held.postUrl!==url||held.account!==ctx.config.platforms.instagram.handle){
       await this.close();throw new InterventionError('The confirmed Instagram feed handoff changed. Retry only the Story from its exact post URL.');
     }
-    this.handoff=null;this.s.signal=ctx.signal;this.s.onUnresponsive=ctx.step;
-    return this.s;
+    this.bindSessionContext(this.s,ctx,ctx.signal,ctx.step);
+    const generation=held.connectionGeneration??this.s.connectionGeneration??0;
+    try{
+      await this.s.ensurePhoneConnection?.();
+      if((this.s.connectionGeneration??0)!==generation){held.reverifyPost=true;held.currentViewer=false;}
+      this.handoff=null;return this.s;
+    }catch(error){await this.close();throw error;}
   }
   retainForStory(ctx,status,publication,currentViewer=false){
     const postUrl=instagramPostUrl(publication?.postUrl);
     if(status!=='posted'||!ctx.continueInstagramStory||!ctx.runId||!postUrl||ctx.signal?.aborted)return false;
-    this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle,currentViewer};return true;
+    this.handoff={runId:ctx.runId,postUrl,account:ctx.config.platforms.instagram.handle,currentViewer,connectionGeneration:this.s?.connectionGeneration??0};return true;
   }
-  async checkAccount(config,{runId,onProgress,signal}={}){
+  async checkAccount(config,{runId,onProgress,signal,connectionContext={}}={}){
     let retained=false;
-    try{await this.open(config,signal,onProgress);if(runId){this.preflight={runId,account:config.platforms.instagram.handle};retained=true;}}
+    try{await this.open(config,signal,onProgress,connectionContext);if(runId){this.preflight={runId,account:config.platforms.instagram.handle};retained=true;}}
     finally{if(!retained)await this.close();}
   }
   async run(ctx){
@@ -197,8 +218,9 @@ export class InstagramAndroidWorker {
       // Standalone Story retries still verify ownership through the exact permalink.
     }
     await ctx.step(this.handoff?'Continuing from the confirmed Android feed post...':'Checking the dedicated Android Instagram account...');
-    const inherited=Boolean(this.handoff),reuseViewer=Boolean(this.handoff?.currentViewer);
+    const handoff=this.handoff,inherited=Boolean(handoff);
     const s=ctx.id==='instagramStory'?await this.openStory(ctx,url):await this.openForRun(ctx);
+    const verifyStorySource=!inherited||handoff?.reverifyPost,reuseViewer=Boolean(handoff?.currentViewer);
     let submitted=false,album,owned=false,retained=false;
     const snapshot=async label=>{
       const nodes=await s.screen();
@@ -211,17 +233,17 @@ export class InstagramAndroidWorker {
     try{
       if(ctx.id==='instagramStory'){
         if(!url&&ctx.mode==='TEST'){const existing=await nativeInstagramBaseline(s,ctx.config.platforms.instagram.handle);url=existing[3]||existing[0];}
-        if(!inherited){await ctx.step('Verifying the exact native feed post for the Story...');await this.verifyPost(s,url,ctx.config.platforms.instagram.handle);}
+        if(verifyStorySource){await ctx.step('Verifying the exact native feed post for the Story...');await this.verifyPost(s,url,ctx.config.platforms.instagram.handle);}
         await ctx.recordPreparation({kind:'instagramStory',testExistingPost:ctx.mode==='TEST',postUrl:url,stage:'source_verified',story:options.story});
         await ctx.step('Opening the exact feed post as a Story...');
-        await openRepost(s,url,{reuseCurrent:!inherited||reuseViewer});owned=true;
+        await openRepost(s,url,{reuseCurrent:verifyStorySource||reuseViewer});owned=true;
         await ctx.step('Applying the reviewed shared-post card layout...');
         await placeRepost(s,options.story.layout,{hasLink:options.story.linkEnabled});
         let audio=null;
         if(music){await ctx.step('Adding the selected Story music...');const proof=ctx.instagramMusicPublication||ctx.instagramPublication;audio=await this.applyStoryMusic(s,music,{ctx,allowInherited:proof?.postUrl===url&&matchesMusicReference(proof.music,music)});}
         if(options.story.linkEnabled){
           await ctx.step('Placing the reviewed Story link...');
-          const stash=await stashRepost(s);await addStoryLink(s,options.story);await restoreRepost(s,stash,options.story.layout);
+          const stash=await stashRepost(s);await addStoryLink(s,options.story,ctx);await restoreRepost(s,stash,options.story.layout);
         }
         const evidence=await assistNativeStage(s,ctx,{kind:'navigation',title:'Review Story sharing options',instructions:'Return to the prepared Story editor with Your story or Your stories visible. Do not tap either button; continue here.'},()=>prepareStoryAudience(s,options.story),()=>storyAudienceEvidence(s,options.story));
         const preparation={kind:'instagramStory',audience:evidence.destinations,testExistingPost:ctx.mode==='TEST',postUrl:url,music:audio,story:options.story};

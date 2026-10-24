@@ -21,6 +21,7 @@ async function emitEvent(onEvent, event) {
 }
 function planInstructions(input) {
   if (input.capabilities?.discardOwnedDraft === true) return planSystem + ' This is the narrowly scoped WhatsApp discard_owned_draft stage. The application has verified that the unsent draft belongs to this run and has authorized its discard; only the supplied exact Discard and Cancel buttons are permitted. Clicking Discard clears only this verified unsent draft, never a published update. Explain that draft cleanup is the possible fix. Do not suggest clearing other data or publishing.';
+  if (input.capabilities?.reconnectSelectedPhone === true) return planSystem + ' This is the narrowly scoped Instagram Android reconnect_selected_phone stage. A selected paired phone is offline, so there is no readable mobile UI to navigate. The supplied Reconnect selected phone control invokes only a verified local connection repair for that same paired phone; it is not a screen button and never runs model-provided commands. The application must verify the same paired phone identity before continuing the interrupted work. Preserve every already-completed action; do not repeat earlier work. Explain reconnecting the same paired phone as the possible fix. Choose the supplied control or pause; never suggest shell commands, a different device, publishing, or changes to the completed work.';
   if (input.stage === 'recovery_probe') return planSystem + ' This is an isolated local practice screen with a blocked preview, not a social network composer. Its supplied Continue button only removes the practice blocker and opens the local preview. Choose that navigation button when visible; nothing can be published here.';
   return planSystem;
 }
@@ -70,7 +71,14 @@ function safeSteps(body) {
 function boundedPlanInput({ platform, stage, controls, capabilities } = {}) {
   if (!platforms.has(platform) || typeof stage !== 'string' || !/^[a-z][a-z0-9_]{0,79}$/.test(stage) || !Array.isArray(controls)) return null;
   const ownsDraft = platform === 'whatsapp' && stage === 'discard_owned_draft' && capabilities?.discardOwnedDraft === true && Object.keys(capabilities).length === 1;
-  if ((stage === 'discard_owned_draft' || capabilities !== undefined) && !ownsDraft) return null;
+  const reconnectPhone = platform === 'instagram_android' && stage === 'reconnect_selected_phone' && capabilities?.reconnectSelectedPhone === true && Object.keys(capabilities).length === 1;
+  if ((['discard_owned_draft', 'reconnect_selected_phone'].includes(stage) || capabilities !== undefined) && !ownsDraft && !reconnectPhone) return null;
+  if (reconnectPhone) {
+    // This is an application capability, not arbitrary mobile UI: expose only its exact typed local action.
+    const control = controls.length === 1 ? controls[0] : null;
+    if (!control || typeof control !== 'object' || Array.isArray(control) || Object.keys(control).sort().join(',') !== 'enabled,id,label,role,scrollable' || control.id !== 'c1' || control.label !== 'Reconnect selected phone' || control.role !== 'button' || control.enabled !== true || control.scrollable !== false) return null;
+    return { platform, stage, controls: [{ id: 'c1', label: 'Reconnect selected phone', role: 'button', enabled: true, scrollable: false }], capabilities: { reconnectSelectedPhone: true } };
+  }
   const seen = new Set();
   for (const control of controls.slice(0, 40)) {
     if (control && typeof control === 'object' && typeof control.id === 'string') {
@@ -83,7 +91,7 @@ function boundedPlanInput({ platform, stage, controls, capabilities } = {}) {
     // Inspect full labels before truncation, including Unicode compatibility forms.
     if (typeof control.label !== 'string' || control.enabled !== true || typeof control.scrollable !== 'boolean' || !controlRoles.has(control.role)) return [];
     const fullLabel = clean(control.label, 1000), label = fullLabel.slice(0, 100);
-    if (!label || fullLabel.length > 100 || (forbidden.test(fullLabel) && !/^start a post$/i.test(fullLabel)) || /https?:|www\.|[<>`{}]|\b\d+\s*[,;]\s*\d+\b/i.test(fullLabel)) return [];
+    if (!label || /^reconnect selected phone$/i.test(fullLabel) || fullLabel.length > 100 || (forbidden.test(fullLabel) && !/^start a post$/i.test(fullLabel)) || /https?:|www\.|[<>`{}]|\b\d+\s*[,;]\s*\d+\b/i.test(fullLabel)) return [];
     if (ownsDraft ? (!draftControl.test(fullLabel) || control.role !== 'button' || control.scrollable) : draftControl.test(fullLabel)) return [];
     return [{ id: control.id, label, role: control.role, enabled: control.enabled, scrollable: control.scrollable }];
   });
@@ -94,6 +102,7 @@ function actionFix(value, input) {
   if (value.type === 'stop') return 'Pause automatic recovery and ask for manual help.';
   const control = input.controls.find(control => control.id === value.controlId);
   if (value.type === 'scroll') return 'Scroll ' + value.direction + ' in ' + control.label + '.';
+  if (input.capabilities?.reconnectSelectedPhone) return 'Reconnect the same paired phone and verify its identity before continuing.';
   if (input.capabilities?.discardOwnedDraft && /^discard$/i.test(control.label)) return 'Discard the verified unsent draft to reopen the composer.';
   if (input.capabilities?.discardOwnedDraft && /^cancel$/i.test(control.label)) return 'Close the discard prompt without discarding the draft.';
   return 'Open ' + control.label + '.';
@@ -105,6 +114,7 @@ function safePlan(body, input, secret = '') {
     if (typeof body.explanation !== 'string' || body.explanation.length > 200 || !body.explanation.trim()) return null;
     explanation = clean(body.explanation, 200);
     const checked = explanation.replace(/start a post/ig, 'open composer');
+    if (input.capabilities?.reconnectSelectedPhone && /(?:\b\d{1,3}\.){3}\d{1,3}\b|\b(?:[a-f0-9]{2}:){5}[a-f0-9]{2}\b/i.test(explanation)) return null;
     if (forbidden.test(checked) || unsafeExplanation.test(explanation) || (secret && explanation.includes(secret)) || (!input.capabilities?.discardOwnedDraft && /\bdiscard\b/i.test(explanation))) return null;
   }
   const value = body.action;
