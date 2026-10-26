@@ -52,7 +52,10 @@
     "test:manychat-login": "node tests/manychat-login-smoke.js",
     "test:navigation-ai-ui": "node tests/navigation-ai-ui.js",
     "test:recovery-ui": "node tests/recovery-progress-ui.js",
-    "test:recovery-practice": "node --test tests/recovery-practice.test.js tests/recovery-practice-api.test.js"
+    "test:recovery-practice": "node --test tests/recovery-practice.test.js tests/recovery-practice-api.test.js",
+    "test:manual-help-ui": "node tests/manual-recovery-help-ui.js",
+    "test:phone-guard": "node --test tests/phone-touch-guard.test.js tests/phone-touch-tools.test.js tests/phone-touch-tools-extra.test.js tests/phone-touch-api.test.js",
+    "test:phone-guard-ui": "node tests/phone-touch-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",

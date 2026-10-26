@@ -14,6 +14,8 @@ import { createSecurity } from './security.js';
 import { BrowserManager } from './automation/browser.js';
 import { Queue } from './queue.js';
 import { NavigationAI } from './navigation-ai.js';
+import {ManualRecoveryHelp} from './manual-recovery-help.js';
+import {buildManualRecoveryContext} from '../shared/manual-recovery.js';
 import {runRecoveryPractice} from './automation/recovery-practice.js';
 import {captureWhatsAppOwnedDraft,expectedWhatsAppImageProof,recoverWhatsAppOwnedDraft} from './automation/whatsapp-ai-recovery.js';
 import { destinationUrl } from './automation/platforms.js';
@@ -64,13 +66,14 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   await phoneTools.configure(config.androidDevice);
   phoneTools.canRefresh=()=>!queue.active&&!queue.processing&&!queue.login.running&&!instagramWorker.busy;
   phoneTools.on('change',()=>queue.emit('change',queue.state()));
+  const manualRecoveryHelp=new ManualRecoveryHelp({ai:navigationAI,build:selection=>buildManualRecoveryContext({...selection,runs:queue.runs,login:queue.login,phone:phoneTools.state(),recovery:queue.recoveryLog.state()}),onChange:value=>{queue.recoveryAdvice=value;queue.emit('change',queue.state());}});
   const studioState=()=>{const state=queue.state();return {...state,workerBusy:state.workerBusy||phoneTools.scanning||phoneTools.pairing===true,phone:phoneTools.state()};};
   await queue.init();
   if(config.androidDevice.type==='phone'){phoneTools.monitor?.();Promise.resolve().then(()=>phoneTools.refresh?.()).catch(()=>{});}
   queue.updateState=updateBridge.state;
   updateBridge.on('change',state=>{queue.updateState=state;queue.maintenance=['installing','restarting'].includes(state.phase);queue.emit('change',queue.state());});
-  app.use('/api',(req,res,next)=>queue.recoveryTaskActive&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/navigation-ai/test/stop')?res.status(409).json({error:'Wait for the recovery test to finish, or stop recovery first.'}):next());
-  app.use('/api',(req,res,next)=>queue.maintenance&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/updates')?res.status(409).json({error:'An app update is being prepared. Wait for it to finish.'}):next());
+  app.use('/api',(req,res,next)=>queue.recoveryTaskActive&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!['/navigation-ai/test/stop','/recovery-help','/recovery-help/cancel','/android/touch-guard'].includes(req.path)?res.status(409).json({error:'Wait for the recovery test to finish, or stop recovery first.'}):next());
+  app.use('/api',(req,res,next)=>queue.maintenance&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.path.startsWith('/updates')&&!(req.path==='/android/touch-guard'&&req.body?.enabled===false)?res.status(409).json({error:'An app update is being prepared. Wait for it to finish.'}):next());
   app.get('/api/updates',(req,res)=>res.json(updateBridge.state));
   app.post('/api/updates/check',async(req,res)=>res.json(await updateBridge.request('check')));
   app.post('/api/updates/apply',async(req,res)=>{
@@ -87,6 +90,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/android/scan',async(req,res)=>{requirePhoneIdle();await phoneTools.scan(config.androidDevice);res.json(phoneTools.state());});
   app.post('/api/android/pair',async(req,res)=>{requirePhoneIdle();await phoneTools.pair(req.body.address,req.body.code,config.androidDevice);res.json(phoneTools.state());});
   app.post('/api/android/screen',async(req,res)=>{res.json(await phoneTools.show(config.androidDevice));});
+  app.post('/api/android/touch-guard',async(req,res)=>{if(typeof req.body.enabled!=='boolean')throw Error('Choose whether the phone touch guard is on.');res.json(await phoneTools.protect(req.body.enabled,config.androidDevice));});
   app.post('/api/android/screen/close',async(req,res)=>{await phoneTools.screen.close();res.json(phoneTools.state());});
   app.use('/api',(req,res,next)=>{if((phoneTools.scanning||phoneTools.pairing)&&req.method!=='GET'&&/^\/(runs|config|logins|instagram\/music)/.test(req.path))return res.status(409).json({error:'Wait for the phone connection check to finish.'});next();});
   const requireRecoveryIdle=()=>{if(queue.active||queue.processing||queue.login.running||queue.recoveryTaskActive||browser.manualProcess||instagramWorker.busy||phoneTools.scanning||phoneTools.pairing)throw Object.assign(Error('Finish or stop the current activity before starting recovery practice.'),{status:409});};
@@ -123,6 +127,9 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
       if(result.completed)item.preparation.ownedDraft=null;item.recovery=queue.recoveryLog.state();await queue.change();return result;
     });res.status(202).json({id:record.id});
   });
+  app.get('/api/recovery-help/context',(req,res)=>res.json(manualRecoveryHelp.context(req.query)));
+  app.post('/api/recovery-help',(req,res)=>res.status(202).json(manualRecoveryHelp.start(req.body)));
+  app.post('/api/recovery-help/cancel',(req,res)=>res.json(manualRecoveryHelp.cancel(req.body.id)));
   app.get('/api/navigation-ai', (req,res)=>res.json(navigationAI.state()));
   app.put('/api/navigation-ai', async(req,res)=>{
     if(queue.active||queue.processing||queue.login.running||queue.recoveryTaskActive||browser.manualProcess||instagramWorker.busy) return res.status(409).json({error:'Finish or stop the current activity before changing navigation help.'});
@@ -336,14 +343,14 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if (res.headersSent) return next(error);
     res.status(error.status===409?409:error instanceof multer.MulterError ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Each image must be 20 MB or smaller.' : error.message || 'The request could not be completed.' });
   });
-  return { app, queue, phoneTools, browser };
+  return { app, queue, phoneTools, browser, manualRecoveryHelp };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const host = process.env.HOST || '127.0.0.1';
   const port = Number(process.env.PORT || 3000);
   if ((host !== '127.0.0.1' && host !== 'localhost' || process.env.APP_ORIGIN) && (process.env.APP_PASSWORD || '').length < 16) throw new Error('Shared access requires APP_PASSWORD with at least 16 characters. Set it in .env first.');
-  const { app, queue, browser, phoneTools } = await createApp();
+  const { app, queue, browser, phoneTools, manualRecoveryHelp } = await createApp();
   const server = app.listen(port, host, () => console.log(`\nGO Classes Social Studio Â· Created by Mrinal\nhttp://${host}:${port}\nTEST mode is always the default.\n`));
   let closing = false;
   const shutdown = async () => {
@@ -351,7 +358,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log('Saving run state and closing the worker browserâ€¦');
     server.close();
     // Keep the persisted in-flight state intact: init() will require an operator review.
-    await queue.persist(); await phoneTools.close(); await browser.close();
+    await manualRecoveryHelp.close(); await queue.persist(); await phoneTools.close(); await browser.close();
     process.exit(0);
   };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);

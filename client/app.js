@@ -4,7 +4,7 @@ import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraf
 import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
 import {storyPresetLayout,selectedStoryPreset} from '/shared/story-layouts.js';
-import {phoneToolbar,phoneRows,phoneSetup} from './phone-controls.js';
+import {phoneToolbar,phoneRows,phoneSetup,phoneGuardControl} from './phone-controls.js';
 import {syncStorySelection,setDestinationSelected,dependencyRequirements,resolveDependencyLinks,skipDestination} from '/shared/dependencies.js';
 import {platformPostPreview} from './platform-previews.js';
 import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
@@ -81,6 +81,7 @@ let state = { config: null, media: [], runs: [], login: { running: false, items:
 let view = 'settings';
 let musicPickerUi=null;
 let musicPickerOpen=false,androidProgressDialog=null,androidProgressKey='',androidProgressDismissed='';
+let recoveryHelpDialog=null,recoveryHelpSelection=null,recoveryHelpContext=null,recoveryHelpRequestId=null,recoveryHelpLoading=false,recoveryHelpSubmitting=false,recoveryHelpGeneration=0,recoveryHelpError='';
 let captionTab = 'instagram';
 let mode = 'TEST'; // Never restore LIVE mode from storage or server state.
 let connected = false;
@@ -171,7 +172,7 @@ function shell() {
       <nav class="navigation" aria-label="Main navigation">${Object.entries(titles).map(([id, title]) => `<button class="nav-item ${view === id ? 'active' : ''}" data-view="${id}" ${view === id ? 'aria-current="page"' : ''} title="${title}">${icon(id === 'preview' ? 'eye' : id === 'settings' ? 'settings' : id)}<span>${title}</span></button>`).join('')}</nav>
       <div class="sidebar-bottom"><div class="credit"><div class="avatar">M</div><div><p>Created by</p><strong>Mrinal</strong></div></div></div>
     </aside>
-    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><div data-recovery-shortcut>${recoveryShortcut()}</div><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
+    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><button class="button subtle small ask-gemini" data-ask-gemini aria-label="Ask Gemini" title="Get fresh recovery steps from Gemini">${icon('sparkle')}<span>Ask Gemini</span></button><div data-recovery-shortcut>${recoveryShortcut()}</div><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
     <div data-manual-login-host>${manualLoginNotice()}</div><main id="main" class="main" tabindex="-1">${page()}</main></div>
     ${actionbar()}
   </div>`;
@@ -365,7 +366,7 @@ function renderRuns() {
     const title = run.captions[run.items.find(item => item.id !== 'manychat')?.id || 'manychat']?.split('\n').find(line => line.trim()) || 'Publishing run';
     return `<details class="panel run-card" data-run-id="${run.id}" ${runExpansion.get(run.id) ?? active ? 'open' : ''}><summary class="run-summary"><div><h2><span class="badge ${run.mode === 'LIVE' ? 'bad' : ''}">${run.mode === 'LIVE' ? 'LIVE' : 'TEST RUN'}</span><span>${success}/${run.items.length} ${run.mode === 'LIVE' ? 'published' : 'prepared'}</span>${failed.length ? `<span class="badge bad">${failed.length} need attention</span>` : ''}</h2><p class="run-caption-title">${escape(title)}</p><p>${prettyDate(run.createdAt)} · ${escape(run.status.replaceAll('_', ' '))}</p></div><span class="run-expand">${icon('chevron')}</span></summary><div class="run-detail"><div class="run-actions">${controls}<button class="button small" data-restart-draft="${run.id}" ${workerBusy()||uploading?'disabled':''}>${icon('compose')} Start fresh</button></div><wa-progress-bar class="progress" value="${done / run.items.length * 100}" label="Run progress: ${done} of ${run.items.length}"></wa-progress-bar>${run.items.map(item => {
       const p = platform(item.id);
-      return `<div class="run-item">${platformIcon(p)}<div><h3>${p.name}${item.id==='instagram'?` <small class="run-route">${instagramMethod(run.instagram)==='web'?'Web':'Android'}</small>`:''}</h3>${runMessage(item) ? `<p>${escape(runMessage(item))}</p>` : ''}${item.recoveryMessage&&item.recoveryMessage!==item.message?`<p class="text-muted">${escape(item.recoveryMessage)}</p>`:''}${item.status==='waiting_for_input'?`<div class="inline-controls"><button class="button primary small" data-native-open>Open Android handoff</button></div>`:''}${item.status === 'awaiting_manual' ? `<div class="inline-controls"><button class="button small" data-copy-manual="${run.id}">${icon('copy')} Copy ManyChat message</button><a href="${escape(state.config.platforms.manychat.flowUrl)}" target="_blank" rel="noopener noreferrer" class="muted-link">Open ManyChat ${icon('external')}</a></div>` : ''}${item.status === 'uncertain' ? `<div class="inline-controls"><button class="button small" data-resolve="${run.id}" data-platform="${item.id}" data-resolution="posted">Verified published</button><button class="button small" data-resolve="${run.id}" data-platform="${item.id}" data-resolution="failed">Verified not published</button></div>` : ''}${item.id === 'instagram' && item.status === 'posted' && !item.publication?.postUrl && run.items.some(i => ['instagramStory','manychat'].includes(i.id)) ? `<div class="inline-controls"><button class="button small" data-resolve="${run.id}" data-platform="instagram" data-resolution="posted">Add post link</button></div>` : ''}${item.publication?.postUrl ? `<a class="published-link" href="${escape(item.publication.postUrl)}" target="_blank" rel="noopener noreferrer">View post ${icon('external')}</a>` : ''}${runDetails(run, item)}</div><div class="run-item-right">${statusBadge(item)}${item.status === 'failed' ? `<button class="button small retry-one" data-retry="${run.id}" data-retry-platform="${item.id}" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')} Retry ${escape(p.name)}</button>` : ''}${item.startedAt ? `<span class="run-time" data-elapsed-start="${item.startedAt}" data-elapsed-end="${item.finishedAt || ''}">${elapsed(item.startedAt, item.finishedAt)}</span>` : ''}</div></div>`;
+      return `<div class="run-item">${platformIcon(p)}<div><h3>${p.name}${item.id==='instagram'?` <small class="run-route">${instagramMethod(run.instagram)==='web'?'Web':'Android'}</small>`:''}</h3>${runMessage(item) ? `<p>${escape(runMessage(item))}</p>` : ''}${item.recoveryMessage&&item.recoveryMessage!==item.message?`<p class="text-muted">${escape(item.recoveryMessage)}</p>`:''}${item.status==='waiting_for_input'?`<div class="inline-controls"><button class="button primary small" data-native-open>Open Android handoff</button></div>`:''}${item.status === 'awaiting_manual' ? `<div class="inline-controls"><button class="button small" data-copy-manual="${run.id}">${icon('copy')} Copy ManyChat message</button><a href="${escape(state.config.platforms.manychat.flowUrl)}" target="_blank" rel="noopener noreferrer" class="muted-link">Open ManyChat ${icon('external')}</a></div>` : ''}${item.status === 'uncertain' ? `<div class="inline-controls"><button class="button small" data-resolve="${run.id}" data-platform="${item.id}" data-resolution="posted">Verified published</button><button class="button small" data-resolve="${run.id}" data-platform="${item.id}" data-resolution="failed">Verified not published</button></div>` : ''}${item.id === 'instagram' && item.status === 'posted' && !item.publication?.postUrl && run.items.some(i => ['instagramStory','manychat'].includes(i.id)) ? `<div class="inline-controls"><button class="button small" data-resolve="${run.id}" data-platform="instagram" data-resolution="posted">Add post link</button></div>` : ''}${['failed','attention','uncertain','needs_setup'].includes(item.status)?`<button class="text-button item-gemini-help" data-ask-gemini data-gemini-run="${escape(run.id)}" data-gemini-item="${escape(item.id)}">${icon('sparkle')} Get Gemini help</button>`:''}${item.publication?.postUrl ? `<a class="published-link" href="${escape(item.publication.postUrl)}" target="_blank" rel="noopener noreferrer">View post ${icon('external')}</a>` : ''}${runDetails(run, item)}</div><div class="run-item-right">${statusBadge(item)}${item.status === 'failed' ? `<button class="button small retry-one" data-retry="${run.id}" data-retry-platform="${item.id}" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')} Retry ${escape(p.name)}</button>` : ''}${item.startedAt ? `<span class="run-time" data-elapsed-start="${item.startedAt}" data-elapsed-end="${item.finishedAt || ''}">${elapsed(item.startedAt, item.finishedAt)}</span>` : ''}</div></div>`;
     }).join('')}</div></details>`;
   }).join('');
 }
@@ -415,6 +416,65 @@ function restartDraftDialog(run){
  modal.querySelector('#prepare-restart-draft').onclick=()=>{try{if(workerBusy()||uploading)throw Error('Stop the current activity or finish the upload first.');const selected=[...form.querySelectorAll('input:checked:not(:disabled)')].map(el=>el.dataset.restartChoice),next=draftFromRun(run,selected);localStorage.setItem('mrinal.social-studio.previous-draft',JSON.stringify(draft));draft=next;mode='TEST';reviewDraft=null;reviewValid=false;reviewBlocked=[];remoteReadiness=null;lastMediaOrder=null;mediaPreviewIndex=0;instagramTab='feed';captionTab=draft.selected.find(id=>id!=='instagramStory')||'instagram';for(const key of Object.keys(platformPreviewIndex))delete platformPreviewIndex[key];liveMetadataConsent={};saveDraft();modal.close();navigate('compose');toast('Fresh job ready for review. Nothing has been started.');}catch(error){modal.querySelector('#restart-draft-error').textContent=error.message;}};
 }
 function elapsed(start, end) { const seconds = Math.max(0, Math.round(((end ? new Date(end) : Date.now()) - new Date(start)) / 1000)); return `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
+const recoveryHelpViews=()=>view==='settings'?'connections':['compose','preview','activity'].includes(view)?view:'activity';
+const recoveryContextLabel=value=>String(value||'unknown').replaceAll('_',' ');
+function recoveryHelpTarget(){return {...(recoveryHelpSelection||{scope:'latest'}),view:recoveryHelpViews()};}
+function recoveryHelpCurrent(){const value=state.recoveryAdvice;return value&&value.id===recoveryHelpRequestId?value:null;}
+function recoveryHelpReady(){return state.navigationAI?.enabled&&state.navigationAI?.configured;}
+function createRecoveryHelpDialog(){
+ if(recoveryHelpDialog)return recoveryHelpDialog;
+ recoveryHelpDialog=document.createElement('dialog');recoveryHelpDialog.id='recovery-help';recoveryHelpDialog.className='recovery-help-dialog';recoveryHelpDialog.setAttribute('aria-labelledby','recovery-help-title');
+ recoveryHelpDialog.innerHTML='<div class="recovery-help-heading"><div>'+icon('sparkle')+'<h2 id="recovery-help-title">Gemini recovery help</h2></div><button class="button subtle round" data-recovery-help-close aria-label="Close Gemini help">'+icon('close')+'</button></div><div class="recovery-help-target"><label class="field"><span>Help with</span><select id="recovery-help-scope" aria-label="Recovery help scope"></select></label><label class="field" id="recovery-help-platform-field" hidden><span>Platform</span><select id="recovery-help-platform" aria-label="Recovery help platform">'+PLATFORMS.map(p=>'<option value="'+p.id+'">'+escape(p.name)+'</option>').join('')+'</select></label></div><div class="recovery-help-context" data-recovery-help-context></div><div class="recovery-help-result" data-recovery-help-result aria-live="polite"></div><p class="recovery-help-note">Shares basic app status only. No captions, images or raw error details.</p><div class="recovery-help-actions"><button class="button" data-recovery-help-cancel hidden>Stop request</button><button class="button primary" data-recovery-help-request>'+icon('sparkle')+' Request fresh steps</button></div><small class="recovery-help-limits">Advice only. Nothing is retried or published. Fresh requests use the normal quota and cooldown limits.</small>';
+ recoveryHelpDialog.querySelector('#recovery-help-scope').onchange=async event=>{const scope=event.target.value;recoveryHelpSelection={scope,...(scope==='platform'?{platform:recoveryHelpDialog.querySelector('#recovery-help-platform').value}:scope==='item'?{runId:recoveryHelpSelection.runId,itemId:recoveryHelpSelection.itemId}:{})};recoveryHelpRequestId=null;await loadRecoveryHelpContext();};
+ recoveryHelpDialog.querySelector('#recovery-help-platform').onchange=async event=>{recoveryHelpSelection={scope:'platform',platform:event.target.value};recoveryHelpRequestId=null;await loadRecoveryHelpContext();};
+ recoveryHelpDialog.addEventListener('close',()=>{recoveryHelpGeneration++;});
+ document.body.append(recoveryHelpDialog);return recoveryHelpDialog;
+}
+function renderRecoveryHelp(){
+ document.querySelectorAll('.ask-gemini').forEach(button=>button.classList.toggle('is-working',state.recoveryAdvice?.status==='working'));
+ if(!recoveryHelpDialog?.open)return;
+ const selection=recoveryHelpSelection||{scope:'latest'},advice=recoveryHelpCurrent(),context=advice?.context||recoveryHelpContext;
+ const selector=recoveryHelpDialog.querySelector('#recovery-help-scope'),options='<option value="latest">Current or latest problem</option><option value="app">Social Studio</option><option value="platform">A platform</option>'+(selection.scope==='item'?'<option value="item">Selected activity</option>':'');
+ if(selector.innerHTML!==options)selector.innerHTML=options;selector.value=selection.scope;
+ const platformField=recoveryHelpDialog.querySelector('#recovery-help-platform-field');platformField.hidden=selection.scope!=='platform';if(selection.platform)recoveryHelpDialog.querySelector('#recovery-help-platform').value=selection.platform;
+ const active=state.recoveryAdvice?.status==='working'||recoveryHelpSubmitting;selector.disabled=active;recoveryHelpDialog.querySelector('#recovery-help-platform').disabled=active;
+ const contextHost=recoveryHelpDialog.querySelector('[data-recovery-help-context]');
+ const contextHtml=recoveryHelpLoading?'<p>'+icon('refresh','spin')+' Checking the app context...</p>':context?'<dl><div><dt>Area</dt><dd>'+escape(context.platform==='app'?'Social Studio':platform(context.platform)?.name||recoveryContextLabel(context.platform))+'</dd></div><div><dt>Problem</dt><dd>'+escape(recoveryContextLabel(context.issue))+'</dd></div><div><dt>State</dt><dd>'+escape(recoveryContextLabel(context.phase))+'</dd></div></dl>':'<p>Choose the area you need help with.</p>';
+ if(contextHost.innerHTML!==contextHtml)contextHost.innerHTML=contextHtml;
+ const events=Array.isArray(advice?.events)?advice.events:[],latest=events.at(-1),lastCall=[...events].reverse().find(e=>e.phase==='calling'),lastCached=[...events].reverse().find(e=>e.source==='cache');
+ const message=recoveryHelpError||advice?.message||(recoveryHelpLoading?'Preparing the context.':!recoveryHelpReady()?'Enable Gemini and configure its key in Connections → Navigation help.':'Request fresh steps for this context.');
+ const calling=advice?.status==='working'&&latest?.phase==='calling',hasResponse=advice?.status==='ready';
+ const apiLabel=calling?'Calling Gemini'+(lastCall?.model?' · '+lastCall.model:''):lastCached?'Cached advice; no new API call':hasResponse?'Gemini responded'+(advice.model?' · '+advice.model:''):lastCall?'Gemini request finished':null;
+ const resultHtml='<p class="recovery-help-status '+(recoveryHelpError?'dialog-error':advice?.status==='working'?'working':'')+'" role="'+(recoveryHelpError?'alert':'status')+'">'+(advice?.status==='working'||recoveryHelpSubmitting?icon('refresh','spin'):icon(hasResponse?'check':'info'))+'<span>'+escape(recoveryHelpSubmitting&&!advice?'Requesting fresh steps...':message)+'</span></p>'+(apiLabel?'<small class="recovery-help-provider">'+escape(apiLabel)+'</small>':'')+(advice?.status==='ready'&&Array.isArray(advice.steps)?'<ol class="recovery-help-steps">'+advice.steps.slice(0,3).map(step=>'<li>'+escape(step)+'</li>').join(''):'');
+ const resultHost=recoveryHelpDialog.querySelector('[data-recovery-help-result]');if(resultHost.innerHTML!==resultHtml)resultHost.innerHTML=resultHtml;
+ const request=recoveryHelpDialog.querySelector('[data-recovery-help-request]');request.disabled=active||recoveryHelpLoading||!context||!recoveryHelpReady();
+ const stop=recoveryHelpDialog.querySelector('[data-recovery-help-cancel]');stop.hidden=state.recoveryAdvice?.status!=='working';stop.disabled=!recoveryHelpRequestId||state.recoveryAdvice?.id!==recoveryHelpRequestId;
+}
+async function loadRecoveryHelpContext(){
+ const generation=++recoveryHelpGeneration;recoveryHelpLoading=true;recoveryHelpContext=null;recoveryHelpError='';renderRecoveryHelp();
+ try{const data=await api('/api/recovery-help/context?'+new URLSearchParams(recoveryHelpTarget()));if(generation!==recoveryHelpGeneration)return;const previous=recoveryHelpCurrent();if(previous&&JSON.stringify(previous.context)!==JSON.stringify(data.context))recoveryHelpRequestId=null;recoveryHelpContext=data.context;}
+ catch(error){if(generation!==recoveryHelpGeneration)return;recoveryHelpContext=null;recoveryHelpError=error.message;}
+ finally{if(generation===recoveryHelpGeneration){recoveryHelpLoading=false;renderRecoveryHelp();}}
+}
+async function openRecoveryHelp(target){
+ createRecoveryHelpDialog();recoveryHelpSelection=target||{scope:'latest'};recoveryHelpRequestId=!target?state.recoveryAdvice?.id||null:null;recoveryHelpContext=!target?state.recoveryAdvice?.context||null:null;recoveryHelpSubmitting=false;recoveryHelpError='';
+ if(!recoveryHelpDialog.open)recoveryHelpDialog.showModal();renderRecoveryHelp();
+ if(!state.navigationAI)try{state.navigationAI=await api('/api/navigation-ai');}catch{}
+ if(recoveryHelpRequestId&&state.recoveryAdvice?.status==='working'){renderRecoveryHelp();return;}
+ await loadRecoveryHelpContext();
+}
+async function requestRecoveryHelp(){
+ if(!recoveryHelpReady()||recoveryHelpLoading||state.recoveryAdvice?.status==='working')return;
+ recoveryHelpSubmitting=true;recoveryHelpError='';recoveryHelpRequestId=null;renderRecoveryHelp();
+ try{const data=await api('/api/recovery-help',{method:'POST',body:{...recoveryHelpTarget(),refresh:true}});recoveryHelpRequestId=data.id;if(data.context)recoveryHelpContext=data.context;await refresh();}
+ catch(error){recoveryHelpError=error.message;}
+ finally{recoveryHelpSubmitting=false;renderRecoveryHelp();}
+}
+async function cancelRecoveryHelp(){
+ const advice=recoveryHelpCurrent();if(!advice||advice.status!=='working')return;
+ await api('/api/recovery-help/cancel',{method:'POST',body:{id:advice.id}});await refresh();
+}
+
 async function navigationHelp(){
  const settings=await api('/api/navigation-ai');state.navigationAI=settings;
  showDialog('Navigation help',
@@ -535,7 +595,7 @@ async function upload(files) {
   }
 }
 function showDialog(title, body, actions) {
-  modal.innerHTML = `<h2 id="dialog-title">${title}</h2>${body}<div class="dialog-actions">${actions}</div>`;
+  modal.innerHTML = `<div class="dialog-heading"><h2 id="dialog-title">${title}</h2><button type="button" class="button subtle small dialog-gemini-help" data-ask-gemini>${icon('sparkle')} Ask Gemini</button></div>${body}<div class="dialog-actions">${actions}</div>`;
   if (!modal.open) modal.showModal();
 }
 function metadataPrompt(proceed,candidate=reviewDraft,library=selectedMedia(),retryRun=null){
@@ -651,6 +711,10 @@ async function copyText(text) {
 document.addEventListener('click', async e => {
   const button = e.target.closest('button'); if (!button || button.disabled) return;
   try {
+    if(button.hasAttribute('data-ask-gemini')){await openRecoveryHelp(button.dataset.geminiRun?{scope:'item',runId:button.dataset.geminiRun,itemId:button.dataset.geminiItem}:undefined);return;}
+    if(button.hasAttribute('data-recovery-help-close')){recoveryHelpDialog?.close();return;}
+    if(button.hasAttribute('data-recovery-help-request')){await requestRecoveryHelp();return;}
+    if(button.hasAttribute('data-recovery-help-cancel')){await cancelRecoveryHelp();return;}
     if(button.dataset.igTab){instagramTab=button.dataset.igTab;shell();return;}
     if(button.hasAttribute('data-story-preset')){selectStoryLayout(button.dataset.storyPreset);return;}
     if(button.hasAttribute('data-story-align')){autoAlignStory();return;}
@@ -731,6 +795,7 @@ document.addEventListener('click', async e => {
         document.querySelector('#enable-live').onclick = () => { mode = 'LIVE'; modal.close(); shell(); };
       } return;
     }
+    if(button.hasAttribute('data-phone-guard')){await togglePhoneGuard(button.dataset.phoneGuard==='on');return;}
     if(button.hasAttribute('data-phone-scan')){await scanPhoneDialog();return;}
     if(button.hasAttribute('data-phone-show')){await showPhoneScreen();return;}
     if(button.hasAttribute('data-phone-hide')){state.phone=await api('/api/android/screen/close',{method:'POST',body:{}});renderPhoneToolbar();if(modal.open&&modal.contains(button))modal.close();return;}
@@ -886,7 +951,7 @@ function applyStatus(data) {
   const signInHost=document.querySelector('[data-manual-login-host]');if(signInHost)signInHost.innerHTML=manualLoginNotice();
   updateWorkerControls();
   const freshButton=document.querySelector('[data-action="fresh-workspace"]');if(freshButton)freshButton.disabled=workerBusy()||uploading;
-   state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;state.navigationAI=data.navigationAI;state.recovery=data.recovery||null;renderRecovery();
+   state.manychatNextReplies = data.manychatNextReplies; state.androidProgress=data.androidProgress;state.update=data.update;state.navigationAI=data.navigationAI;state.recovery=data.recovery||null;state.recoveryAdvice=data.recoveryAdvice||null;renderRecovery();renderRecoveryHelp();
   const updateLabel=document.querySelector('[data-update-label]');if(updateLabel)updateLabel.textContent=data.update?.available?'Update now':'Updates';
   if(musicPickerOpen&&data.androidProgress?.picker)musicPickerUi?.progress(data.androidProgress);
   if (data.config) {
@@ -1088,7 +1153,7 @@ function renderAndroidProgress(){
   const key=run.id+':'+item.id+':'+(item.intervention?.id||'working');
   if(!androidProgressDialog){
     androidProgressDialog=document.createElement('dialog');androidProgressDialog.id='android-progress';androidProgressDialog.className='android-progress-dialog';androidProgressDialog.setAttribute('aria-labelledby','android-progress-title');document.body.append(androidProgressDialog);
-    androidProgressDialog.innerHTML='<div class="android-progress-heading"><span class="android-spinner" aria-hidden="true"></span><h2 id="android-progress-title">Instagram on Android</h2></div><p id="android-step" role="status"></p><p class="android-progress-note">Working on your selected Android device. You can keep using the workspace.</p><div id="android-manual"></div><button class="button small" data-phone-show>Show phone screen</button><div class="android-progress-meta"><span id="android-run-mode"></span><span id="android-elapsed"></span></div><div class="android-progress-actions"><button class="button" id="android-progress-hide">Keep in background</button><button class="button subtle" data-kill-run="'+escape(run.id)+'">Stop now</button></div>';
+    androidProgressDialog.innerHTML='<div class="android-progress-heading"><span class="android-spinner" aria-hidden="true"></span><h2 id="android-progress-title">Instagram on Android</h2></div><p id="android-step" role="status"></p><p class="android-progress-note">Working on your selected Android device. You can keep using the workspace.</p><div id="android-manual"></div><div class="android-progress-tools"><button class="button small" data-phone-show>Show phone screen</button><button class="button small" data-ask-gemini>Ask Gemini</button></div><div class="android-progress-meta"><span id="android-run-mode"></span><span id="android-elapsed"></span></div><div class="android-progress-actions"><button class="button" id="android-progress-hide">Keep in background</button><button class="button subtle" data-kill-run="'+escape(run.id)+'">Stop now</button></div>';
     const hide=()=>{androidProgressDismissed=androidProgressKey;androidProgressDialog.close();};androidProgressDialog.querySelector('#android-progress-hide').onclick=hide;androidProgressDialog.oncancel=e=>{e.preventDefault();hide();};
     setInterval(()=>{const clock=androidProgressDialog.querySelector('#android-elapsed');if(clock?.dataset.startedAt)clock.textContent=elapsed(clock.dataset.startedAt);},1000);
   }
@@ -1107,7 +1172,7 @@ function renderAndroidProgress(){
   const clock=androidProgressDialog.querySelector('#android-elapsed');clock.dataset.startedAt=item.startedAt||run.createdAt;clock.textContent=elapsed(clock.dataset.startedAt);
   if(!pill){pill=document.createElement('button');pill.id='android-progress-pill';pill.className='button android-progress-pill';pill.innerHTML='Instagram progress';pill.onclick=()=>{androidProgressDismissed='';androidProgressDialog.showModal();};document.body.append(pill);}
   pill.innerHTML=waiting?'Your turn in Instagram':'<span class="android-spinner" aria-hidden="true"></span> Instagram progress';
-  if(androidProgressDismissed!==key&&!modal.open&&!androidProgressDialog.open)androidProgressDialog.showModal();
+  if(androidProgressDismissed!==key&&!modal.open&&!recoveryHelpDialog?.open&&!androidProgressDialog.open)androidProgressDialog.showModal();
 }
 
 async function updatesDialog(){
@@ -1131,9 +1196,16 @@ let nativePostingChoice=false,changingPostingRoute=false;
 function phoneScanBusy(){const run=activeRun();return state.workerBusy||state.login.running||Boolean(run&&!['attention','paused'].includes(run.status));}
 function renderPhoneToolbar(){
  const target=document.querySelector('[data-phone-tools]');if(target){const html=phoneToolbar(state.phone,workerBusy(),state.capabilities?.instagramAndroid!==false);if(target.innerHTML!==html)target.innerHTML=html;}
+ const guardHtml=phoneGuardControl(state.phone,state.capabilities?.instagramAndroid!==false);for(const holder of document.querySelectorAll('[data-phone-guard-slot]'))if(holder.innerHTML!==guardHtml)holder.innerHTML=guardHtml;
  const progress=document.querySelector('[data-phone-screen-progress]');if(progress)progress.textContent=state.phone?.mirror?.message||'Opening phone screen…';
 }
-function phoneDialogContent(devices){return phoneRows(devices,state.config.androidDevice)+(!devices.length?'<p class="phone-screen-hint">No phone found. Unlock it and enable Wireless debugging on the same Wi-Fi, or connect USB and allow debugging.</p>':'')+phoneSetup();}
+async function togglePhoneGuard(enabled){
+ const buttons=[...document.querySelectorAll('[data-phone-guard]')];buttons.forEach(b=>b.disabled=true);
+ try{state.phone=await api('/api/android/touch-guard',{method:'POST',body:{enabled}});renderPhoneToolbar();const protectedNow=state.phone?.touchGuard?.enabled===true;toast(protectedNow?'Phone screen protected. PC mirror stays usable.':enabled?'Phone guard is not active. Check its connection.':'Phone touch guard off.',enabled&&!protectedNow);}
+ catch(error){toast(error.message,true);await refresh().catch(()=>{});}
+ finally{renderPhoneToolbar();for(const holder of document.querySelectorAll('[data-phone-guard-slot]'))holder.innerHTML=phoneGuardControl(state.phone,state.capabilities?.instagramAndroid!==false);}
+}
+function phoneDialogContent(devices){return '<div data-phone-guard-slot>'+phoneGuardControl(state.phone,state.capabilities?.instagramAndroid!==false)+'</div>'+phoneRows(devices,state.config.androidDevice)+(!devices.length?'<p class="phone-screen-hint">No phone found. Unlock it and enable Wireless debugging on the same Wi-Fi, or connect USB and allow debugging.</p>':'')+phoneSetup();}
 function bindPhonePairing(){const button=document.querySelector('#pair-wifi-phone');if(!button)return;button.onclick=async()=>{button.disabled=true;const error=document.querySelector('.phone-pair-error'),code=document.querySelector('#phone-pair-code'),address=document.querySelector('#phone-pair-address').value.trim();error.textContent='';try{const value=code.value.trim();code.value='';state.phone=await api('/api/android/pair',{method:'POST',body:{address,code:value}});renderPhoneToolbar();showPhoneChoices(state.phone.devices);}catch(e){error.textContent=e.message;}finally{button.disabled=false;}};}
 function showPhoneChoices(devices){showDialog('Phone connection',phoneDialogContent(devices),'<button class="button" data-phone-scan>Scan again</button><button class="button" data-phone-show '+(!state.phone?.connected?'disabled':'')+'>Show screen</button><button class="button subtle" data-dialog-close>Done</button>');bindPhonePairing();}
 async function scanPhoneDialog(){
@@ -1143,7 +1215,7 @@ async function scanPhoneDialog(){
 }
 async function showPhoneScreen(){
  showDialog('Phone screen','<div class="phone-screen-progress" role="status" data-phone-screen-progress>Opening phone screen…</div><p class="phone-screen-hint">A separate phone window opens on this PC. Use it to check the connection or choose music when Studio pauses.</p>','<button class="button" data-dialog-close>Keep in background</button>');
- try{state.phone=await api('/api/android/screen',{method:'POST',body:{}});renderPhoneToolbar();if(modal.open&&document.querySelector('[data-phone-screen-progress]'))showDialog('Phone screen','<p class="phone-screen-progress">Screen open on this PC.</p><p class="phone-screen-hint">Choose music when Studio asks, then use Check selected song and Continue. Closing the viewer leaves Instagram open.</p>','<button class="button" data-phone-hide>Hide screen</button><button class="button primary" data-dialog-close>Done</button>');}catch(error){if(modal.open)showDialog('Phone screen','<p class="phone-error" role="alert">'+escape(error.message)+'</p>','<button class="button" data-phone-scan>Scan for phone</button><button class="button subtle" data-dialog-close>Close</button>');else toast(error.message,true);}
+ try{state.phone=await api('/api/android/screen',{method:'POST',body:{}});renderPhoneToolbar();if(modal.open&&document.querySelector('[data-phone-screen-progress]'))showDialog('Phone screen','<p class="phone-screen-progress">Screen open on this PC.</p><p class="phone-screen-hint">Choose music when Studio asks, then use Check selected song and Continue. Closing the viewer leaves Instagram open.</p><div data-phone-guard-slot>'+phoneGuardControl(state.phone,state.capabilities?.instagramAndroid!==false)+'</div>','<button class="button" data-phone-hide>Hide screen</button><button class="button primary" data-dialog-close>Done</button>');}catch(error){if(modal.open)showDialog('Phone screen','<p class="phone-error" role="alert">'+escape(error.message)+'</p>','<button class="button" data-phone-scan>Scan for phone</button><button class="button subtle" data-dialog-close>Close</button>');else toast(error.message,true);}
 }
 async function nativeDeviceDialog({posting=false}={}){
  nativePostingChoice=posting;

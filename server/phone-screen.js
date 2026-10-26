@@ -16,14 +16,14 @@ export class PhoneScreen extends EventEmitter{
   try{await fs.access(binary);}catch{this.update({phase:'installing',message:'Preparing screen viewer…'});await exec('powershell.exe',['-NoProfile','-NonInteractive','-Command','Expand-Archive -LiteralPath $env:STUDIO_SCRCPY_ZIP -DestinationPath $env:STUDIO_SCRCPY_DEST -Force'],{windowsHide:true,timeout:30000,env:{...process.env,STUDIO_SCRCPY_ZIP:zip,STUDIO_SCRCPY_DEST:root}});}
   return binary;
  }
- async open(serial){
+ async open(serial,{keepScreenOff=false}={}){
   if(this.status.running&&this.status.serial===serial)return this.state();if(this.opening)return this.opening;
-  this.opening=this.start(serial).finally(()=>{this.opening=null;});return this.opening;
+  this.opening=this.start(serial,{keepScreenOff}).finally(()=>{this.opening=null;});return this.opening;
  }
- async start(serial){
+ async start(serial,{keepScreenOff=false}={}){
   await this.close();const generation=this.generation;this.update({phase:'opening',message:'Opening phone screen…',serial});
   try{const binary=await this.prepare();if(generation!==this.generation)throw Error('Screen opening cancelled.');this.update({phase:'opening',message:'Connecting the phone screen…'});
-   const child=this.launch(binary,['--serial='+serial,'--max-size=1024','--max-fps=30','--video-bit-rate=2M','--video-codec=h264','--audio-bit-rate=64K','--no-clipboard-autosync','--window-height=800','--window-title=Social-Studio-Phone'],{cwd:path.dirname(binary),windowsHide:true,env:{...process.env,ADB:this.adb()},stdio:['ignore','pipe','pipe']});this.child=child;
+   const child=this.launch(binary,['--serial='+serial,...(keepScreenOff?['--no-power-on']:[]),'--max-size=1024','--max-fps=30','--video-bit-rate=2M','--video-codec=h264','--audio-bit-rate=64K','--no-clipboard-autosync','--window-height=800','--window-title=Social-Studio-Phone'],{cwd:path.dirname(binary),windowsHide:true,env:{...process.env,ADB:this.adb()},stdio:['ignore','pipe','pipe']});this.child=child;
    await new Promise((resolve,reject)=>{let ready=false,log='';const timer=setTimeout(()=>{child.kill();reject(Error('The screen viewer did not become ready. Unlock the phone, scan again and retry.'));},20000);timer.unref?.();
     const fail=()=>{clearTimeout(timer);if(!ready)reject(Error('The phone screen could not open. Check its connection and try again.'));if(this.child===child){this.child=null;this.update({running:false,phase:ready?'idle':'error',message:ready?'Screen closed':'Screen connection failed'});}};
     child.once('error',fail);child.once('exit',fail);
