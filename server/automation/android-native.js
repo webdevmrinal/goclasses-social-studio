@@ -14,9 +14,41 @@ export const ANDROID_AVD = EMULATOR_AVD;
 export const ANDROID_URL = 'http://127.0.0.1:4731';
 const decode = value => value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, key) => key[0] === '#' ? String.fromCodePoint(parseInt(key.slice(key[1]?.toLowerCase() === 'x' ? 2 : 1), key[1]?.toLowerCase() === 'x' ? 16 : 10)) : ({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[key]));
 export function nativeNodes(xml) {
-  return [...xml.matchAll(/<([\w.$]+)\s+([^>]*?)(?:\/>|>)/g)].map(match => ({
-    tag: match[1], ...Object.fromEntries([...match[2].matchAll(/([\w-]+)="([^"]*)"/g)].map(a => [a[1], decode(a[2])]))
-  })).filter(n => n['resource-id'] || n.class);
+  if(typeof xml!=='string')return [];
+  const nodes=[];let cursor=0;
+  // Android may switch an attribute to single quotes when its text contains a
+  // double quote. Read complete quoted tags before decoding their attributes.
+  while(cursor<xml.length){
+    const opening=xml.indexOf('<',cursor);if(opening<0)break;
+    if(xml.startsWith('<?',opening)){const close=xml.indexOf('?>',opening+2);if(close<0)return [];cursor=close+2;continue;}
+    if(xml.startsWith('<!--',opening)){const close=xml.indexOf('-->',opening+4);if(close<0)return [];cursor=close+3;continue;}
+    if(xml.startsWith('</',opening)){const close=xml.indexOf('>',opening+2);if(close<0||!/^<\/[\w.$]+\s*>$/.test(xml.slice(opening,close+1)))return [];cursor=close+1;continue;}
+    const name=xml.slice(opening+1).match(/^[\w.$]+(?=\s|\/?>)/);if(!name)return [];
+    const bodyStart=opening+1+name[0].length;let quote=null,closing=-1;
+    for(let index=bodyStart;index<xml.length;index++){
+      const character=xml[index];
+      if(character==='<')return [];
+      if(quote){if(character===quote)quote=null;}
+      else if(character==='"'||character==="'")quote=character;
+      else if(character==='>'){closing=index;break;}
+    }
+    if(closing<0||quote)return [];
+    let body=xml.slice(bodyStart,closing);if(body.endsWith('/'))body=body.slice(0,-1);
+    const attributes=Object.create(null);let position=0;
+    while(position<body.length){
+      const gap=body.slice(position).match(/^\s+/);if(!gap)return [];
+      position+=gap[0].length;if(position===body.length)break;
+      const attribute=body.slice(position).match(/^([A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*(["'])/);if(!attribute)return [];
+      const valueStart=position+attribute[0].length,valueEnd=body.indexOf(attribute[2],valueStart);
+      if(valueEnd<0||Object.hasOwn(attributes,attribute[1]))return [];
+      let value;try{value=decode(body.slice(valueStart,valueEnd));}catch{return [];}
+      if([...value].some(character=>{const code=character.codePointAt(0);return !(code===9||code===10||code===13||code>=32&&code<=0xd7ff||code>=0xe000&&code<=0xfffd||code>=0x10000&&code<=0x10ffff);}))return [];
+      attributes[attribute[1]]=value;position=valueEnd+1;
+    }
+    const node={tag:name[0],...attributes};if(node['resource-id']||node.class)nodes.push(node);
+    cursor=closing+1;
+  }
+  return nodes;
 }
 export const nativeId = name => 'com.instagram.android:id/' + name;
 export function nativeBounds(node) {
@@ -145,10 +177,11 @@ export class AndroidSession {
     await this.openOnce({start:false});this.connectionGeneration=(this.connectionGeneration||0)+1;return true;
   }
   async recoverPhoneTransport(error,kind){
-    if(this.device?.type!=='phone'||this.recoveringPhone||typeof this.onConnectionRecovery!=='function'||!isAndroidTransportFailure(error))return false;
+    const expired=this.id&&kind==='read'&&error?.code==='ANDROID_INSPECTION_SESSION_EXPIRED';
+    if(this.device?.type!=='phone'||this.recoveringPhone||typeof this.onConnectionRecovery!=='function'||!isAndroidTransportFailure(error)&&!expired)return false;
     this.signal?.throwIfAborted();if((this.phoneRecoveries||0)>=2)throw new InterventionError('The phone connection keeps dropping. Unlock it and check Wireless debugging before continuing.');
     this.phoneRecoveries=(this.phoneRecoveries||0)+1;this.recoveringPhone=true;const started=Date.now();
-    try{return Boolean(await this.onConnectionRecovery({kind,reconnect:()=>this.rebuildPhoneSession()}));}finally{this.connectionPauseMs=(this.connectionPauseMs||0)+Math.max(0,Date.now()-started);this.recoveringPhone=false;}
+    try{return Boolean(await this.onConnectionRecovery({kind,...(expired?{problem:'The Android inspection session expired while waiting. Reconnecting the same phone without changing its Instagram screen.'}:{}),reconnect:()=>this.rebuildPhoneSession()}));}finally{this.connectionPauseMs=(this.connectionPauseMs||0)+Math.max(0,Date.now()-started);this.recoveringPhone=false;}
   }
   async open(options={}){
     try{return await this.openOnce(options);}catch(error){this.signal?.throwIfAborted();if(!await this.recoverPhoneTransport(error,'open'))throw error;return this;}
@@ -193,7 +226,7 @@ export class AndroidSession {
   async request(endpoint, method='GET', body, {deadline=Infinity}={}) {
     if (!this.id) throw new Error('No Android inspection session.');
     const readOnly=readOnlyInspection(endpoint,method);let end=Math.min(Date.now()+45000,deadline);
-    let recovering=false;
+    let recovering=false,inspectionRebuilt=false;
     for(let attempt=0;attempt<3;attempt++){
       if(this.signal?.aborted && method!=='DELETE')throw new InterventionError('Android operation stopped. Its unsent draft was preserved.');
       const remaining=end-Date.now();
@@ -213,8 +246,13 @@ export class AndroidSession {
       const message=out.value?.message||out.value?.error||response.status;
       if(!readOnly||!ROOT_ACCESSIBILITY_TIMEOUT.test(String(message))){
         const error=new Error('Android: '+message),transportRead=readOnly||method==='GET'&&['/screenshot','/window/rect'].includes(endpoint)||method==='POST'&&endpoint==='/appium/settings';
+        if(transportRead&&out.value?.error==='invalid session id'&&this.id){
+          if(inspectionRebuilt)throw new InterventionError('The Android inspection session ended again. Keep the current screen open and check the phone connection before continuing.');
+          error.code='ANDROID_INSPECTION_SESSION_EXPIRED';
+        }
         const recoveryStarted=Date.now();
         if(method!=='DELETE'&&await this.recoverPhoneTransport(error,transportRead?'read':'action')){
+          if(error.code==='ANDROID_INSPECTION_SESSION_EXPIRED')inspectionRebuilt=true;
           end+=Date.now()-recoveryStarted;
           if(transportRead&&attempt<2)continue;throw this.uncertainPhoneAction();
         }
@@ -229,12 +267,27 @@ export class AndroidSession {
       await inspectionPause(this.signal,250*(attempt+1),end);
     }
   }
+  armInspectionKeepAlive(){
+    if(this.keepAliveTimer||!this.id||this.signal?.aborted)return;
+    let busy=false;
+    this.keepAliveTimer=setInterval(async()=>{
+      if(!this.id||this.signal?.aborted){this.stopInspectionKeepAlive();return;}
+      if(busy)return;busy=true;
+      try{const timeout=AbortSignal.timeout(5000),response=await fetch(ANDROID_URL+'/session/'+this.id+'/timeouts',{method:'GET',signal:this.signal?AbortSignal.any([this.signal,timeout]):timeout});await response.body?.cancel();}
+      catch{ /* A heartbeat never navigates, reconnects or changes a review. The next explicit screen check handles expired sessions. */ }
+      finally{busy=false;}
+    },60000);this.keepAliveTimer.unref?.();
+  }
+  stopInspectionKeepAlive(){if(this.keepAliveTimer){clearInterval(this.keepAliveTimer);this.keepAliveTimer=null;}}
   async close() {
+    this.stopInspectionKeepAlive();
     if (!this.id) return;
     try { await this.request('','DELETE'); } finally { this.id=null; }
   }
   async screen({deadline=Infinity}={}) {
+    this.armInspectionKeepAlive();
     let nodes=nativeNodes(await this.request('/source','GET',undefined,{deadline}));
+    this.armInspectionKeepAlive();
     const anr=androidAnrOwner(nodes);
     if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait')&&!anr)throw new InterventionError('Android has an unrecognized app-not-responding dialog. Close it yourself before continuing. Its draft was preserved.');
     if(anr){
