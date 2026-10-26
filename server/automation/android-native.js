@@ -181,7 +181,7 @@ export class AndroidSession {
     if(this.device?.type!=='phone'||this.recoveringPhone||typeof this.onConnectionRecovery!=='function'||!isAndroidTransportFailure(error)&&!expired)return false;
     this.signal?.throwIfAborted();if((this.phoneRecoveries||0)>=2)throw new InterventionError('The phone connection keeps dropping. Unlock it and check Wireless debugging before continuing.');
     this.phoneRecoveries=(this.phoneRecoveries||0)+1;this.recoveringPhone=true;const started=Date.now();
-    try{return Boolean(await this.onConnectionRecovery({kind,...(expired?{problem:'The Android inspection session expired while waiting. Reconnecting the same phone without changing its Instagram screen.'}:{}),reconnect:()=>this.rebuildPhoneSession()}));}finally{this.connectionPauseMs=(this.connectionPauseMs||0)+Math.max(0,Date.now()-started);this.recoveringPhone=false;}
+    try{return Boolean(await this.onConnectionRecovery({kind,...(expired?{problem:'The Android screen-reading inspection service stopped while waiting. Reconnecting the same phone without changing its Instagram screen.'}:{}),reconnect:()=>this.rebuildPhoneSession()}));}finally{this.connectionPauseMs=(this.connectionPauseMs||0)+Math.max(0,Date.now()-started);this.recoveringPhone=false;}
   }
   async open(options={}){
     try{return await this.openOnce(options);}catch(error){this.signal?.throwIfAborted();if(!await this.recoverPhoneTransport(error,'open'))throw error;return this;}
@@ -246,7 +246,8 @@ export class AndroidSession {
       const message=out.value?.message||out.value?.error||response.status;
       if(!readOnly||!ROOT_ACCESSIBILITY_TIMEOUT.test(String(message))){
         const error=new Error('Android: '+message),transportRead=readOnly||method==='GET'&&['/screenshot','/window/rect'].includes(endpoint)||method==='POST'&&endpoint==='/appium/settings';
-        if(transportRead&&out.value?.error==='invalid session id'&&this.id){
+        const stoppedReader=out.value?.error==='unknown error'&&(String(message).startsWith("'"+method+' /session/'+this.id+endpoint+"' cannot be proxied to UiAutomator2 server because the instrumentation process is not running")||message==='Could not proxy command to the remote server. Original error: socket hang up');
+        if(transportRead&&(out.value?.error==='invalid session id'||stoppedReader)&&this.id){
           if(inspectionRebuilt)throw new InterventionError('The Android inspection session ended again. Keep the current screen open and check the phone connection before continuing.');
           error.code='ANDROID_INSPECTION_SESSION_EXPIRED';
         }

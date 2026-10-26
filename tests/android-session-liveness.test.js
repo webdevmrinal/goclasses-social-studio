@@ -83,3 +83,43 @@ test('a recovered source read rearms keepalive after the old timer stops during 
  const nodes=await f.s.screen();assert.equal(nodes.length,1);assert.equal(f.timers.length,2);assert.equal(f.s.keepAliveTimer,f.timers[1]);assert.equal(f.timers[1].unrefs,1);
  await f.timers[1].fn();await flush();assert.deepEqual(calls,[[ANDROID_URL+'/session/inspection-rebuilt/timeouts','GET']]);assert.equal(f.cleared.length,1);
 });
+function instrumentationFixture(t,{endpoint='/source',method='GET',persistent=false,message}={}){
+ const s=Object.create(AndroidSession.prototype),calls=[],recoveries=[];s.id='inspection-old';s.serial=wifi.serial;s.device={...wifi};s.signal=new AbortController().signal;
+ s.rebuildPhoneSession=async()=>{recoveries.push('rebuild');s.id='inspection-new';return true;};s.onConnectionRecovery=async details=>{recoveries.push(details);return details.reconnect();};
+ t.mock.method(globalThis,'fetch',async(url,options={})=>{
+  calls.push({url,method:options.method||'GET',body:options.body});
+  if(url===ANDROID_URL+'/session/inspection-old'+endpoint||persistent){const operation=(options.method||'GET')+' '+url.slice(ANDROID_URL.length);return response({error:'unknown error',message:message||"'"+operation+"' cannot be proxied to UiAutomator2 server because the instrumentation process is not running (probably crashed). Check the server log and/or the logcat output for more details"},false);}
+  if(url===ANDROID_URL+'/session/inspection-new'+endpoint)return response(xml);assert.fail('Unexpected inspection operation '+url);
+ });
+ return {s,calls,recoveries};
+}
+
+test('a structured source-proxy instrumentation crash rebuilds once and retries only its pending read',async t=>{
+ const f=instrumentationFixture(t);assert.equal(await f.s.request('/source'),xml);assert.equal(f.s.id,'inspection-new');assert.deepEqual(f.calls.map(c=>[c.url,c.method]),[[ANDROID_URL+'/session/inspection-old/source','GET'],[ANDROID_URL+'/session/inspection-new/source','GET']]);assert.equal(f.recoveries.filter(r=>r==='rebuild').length,1);assert.equal(f.recoveries.find(r=>r!=='rebuild').kind,'read');
+});
+
+test('a persistently stopped instrumentation server has only one bounded rebuild',async t=>{
+ const f=instrumentationFixture(t,{persistent:true});await assert.rejects(f.s.request('/source'),/inspection session ended again|inspection.*(?:stopped|ended)/i);assert.equal(f.calls.length,2);assert.equal(f.recoveries.filter(r=>r==='rebuild').length,1);assert.deepEqual(f.calls.map(c=>c.method),['GET','GET']);
+});
+
+test('instrumentation-crash action responses never reconnect or replay a potentially completed click',async t=>{
+ const f=instrumentationFixture(t,{endpoint:'/element/story-share/click',method:'POST'});f.s.onConnectionRecovery=async()=>assert.fail('A mutating proxy error cannot be replayed');await assert.rejects(f.s.request('/element/story-share/click','POST',{}),/instrumentation process is not running/);assert.equal(f.calls.length,1);assert.equal(f.s.id,'inspection-old');assert.equal(f.recoveries.length,0);
+});
+
+test('an unrelated structured unknown error remains a manual failure without session recovery',async t=>{
+ const f=instrumentationFixture(t,{message:'Unknown UI reference while reading the hierarchy; investigate the existing screen.'});f.s.onConnectionRecovery=async()=>assert.fail('Generic unknown errors must not be reclassified as crashed instrumentation');await assert.rejects(f.s.request('/source'),/Unknown UI reference/);assert.equal(f.calls.length,1);assert.equal(f.s.id,'inspection-old');assert.equal(f.recoveries.length,0);
+});
+
+test('a proxy-crash diagnostic for another session is not adopted as this inspection failure',async t=>{
+ const f=instrumentationFixture(t,{message:"'GET /session/foreign-session/source' cannot be proxied to UiAutomator2 server because the instrumentation process is not running (probably crashed)."});f.s.onConnectionRecovery=async()=>assert.fail('A foreign session diagnostic cannot restart this inspection');await assert.rejects(f.s.request('/source'),/foreign-session/);assert.equal(f.calls.length,1);assert.equal(f.s.id,'inspection-old');assert.equal(f.recoveries.length,0);
+});
+
+test('a structured proxy socket hang up during a screen read rebuilds once without replaying actions',async t=>{
+ const f=instrumentationFixture(t,{message:'Could not proxy command to the remote server. Original error: socket hang up'});assert.equal(await f.s.request('/source'),xml);assert.equal(f.recoveries.filter(r=>r==='rebuild').length,1);assert.deepEqual(f.calls.map(c=>c.method),['GET','GET']);
+});
+test('a persistent proxy socket hang up stops after one read-only rebuild',async t=>{
+ const f=instrumentationFixture(t,{persistent:true,message:'Could not proxy command to the remote server. Original error: socket hang up'});await assert.rejects(f.s.request('/source'),/inspection session ended again/);assert.equal(f.recoveries.filter(r=>r==='rebuild').length,1);assert.equal(f.calls.length,2);
+});
+test('a proxy socket hang up on a final click never rebuilds or repeats that click',async t=>{
+ const f=instrumentationFixture(t,{endpoint:'/element/save/click',method:'POST',message:'Could not proxy command to the remote server. Original error: socket hang up'});f.s.onConnectionRecovery=async()=>assert.fail('A Save result cannot be recovered and replayed');await assert.rejects(f.s.request('/element/save/click','POST',{}),/socket hang up/);assert.equal(f.calls.length,1);assert.equal(f.recoveries.length,0);
+});
