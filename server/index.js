@@ -22,6 +22,8 @@ import { destinationUrl } from './automation/platforms.js';
 import { manychatLoginUrl } from './automation/manychat-login.js';
 import { validateManychatDraft } from '../shared/manychat.js';
 import { inspectImage, cleanImage, verifyMediaIntegrity } from './image-metadata.js';
+import {acceptedUploadType,inspectUpload} from './media-inspection.js';
+import {mediaKind} from '../shared/media-capabilities.js';
 import { mediaFor, selectionErrors, metadataNeedsReview, metadataConsentValid } from '../shared/media.js';
 import {discoverPhones} from './android-devices.js';
 import {PhoneTools} from './phone-tools.js';
@@ -37,7 +39,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const app = express();
   if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
   app.disable('x-powered-by');
-  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'"], imgSrc: ["'self'", 'blob:', 'data:'], connectSrc: ["'self'"], upgradeInsecureRequests: null } }, crossOriginEmbedderPolicy: false }));
+  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'"], imgSrc: ["'self'", 'blob:', 'data:'], mediaSrc:["'self'",'blob:'], connectSrc: ["'self'"], upgradeInsecureRequests: null } }, crossOriginEmbedderPolicy: false }));
   app.use(express.json({ limit: '200kb' }));
   const security = createSecurity(securityOptions ?? { password: process.env.APP_PASSWORD, origin: process.env.APP_ORIGIN, secureCookie: process.env.COOKIE_SECURE === 'true' });
   app.use((req, res, next) => {
@@ -158,16 +160,17 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if(JSON.stringify(config.androidDevice)!==JSON.stringify(updated.androidDevice)){delete queue.login.items.instagramNative;if(queue.login.items.instagram?.transport==='android')delete queue.login.items.instagram;}
     config = updated; queue.settings = config; await phoneTools.configure(config.androidDevice); if(config.androidDevice.type==='phone')await phoneTools.refresh(); queue.emit('change', queue.state()); res.json(config);
   });
-  const upload = multer({ dest: path.join(dataDir, 'incoming'), limits: { fileSize: 20 * 1024 * 1024, files: 10, fields: 0, parts: 10 }, fileFilter: (req, file, cb) => cb(['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype) ? null : new Error('Choose JPG, PNG, or WEBP images.'), true) });
+  const upload = multer({ dest: path.join(dataDir, 'incoming'), limits: { fileSize: 512 * 1024 * 1024, files: 10, fields: 0, parts: 10 }, fileFilter: (req, file, cb) => cb(acceptedUploadType(file)?null:new Error('Choose JPG, PNG, WEBP, H.264 MP4/MOV, or PDF files.'), true) });
   app.post('/api/upload', (req, res, next) => upload.array('images', 10)(req, res, error => { if (error) next(error); else next(); }), async (req, res) => {
     const created = [];
     try {
-      if (!req.files?.length) throw new Error('Choose at least one image.');
+      if (!req.files?.length) throw new Error('Choose at least one image, video, or PDF.');
       for (const file of req.files) {
-        const buffer = await fs.readFile(file.path), checked = await inspectImage(buffer), { metadata } = checked;
-        const id = randomUUID(), filename = `${id}.${metadata.format === 'jpeg' ? 'jpg' : metadata.format}`;
-        await fs.writeFile(path.join(dataDir, 'uploads', filename), buffer);
-        created.push({ id, filename, name: path.basename(file.originalname), size: buffer.length, width: metadata.width, height: metadata.height, originalSize: file.size, url: `/media/${filename}`, format: metadata.format, preservedOriginal: true, fileHash: checked.fileHash, metadata: checked.report });
+        const checked=await inspectUpload(file),id=randomUUID(),filename=`${id}.${checked.format==='jpeg'?'jpg':checked.format}`;
+        await fs.rename(file.path,path.join(dataDir,'uploads',filename));
+        let originalName=file.originalname;
+        if([...originalName].every(char=>char.codePointAt(0)<=255)){const utf8=Buffer.from(originalName,'latin1').toString('utf8');if(!utf8.includes('\uFFFD'))originalName=utf8;}
+        created.push({id,filename,name:path.basename(originalName.replace(/\\/g,'/')),originalSize:file.size,url:`/media/${filename}`,preservedOriginal:true,...checked});
       }
       media.push(...created);
       const mediaSnapshot = structuredClone(media);
@@ -182,6 +185,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.get('/api/media/:id/metadata', async (req, res) => {
     const item = media.find(m => m.id === req.params.id);
     if (!item) return res.status(404).json({ error: 'Image not found.' });
+    if(mediaKind(item)!=='image')return res.status(400).json({error:'Metadata cleaning is available for still images. Videos and PDFs are kept as uploaded.'});
     const checked = await inspectImage(await fs.readFile(path.join(dataDir, 'uploads', item.filename)));
     if (item.fileHash && checked.fileHash !== item.fileHash) throw new Error('The image changed after upload. Upload the original again.');
     item.metadata = checked.report;
@@ -190,6 +194,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/media/:id/clean', async (req, res) => {
     const original = media.find(m => m.id === req.params.id);
     if (!original) return res.status(404).json({ error: 'Image not found.' });
+    if(mediaKind(original)!=='image')return res.status(400).json({error:'Metadata cleaning is available for still images. Videos and PDFs are kept as uploaded.'});
     const buffer = await fs.readFile(path.join(dataDir, 'uploads', original.filename));
     if (original.fileHash && original.fileHash !== (await inspectImage(buffer)).fileHash) throw new Error('The image changed after upload. Upload the original again.');
     const cleaned = await cleanImage(buffer), id = randomUUID(), filename = `${id}.${cleaned.metadata.format === 'jpeg' ? 'jpg' : cleaned.metadata.format}`;
@@ -199,9 +204,9 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     res.status(201).json({ media: item });
   });
   const libraryFor = draft => {
-    if (!Array.isArray(draft?.mediaIds) || draft.mediaIds.length > 10 || new Set(draft.mediaIds).size !== draft.mediaIds.length) throw new Error('Choose up to 10 unique images.');
+    if (!Array.isArray(draft?.mediaIds) || draft.mediaIds.length > 10 || new Set(draft.mediaIds).size !== draft.mediaIds.length) throw new Error('Choose up to 10 unique media files.');
     const selectedMedia = draft.mediaIds.map(id => media.find(m => m.id === id));
-    if (selectedMedia.some(m => !m)) throw new Error('An image is no longer available. Upload it again.');
+    if (selectedMedia.some(m => !m)) throw new Error('A media file is no longer available. Upload it again.');
     const structureErrors = selectionErrors(draft);
     if (Object.keys(draft.mediaByPlatform || {}).some(id => !PLATFORMS.some(p => p.id === id))) structureErrors.push('Unknown destination image selection.');
     if (structureErrors.length) throw new Error(structureErrors.join('\n'));
@@ -276,6 +281,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     requireIdle();if(instagramWorker.busy)throw new Error('Close the existing music picker first.');
     const images=libraryFor({mediaIds:req.body.mediaIds});
     if(!images.length)throw new Error('Upload and select the Instagram images before choosing music.');
+    if(images.some(item=>mediaKind(item)!=='image'))throw new Error('The Instagram music picker is for photo posts. Reels use the audio in the uploaded video.');
     await verifyMediaIntegrity(images,dataDir);requireIdle();if(instagramWorker.busy)throw new Error('Close the existing music picker first.');
     try{const result=await instagramWorker.startPicker(config,images.map(image=>path.join(dataDir,'uploads',image.filename)));res.json(result);}
     finally{queue.emit('change',queue.state());}
@@ -341,7 +347,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.use((error, req, res, next) => {
     console.error(error.message);
     if (res.headersSent) return next(error);
-    res.status(error.status===409?409:error instanceof multer.MulterError ? 413 : 400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Each image must be 20 MB or smaller.' : error.message || 'The request could not be completed.' });
+    res.status(error.status===409?409:error.status===413||error instanceof multer.MulterError?413:400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Use images up to 20 MB, PDFs up to 100 MB, and videos up to 512 MB.' : error.message || 'The request could not be completed.' });
   });
   return { app, queue, phoneTools, browser, manualRecoveryHelp };
 }

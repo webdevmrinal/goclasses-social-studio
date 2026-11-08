@@ -1,12 +1,16 @@
 // Copyright (c) 2026 Mrinal. Local post previews; no requests to social platforms.
 import {lucidePaths} from './icons.js';
+import {mediaKind,mediaPostLabel} from '../shared/media-capabilities.js';
+import {mediaVisual,documentPreview,youtubePreviewTitle} from './media-preview.js';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const svg=name=>'<svg viewBox="0 0 24 24" aria-hidden="true">'+(lucidePaths[name]||lucidePaths.ellipsis||'<circle cx="12" cy="12" r="2"/>')+'</svg>';
 const safeLink=value=>{try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)?u.href:'';}catch{return '';}};
 const avatar='<span class="site-avatar" aria-hidden="true"><b>GO</b><small>CLASSES</small></span>';
 function gallery(images,kind){
  if(!images.length)return '';
- return '<div class="site-gallery '+kind+' count-'+images.length+'" aria-label="Selected photos in posting order">'+images.map((m,i)=>'<figure><img src="'+esc(m.url)+'" alt="'+esc(m.name)+'" loading="lazy"><span class="sr-only">Photo '+(i+1)+' of '+images.length+'</span></figure>').join('')+'</div>';
+ if(images.length===1&&mediaKind(images[0])==='document')return documentPreview(images[0],{label:kind==='grid'?'Document carousel':'PDF attachment'});
+ if(images.length===1&&mediaKind(images[0])==='video')return '<div class="site-video"><span class="site-video-label">Video</span>'+mediaVisual(images[0],{controls:true})+'</div>';
+ return '<div class="site-gallery '+kind+' count-'+images.length+'" aria-label="Selected media in posting order">'+images.map((m,i)=>'<figure>'+mediaVisual(m,{compact:mediaKind(m)==='image',controls:mediaKind(m)==='video'})+'<span class="sr-only">Attachment '+(i+1)+' of '+images.length+'</span></figure>').join('')+'</div>';
 }
 const actions=(items)=>'<div class="site-actions" aria-hidden="true">'+items.map(([icon,label])=>'<span>'+svg(icon)+(label?'<small>'+label+'</small>':'')+'</span>').join('')+'</div>';
 export function platformPostPreview({id,account,handle='',caption='',images=[],carousel='',route='',links=[]}){
@@ -14,13 +18,15 @@ export function platformPostPreview({id,account,handle='',caption='',images=[],c
  const identity=id==='instagram'?handle||account:account;
  const header='<div class="site-post-author">'+avatar+'<div><strong>'+esc(identity)+'</strong><small>'+(id==='x'?esc(handle?'@'+handle.replace(/^@/,''):'')+' · Just now':channel?'Channel update':id==='linkedin'?'Just now · Public':'Just now')+'</small></div><span class="site-more" aria-hidden="true">'+svg('ellipsis')+'</span></div>';
  const text='<div class="preview-caption site-caption">'+esc(caption)+(route?'<small class="site-route">'+esc(route)+'</small>':'')+'</div>';
- const media=['x','linkedin','telegram'].includes(id)?gallery(images,id==='telegram'?'album':'grid'):(images.length?'<div data-carousel-view="review-'+id+'">'+carousel+'</div>':'');
+ const video=images.length===1&&mediaKind(images[0])==='video';
+ const document=images.length===1&&mediaKind(images[0])==='document';
+ const media=video?'<div class="site-video '+(id==='instagram'?'site-reel':'')+'"><span class="site-video-label">'+esc(mediaPostLabel(id,images))+'</span>'+mediaVisual(images[0],{controls:true})+'</div>':document?documentPreview(images[0],{label:id==='linkedin'?'Document carousel':'PDF attachment'}):['x','linkedin','telegram'].includes(id)?gallery(images,id==='telegram'?'album':'grid'):(images.length?'<div data-carousel-view="review-'+id+'">'+carousel+'</div>':'');
  let content;
  if(dm)content='<div class="site-chat-title">'+avatar+'<strong>'+esc(handle||'Instagram')+'</strong>'+svg('phone')+'</div><div class="site-dm-body"><small>When someone comments</small><div class="site-dm-message">'+text+links.map(l=>'<a '+(safeLink(l.url)?'href="'+esc(safeLink(l.url))+'" target="_blank" rel="noopener noreferrer"':'aria-disabled="true"')+' class="site-dm-link">'+esc(l.label)+'</a>').join('')+'</div></div><div class="site-chat-input">Message…'+svg('smile')+'</div>';
  else if(channel)content='<div class="site-channel-title">'+svg('arrow-left')+avatar+'<div><strong>'+esc(account)+'</strong><small>Channel</small></div>'+svg('ellipsis-vertical')+'</div><div class="site-channel-body"><div class="site-channel-post">'+media+text+'<div class="site-message-time">Just now '+svg(id==='telegram'?'check-check':'check')+'</div></div></div><div class="site-chat-input">'+svg('plus')+'Channel update'+svg('mic')+'</div>';
  else if(id==='instagram')content=header+media+actions([['heart',''],['message-circle',''],['send',''],['bookmark','']])+text;
  else if(id==='x')content=header+text+media+actions([['message-circle',''],['repeat-2',''],['heart',''],['chart-no-axes-column',''],['share','']]);
  else if(id==='linkedin')content=header+text+media+actions([['thumbs-up','Like'],['message-square','Comment'],['repeat-2','Repost'],['send','Send']]);
- else content=header+text+media+actions([['thumbs-up',''],['thumbs-down',''],['message-square',''],['share-2','Share']]);
+ else content=header+(video?'<h3 class="site-video-title" data-youtube-preview-title>'+esc(youtubePreviewTitle(caption))+'</h3>':'')+text+media+actions([['thumbs-up',''],['thumbs-down',''],['message-square',''],['share-2','Share']]);
  return '<div class="site-preview site-'+id+'" data-site-preview="'+id+'"><div class="site-brand"><strong>'+esc(name)+'</strong><span>Preview</span></div>'+content+'</div>';
 }

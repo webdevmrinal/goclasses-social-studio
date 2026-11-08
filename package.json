@@ -55,15 +55,18 @@
     "test:recovery-practice": "node --test tests/recovery-practice.test.js tests/recovery-practice-api.test.js",
     "test:manual-help-ui": "node tests/manual-recovery-help-ui.js",
     "test:phone-guard": "node --test tests/phone-touch-guard.test.js tests/phone-touch-tools.test.js tests/phone-touch-tools-extra.test.js tests/phone-touch-api.test.js",
-    "test:phone-guard-ui": "node tests/phone-touch-ui.js"
+    "test:phone-guard-ui": "node tests/phone-touch-ui.js",
+    "test:media": "node --test tests/media-capabilities.test.js tests/media-previews.test.js tests/media-upload.test.js tests/media-posts.test.js tests/youtube-upload.test.js && node tests/channel-files-smoke.js && node tests/mixed-media-ui.js"
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.14.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
     "lucide-static": "^1.59.0",
     "multer": "^2.0.2",
+    "pdf-lib": "^1.17.1",
     "playwright": "^1.56.0",
     "sharp": "^0.35.5",
     "twitter-text": "^3.1.0"

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 // Channel UI only. No personal-chat lookup, Enter-to-send, or automatic retries.
 import { randomUUID } from 'node:crypto';
+import {channelFileSource,pinChannelFileInput,verifyChannelFileInput,verifyChannelVideo,releaseChannelFileInput} from './channel-files.js';
 import { captureWhatsAppOwnedDraft, releaseWhatsAppOwnedDraft, recoverWhatsAppOwnedDraft, collectWhatsAppDiscardControl } from './whatsapp-ai-recovery.js';
 import { whatsappChannelUrl } from '../../shared/whatsapp.js';
 import { navigate, wait, readCaption, pasteCaption, verifyCaption, waitForImages, preparedButton, finishPost, InterventionError, AccountMismatchError, ReadinessError, NetworkError } from './utils.js';
@@ -135,7 +136,7 @@ async function editOwnDraft(page, key, operation) {
   await verifyGuard(page, key); await page.evaluate(key => { window[key].editing = true; }, key);
   try { return await operation(); } finally { await page.evaluate(key => { if (window[key]) window[key].editing = false; }, key).catch(() => {}); }
 }
-async function uploadChannelPhoto(page, file) {
+async function uploadChannelPhoto(page, file, source) {
   const key = `__mrinalChannelUpload_${randomUUID().replaceAll('-', '')}`;
   // WhatsApp creates a detached, single-file input. Capture its native click,
   // then use Playwright's file setter: no Explorer dialog is opened or left behind.
@@ -156,7 +157,7 @@ async function uploadChannelPhoto(page, file) {
     await page.evaluate(key => { const state = window[key]; if (!state) return; if (HTMLInputElement.prototype.click === state.capture) HTMLInputElement.prototype.click = state.original; delete window[key]; }, key).catch(() => {});
   }
   if (!input) throw new Error('WhatsApp channel photo input was unavailable.');
-  try { await input.setInputFiles([file], { timeout: 60000 }); } finally { await input.dispose(); }
+  try { await input.setInputFiles([file], { timeout: 60000 }); return source ? await pinChannelFileInput(page,input,source) : undefined; } finally { await input.dispose(); }
 }
 async function discardOwnPreview(page,ctx,ownership) {
   if (!await collectWhatsAppDiscardControl(page)) await whatsappMediaPreview(page).getByRole('button', { name: 'Close', exact: true }).click();
@@ -178,11 +179,11 @@ async function clearOwnText(page, caption) {
   await editor.click(); await editor.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A'); await editor.press('Backspace');
   if ((await readCaption(editor)).trim()) throw attention('needs_attention', 'WhatsApp rehearsal text could not be cleared. Review the unsent draft before continuing.');
 }
-export async function confirmWhatsAppPublication({ page, expected, caption, baseline, hasImage, timeout = 60000, verifyContext = async () => {} }) {
+export async function confirmWhatsAppPublication({ page, expected, caption, baseline, hasImage, mediaKind=hasImage?'image':null, timeout = 60000, verifyContext = async () => {} }) {
   const end = Date.now() + timeout; let stableId, confirmations = 0;
   do {
     await verifyChannelSurface(page, expected); await verifyContext();
-    const candidates = await main(page).locator('[data-id]').evaluateAll((els, { previous, caption, hasImage }) => {
+    const candidates = await main(page).locator('[data-id]').evaluateAll((els, { previous, caption, mediaKind }) => {
       const plain = node => node.nodeType === Node.TEXT_NODE ? node.textContent : node.nodeName === 'IMG' ? node.getAttribute('alt') || '' : node.nodeName === 'BR' ? '\n' : [...node.childNodes].map(plain).join('') + (/^(P|DIV)$/.test(node.nodeName) ? '\n' : '');
       const normalized = text => text.replace(/\s+/gu, ' ').trim();
       return [...new Set(els.filter(el => {
@@ -194,9 +195,10 @@ export async function confirmWhatsAppPublication({ page, expected, caption, base
         const sent = [...meta.querySelectorAll('[aria-label]')].some(node => /^(sent|delivered|read)$/i.test(node.getAttribute('aria-label').trim())) || [...meta.querySelectorAll('svg title')].some(node => /^wds-ic-(delivered|read)$/.test(node.textContent));
         if (!sent) return false;
         const content = el.querySelector('[data-testid="image-caption selectable-text"]') || el.querySelector('[data-testid="selectable-text"]:not(img)');
-        return content && normalized(plain(content)) === normalized(caption) && (!hasImage || !!el.querySelector('[data-testid="image-thumb"]'));
+        const attachment=mediaKind==='video'?!!el.querySelector('video,[data-testid="video-thumb"],[data-testid="video-content"]'):mediaKind==='image'?!!el.querySelector('[data-testid="image-thumb"]'):true;
+        return content && normalized(plain(content)) === normalized(caption) && attachment;
       }).map(el => el.getAttribute('data-id')))];
-    }, { previous: baseline, caption, hasImage });
+    }, { previous: baseline, caption, mediaKind });
     if (candidates.length === 1) { confirmations = candidates[0] === stableId ? confirmations + 1 : 1; stableId = candidates[0]; if (confirmations >= 3) return { updateId: stableId, channelUrl: expected.channelUrl, channelName: expected.channelName, verifiedBy: 'sent_update', verifiedAt: new Date().toISOString() }; }
     else { stableId = undefined; confirmations = 0; }
     await wait(300);
@@ -205,27 +207,30 @@ export async function confirmWhatsAppPublication({ page, expected, caption, base
 }
 export async function prepareWhatsApp(ctx) {
   const { page, files, caption, config, step, snapshot } = ctx, expected = config.platforms.whatsapp;
-  if (files.length > 1) throw new Error('WhatsApp Channels currently accepts one image per update in this worker. Choose one image or run WhatsApp separately.');
+  const mediaKind=ctx.media?.[0]?.kind||'image',video=files.length&&mediaKind==='video';
+  if(files.length&&mediaKind==='document')throw new InterventionError('PDF upload is not available in this WhatsApp Channel worker. Choose Telegram or LinkedIn for this PDF. Nothing was sent.');
+  if (files.length > 1) throw new Error('Choose one image or video for this WhatsApp Channel update.');
+  const source=video?await channelFileSource(files[0],ctx.media?.[0],'video'):null;
   const channel = await openWhatsAppChannel({ ...ctx, requireEmpty: true });
   await snapshot('account-verified', main(page).getByTestId('conversation-header'));
   // Capture existing updates before uploading: a native optimistic draft must
   // never become part of the pre-publication baseline.
   const before = await main(page).locator('[data-id]').evaluateAll(els => els.map(el => el.getAttribute('data-id')));
   const guard = await installGuard(page, expected);
-  let editor, preview, result, publishedUpdateId, publication, ownedDraft;
+  let editor, preview, result, publishedUpdateId, publication, ownedDraft, inputProof, videoProof;
   const cleanupCtx={...ctx,verifyOwnedContext:()=>verifyGuard(page,guard),editContext:operation=>editOwnDraft(page,guard,operation)};
   try {
     if (files.length) {
-      await step('Preparing one image in the verified WhatsApp channel…');
-      await uploadChannelPhoto(page, files[0]);
+      await step(video?'Preparing the video in the verified WhatsApp channel...':'Preparing one image in the verified WhatsApp channel…');
+      inputProof=await uploadChannelPhoto(page, files[0],source);
       editor = photoEditor(page); await editor.waitFor({ state: 'visible', timeout: 60000 });
       preview = whatsappMediaPreview(page);
-      await waitForImages(page, preview.getByTestId('media-editor-canvas').locator('img'));
-      await snapshot('image-prepared', preview);
+      if(video)videoProof=await verifyChannelVideo(preview,source);else await waitForImages(page, preview.getByTestId('media-editor-canvas').locator('img'));
+      await snapshot(video?'video-prepared':'image-prepared', preview);
     } else { editor = compose(page); preview = main(page).locator('footer'); }
     await assertWhatsAppSession(page); await verifyGuard(page, guard);
     await editOwnDraft(page, guard, () => pasteCaption(page, editor, caption));
-    if(ctx.mode==='TEST') {
+    if(ctx.mode==='TEST'&&!video) {
       ownedDraft=await captureWhatsAppOwnedDraft({page,config,caption,hasImage:Boolean(files.length),ownership:{mode:'TEST',source:'current_test',runId:ctx.runId,channelName:channel.channelName,channelUrl:channel.channelUrl},verifyContext:()=>verifyGuard(page,guard)});
       if(ownedDraft)await ctx.recordOwnedDraft?.(ownedDraft);
     }
@@ -239,16 +244,17 @@ export async function prepareWhatsApp(ctx) {
       if (!files.length) await verifyChannelLink(page, expected);
       await verifyCaption(editor, caption); await preparedButton(page, send);
       if (files.length) {
-        if (await preview.getByRole('tab', { name: /^Open photo, / }).count() !== 1) throw new Error('WhatsApp attachment count changed. Nothing was sent.');
-        await waitForImages(page, preview.getByTestId('media-editor-canvas').locator('img'));
+        if (await preview.getByRole('tab', { name: video?/^Open video, /:/^Open photo, / }).count() !== 1) throw new Error('WhatsApp attachment count changed. Nothing was sent.');
+        if(video){await verifyChannelFileInput(page,inputProof);await verifyChannelVideo(preview,source,videoProof);}else await waitForImages(page, preview.getByTestId('media-editor-canvas').locator('img'));
       }
       await assertWhatsAppSession(page); await verifyGuard(page, guard);
     };
-    await ctx.recordPreparation?.({ ...channel, imageCount: files.length, textOnly: !files.length });
+    await ctx.recordPreparation?.({ ...channel, imageCount: video?0:files.length,videoCount:video?1:0,textOnly: !files.length });
     // Only IDs already visible in this channel are compared; chat history is not persisted.
     result = await finishPost({ ...ctx, preflight, snapshot: label => snapshot(label, label === 'published' && publishedUpdateId ? main(page).locator(`[data-id=${JSON.stringify(publishedUpdateId)}]`) : preview),
       publish: async () => {
         await assertWhatsAppSession(page); await verifyGuard(page, guard); await verifyCaption(editor, caption);
+        if(video){await verifyChannelFileInput(page,inputProof);await verifyChannelVideo(preview,source,videoProof);}
         await send.evaluate((button, key) => { window[key].sendButton = button; window[key].armed = true; }, guard);
         try {
           await send.click();
@@ -256,12 +262,13 @@ export async function prepareWhatsApp(ctx) {
         } finally { await page.evaluate(key => { if (window[key]) window[key].armed = false; }, guard).catch(() => {}); }
       },
       verify: async () => {
-        publication = await confirmWhatsAppPublication({ page, expected, caption, baseline: before, hasImage: Boolean(files.length), timeout: ctx.confirmationTimeout ?? 60000, verifyContext: () => verifyGuard(page, guard) });
+        publication = await confirmWhatsAppPublication({ page, expected, caption, baseline: before, hasImage: Boolean(files.length)&&!video,mediaKind:files.length?mediaKind:null, timeout: ctx.confirmationTimeout ?? 60000, verifyContext: () => verifyGuard(page, guard) });
         publishedUpdateId = publication.updateId;
       }
     });
     if (result === 'dry_run') {
       await verifyGuard(page, guard); await verifyCaption(editor, caption);
+      if(video){await verifyChannelFileInput(page,inputProof);await verifyChannelVideo(preview,source,videoProof);}
       if (files.length) await discardOwnPreview(page,cleanupCtx,ownedDraft);
       // WhatsApp can copy a discarded photo's caption back into the ordinary
       // update box. Clear it only when it is exactly our rehearsal text.
@@ -278,11 +285,13 @@ export async function prepareWhatsApp(ctx) {
         await verifyGuard(page, guard);
         const current = canonical(await readCaption(editor));
         if (!current || current === canonical(caption)) {
+          if(video){await verifyChannelFileInput(page,inputProof);await verifyChannelVideo(preview,source,videoProof);}
           if (files.length && await visible(editor)) { await discardOwnPreview(page,cleanupCtx,ownedDraft); await editOwnDraft(page, guard, () => clearOwnText(page, caption)); }
           else if (!files.length && current) await editOwnDraft(page, guard, () => clearOwnText(page, caption));
         }
       } catch { /* Changed identity or user-edited text is preserved for review. */ }
     }
     await removeGuard(page, guard);
+    await releaseChannelFileInput(page,inputProof);
   }
 }

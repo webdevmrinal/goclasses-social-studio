@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { mediaFor, selectionErrors } from './media.js';
+import {mediaKind,mediaSelectionErrors,mediaSupport} from './media-capabilities.js';
 import { INSTAGRAM_STORY, INSTAGRAM_MUSIC, instagramOptions, storyErrors, instagramHashtags } from './instagram.js';
 export const PLATFORMS = [
-  { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Feed post', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
-  { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company photo gallery', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10, textOnly: true },
+  { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Photo post or Reel', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
+  { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company post', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10, textOnly: true },
   { id: 'x', delimiter: 'X', name: 'X', detail: 'Timeline post', color: '#25272b', icon: 'x', limit: 280, maxImages: 4, textOnly: true },
   { id: 'youtubeDA', delimiter: 'YOUTUBE_DA', name: 'YouTube · GATE DA', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10, textOnly: true },
   { id: 'youtubeCS', delimiter: 'YOUTUBE_CS', name: 'YouTube · GATE CS', detail: 'Community post', color: '#e34c4b', icon: 'youtube', limit: 1500, maxImages: 10, textOnly: true },
@@ -47,8 +48,17 @@ export function validateDraft(draft, media, xLength = countCharacters) {
     if (typeof caption !== 'string' || !caption.trim()) errors.push(`${p.name}: add a caption.`);
     else if ((p.id === 'x' ? xLength(caption) : captionLength(p, caption)) > captionLimit(p, images.length)) errors.push(`${p.name}: caption exceeds ${captionLimit(p, images.length).toLocaleString()} characters${p.id === 'telegram' && images.length ? ' with images' : ''}.`);
     if(p.id==='instagram'&&instagramHashtags(caption).length>5)errors.push('Instagram: use 5 hashtags or fewer to avoid caption changes.');
-    if (p.id !== 'manychat' && !p.textOnly && !images.length) errors.push(`${p.name}: add at least one image.`);
-    if (p.id !== 'manychat' && images.length > p.maxImages) errors.push(`${p.name}: use ${p.maxImages} image${p.maxImages === 1 ? '' : 's'} or fewer.`);
+    if (p.id !== 'manychat') {
+      errors.push(...mediaSelectionErrors(p.id,images));
+      if (!p.textOnly && !images.length) errors.push(`${p.name}: add at least one image or video.`);
+      const explicitTextOnly=Object.hasOwn(draft.mediaByPlatform||{},p.id)&&Array.isArray(draft.mediaByPlatform[p.id])&&draft.mediaByPlatform[p.id].length===0;
+      if(!images.length&&media.length&&!explicitTextOnly){const unsupported=media.find(m=>!mediaSupport(p.id,m).supported);if(unsupported)errors.push(`${p.name}: ${mediaSupport(p.id,unsupported).reason}`);}
+      if(p.id==='instagram'&&images.some(m=>mediaKind(m)==='video')){
+        if(draft.instagram?.postingMethod==='android')errors.push('Instagram Reels: choose Web posting for video uploads.');
+        if(draft.instagram?.music?.enabled)errors.push('Instagram Reels use the audio in the uploaded video. Turn off the separate photo music step.');
+        if(selected.includes('instagramStory')||selected.includes('instagramMusic')||draft.instagram?.story?.enabled)errors.push('Instagram Reels: separate photo music and feed-to-Story steps cannot run with a video upload.');
+      }
+    }
   }
   if(selected.includes('instagramMusic')&&draft.instagram?.music?.enabled!==true)errors.push('Instagram music: enable music before retrying this step.');
   if(selected.some(id=>['instagram','instagramStory','instagramMusic'].includes(id))) {

@@ -1,12 +1,13 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
+import {defaultMediaFor,mediaKind} from './media-capabilities.js';
 export const TEXT_ONLY_PLATFORMS = Object.freeze(['linkedin', 'x', 'youtubeDA', 'youtubeCS', 'whatsapp', 'telegram']);
 
 export function mediaIdsFor(draft, id) {
   return Object.hasOwn(draft.mediaByPlatform || {}, id) ? draft.mediaByPlatform[id] : (id==='whatsapp'?(draft.mediaIds||[]).slice(0,1):draft.mediaIds||[]);
 }
 export function mediaFor(draft, media, id) {
-  if(id==='instagramMusic')return [];
-  if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) return id==='whatsapp'?media.slice(0,1):media;
+  if(['instagramMusic','instagramStory','manychat'].includes(id))return [];
+  if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) return media.every(item=>mediaKind(item)==='image')?(id==='whatsapp'?media.slice(0,1):media):defaultMediaFor(id,media);
   return Array.isArray(draft.mediaByPlatform[id]) ? draft.mediaByPlatform[id].map(key => media.find(item => item.id === key)).filter(Boolean) : [];
 }
 export function selectionErrors(draft) {
@@ -26,7 +27,7 @@ export function updateDraftMedia(draft,ids,replacements={}){
 }
 export function setTextOnly(draft,id,enabled){draft.textOnlyPlatforms=(draft.textOnlyPlatforms||[]).filter(key=>key!==id);if(enabled&&TEXT_ONLY_PLATFORMS.includes(id))draft.textOnlyPlatforms.push(id);}
 export function metadataNeedsReview(draft,media){
- const ids=new Set((draft.selected||[]).filter(id=>!['manychat','instagramStory','instagramMusic'].includes(id)).flatMap(id=>mediaFor(draft,media,id).map(m=>m.id)));
+ const ids=new Set((draft.selected||[]).filter(id=>!['manychat','instagramStory','instagramMusic'].includes(id)).flatMap(id=>mediaFor(draft,media,id).filter(m=>mediaKind(m)==='image').map(m=>m.id)));
  return media.filter(m=>ids.has(m.id)&&!m.verification&&(m.metadata?.credentials||m.metadata?.aiMarkers?.length));
 }
 export function metadataConsentValid(images,consent={}){return images.every(image=>consent?.[image.id]===(image.fileHash||image.id));}

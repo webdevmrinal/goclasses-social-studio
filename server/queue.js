@@ -12,6 +12,7 @@ import { assertNoChallenge, InterventionError, NetworkError } from './automation
 import { replyBatch, validateManychatDraft, instagramPostUrl, manychatPublicationSource } from '../shared/manychat.js';
 import { verifyMediaIntegrity } from './image-metadata.js';
 import { mediaFor } from '../shared/media.js';
+import {mediaKind} from '../shared/media-capabilities.js';
 import { usesInstagramAndroid, instagramNeedsMusicEdit } from '../shared/instagram.js';
 import { publicationUrl } from './automation/publication.js';
 
@@ -19,6 +20,7 @@ const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'aw
 export class Queue extends EventEmitter {
   constructor(browser, { runner = automate, loginChecker = checkLogin, dataDir = DATA, deadline, instagramWorker } = {}) {
     super(); this.recoverySave=Promise.resolve();this.recoveryLog=new RecoveryStatus(value=>{this.emit('change',this.state());this.recoverySave=this.recoverySave.catch(()=>{}).then(()=>atomicWrite(path.join(this.dataDir,'recovery-latest.json'),value));this.recoverySave.catch(()=>{});});this.recoveryTaskActive=false; this.interventions=new NativeInterventions(this); this.instagramWorker=instagramWorker; this.browser = browser; this.runner = runner; this.loginChecker = loginChecker; this.dataDir = dataDir; this.deadline = deadline ?? 120000; this.nativeDeadline=deadline??300000; this.channelDeadline = deadline ?? 240000;
+    this.videoDeadline=deadline??15*60*1000;
     this.runs = []; this.login = { running: false, items: {} }; this.persistChain = Promise.resolve(); this.processing = false;
     this.manualLogin = null;
     browser.on?.('manual-login-change', () => {
@@ -281,7 +283,7 @@ export class Queue extends EventEmitter {
           const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
           await verifyMediaIntegrity(destinationMedia, this.dataDir);
           if(!native)page = await this.browser.page(item.id);
-          const deadline = native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
+          const deadline = destinationMedia.some(media=>mediaKind(media)==='video')?this.videoDeadline:native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
           let armDeadline;
           const timeout = new Promise((_, reject) => {
             armDeadline=()=>{clearTimeout(timer);timer=setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page?.close().catch(() => {}); }, deadline);};
@@ -289,7 +291,7 @@ export class Queue extends EventEmitter {
           });
           task = this.runner({
             page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
-            mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
+            media:destinationMedia, mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
             navigationAI:this.navigationAI,ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:item.id==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,recordOwnedDraft:async proof=>{item.preparation={...item.preparation,ownedDraft:proof};await this.change();},reportRecovery:event=>this.reportRecovery(run,item,event),canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),canRecoverConnection:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing','waiting_for_input'].includes(run.status),
             manychat: run.manychat, instagramCaption: run.captions.instagram,
             instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,

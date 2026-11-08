@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mrinal. Telegram Web K channel automation; TEST never sends.
 import { randomUUID } from 'node:crypto';
+import {channelFileSource,channelFilePayload,pinChannelFileInput,verifyChannelFileInput,releaseChannelFileInput,verifyChannelVideo,pinTelegramDocument,verifyTelegramDocument,releaseTelegramDocument} from './channel-files.js';
 import { telegramPhotoSources, verifyTelegramPhotos } from './telegram-photos.js';
 import { telegramChannelUrl, telegramHandle, telegramWebUrl } from '../../shared/telegram.js';
 import { navigate, wait, readCaption, pasteCaption, verifyCaption, preparedButton, uploadImages, finishPost, InterventionError, AccountMismatchError, ReadinessError, NetworkError } from './utils.js';
@@ -123,9 +124,9 @@ async function editOwnDraft(page, key, action) {
   await verifyTelegramGuard(page, key); await page.evaluate(key => { window[key].editing = true; }, key);
   try { return await action(); } finally { await page.evaluate(key => { if (window[key]) window[key].editing = false; }, key).catch(() => {}); }
 }
-async function cleanupOwnDraft(page, key, caption, hasImages, editor, sources, evidence) {
+async function cleanupOwnDraft(page, key, caption, hasImages, editor, sources, evidence, verifyAttachment) {
   await verifyTelegramGuard(page, key);
-  if (hasImages && await visible(photo(page))) await verifyTelegramPhotos(photo(page), sources, evidence);
+  if (hasImages && await visible(photo(page))) {if(verifyAttachment)await verifyAttachment();else await verifyTelegramPhotos(photo(page), sources, evidence);}
   const text = canonical(await readCaption(editor));
   if (text && text !== canonical(caption)) throw attention('needs_attention', 'Your changed Telegram draft was preserved for review.');
   if (hasImages && await visible(photo(page))) await photo(page).getByRole('button', { name: 'Close', exact: true }).click();
@@ -142,19 +143,22 @@ export async function telegramRecords(page, peerId) {
     body?.querySelectorAll('.time,reactions-element,.reactions,.clearfix').forEach(e => e.remove());
     const text = n => n.nodeType === Node.TEXT_NODE ? n.textContent : n.nodeName === 'IMG' ? n.getAttribute('alt') || '' : n.nodeName === 'BR' ? '\n' : [...n.childNodes].map(text).join('');
     const count = e.querySelectorAll('.album-item[data-mid]').length || (e.classList.contains('photo') ? 1 : 0);
+    const videoCount=e.classList.contains('video')||e.querySelector('video,.video-player,.video-time')?1:0;
+    const documents=[...e.querySelectorAll('.document:not(.audio) .document-name')].map(el=>el.textContent.trim());
     // Web K gives optimistic posts fractional IDs even after its sending
     // indicator disappears. Only the integer server ID can expose a permalink.
     const serverId = /^[1-9][0-9]*$/.test(e.dataset.mid || '') && Number.isSafeInteger(Number(e.dataset.mid));
-    return { mid: e.dataset.mid, timestamp: Number(e.dataset.timestamp), text: body ? text(body) : '', count, pending: /is-sending|is-pending|is-error|is-failed/.test(e.className) || !!e.querySelector('.time-icon-clock,.time-icon-sending,.time-icon-error'), native: !!e.querySelector('.time-inner[title]') && serverId };
+    body?.querySelectorAll('.document,.video-time,.video-player').forEach(el=>el.remove());
+    return { mid: e.dataset.mid, timestamp: Number(e.dataset.timestamp), text: body ? text(body) : '', count,videoCount,documents, pending: /is-sending|is-pending|is-error|is-failed/.test(e.className) || !!e.querySelector('.time-icon-clock,.time-icon-sending,.time-icon-error'), native: !!e.querySelector('.time-inner[title]') && serverId };
   }), peerId);
 }
-export async function confirmTelegramPublication({ page, expected, channel, caption, baseline, imageCount, startedAt, verifyContext = async () => {}, timeout = 60000 }) {
+export async function confirmTelegramPublication({ page, expected, channel, caption, baseline, imageCount,mediaKind='image',documentName, startedAt, verifyContext = async () => {}, timeout = 60000 }) {
   const end = Date.now() + timeout, previous = new Set(baseline.map(r => r.mid)); let stable, hits = 0;
   const norm = text => canonical(text).replace(/\s+/gu, ' ');
   do {
     await telegramSurface(page, expected, channel.peerId); await verifyContext();
     const records = await telegramRecords(page, channel.peerId);
-    const matches = records.filter(r => !previous.has(r.mid) && r.timestamp >= Math.floor(startedAt / 1000) - 2 && r.native && !r.pending && r.count === imageCount && norm(r.text) === norm(caption));
+    const matches = records.filter(r => !previous.has(r.mid) && r.timestamp >= Math.floor(startedAt / 1000) - 2 && r.native && !r.pending && (mediaKind==='video'?r.videoCount===1:mediaKind==='document'?r.documents.length===1&&r.documents[0]===documentName:r.count===imageCount) && norm(r.text) === norm(caption));
     if (matches.length === 1) {
       hits = stable === matches[0].mid ? hits + 1 : 1; stable = matches[0].mid;
       if (hits >= 3) {
@@ -178,34 +182,47 @@ export async function confirmTelegramPublication({ page, expected, channel, capt
 }
 export async function prepareTelegram(ctx) {
   const { page, config, files, caption, step, snapshot } = ctx, expected = config.platforms.telegram;
+  const mediaKind=ctx.media?.[0]?.kind||'image',attachment=files.length&&mediaKind!=='image';
+  if(attachment&&files.length!==1)throw new InterventionError('Choose one video or PDF for this Telegram update. Nothing was sent.');
+  if(attachment&&!['video','document'].includes(mediaKind))throw new InterventionError('Telegram does not support this attachment type in this worker.');
+  if(mediaKind==='video'&&(ctx.media?.[0]?.format==='mov'||files[0]?.toLowerCase().endsWith('.mov')))throw new InterventionError('Use an MP4 video for Telegram. Telegram converts MOV files before preview, so this worker cannot verify the original video unchanged. Nothing was sent.');
   if (!caption?.trim() || caption.length > (files.length ? 1024 : 4096) || files.length > 10) throw new Error('Telegram needs a caption within its text/photo limit and no more than 10 photos.');
+  const source=attachment?await channelFileSource(files[0],ctx.media?.[0],mediaKind):null;
   const channel = await openTelegramChannel({ ...ctx, requireEmpty: true });
   await snapshot('account-verified', pane(page).locator('.topbar'));
-  const baseline = await telegramRecords(page, channel.peerId), sources = await telegramPhotoSources(files);
+  const baseline = await telegramRecords(page, channel.peerId), sources = attachment?[]:await telegramPhotoSources(files);
   const guard = await installTelegramGuard(page, channel);
-  let editor, preview, status, publication, startedAt, evidence, cleanupDone = false;
+  let editor, preview, status, publication, startedAt, evidence,inputProof,documentProof, cleanupDone = false;
+  const verifyAttachment=async()=>{if(!files.length)return;if(mediaKind==='document')await verifyTelegramDocument(page,photo(page),source,documentProof);else if(mediaKind==='video'){await verifyChannelFileInput(page,inputProof);await verifyChannelVideo(photo(page),source,evidence);}else await verifyTelegramPhotos(photo(page),sources,evidence);};
   try {
     if (files.length) {
       await pane(page).locator('.chat-input-main').getByRole('button', { name: 'Attach', exact: true }).click();
-      await uploadImages(page, files, step, { trigger: page.locator('.btn-menu.active').getByRole('menuitem', { name: 'Photo or Video', exact: true }) });
+      const trigger=page.locator('.btn-menu.active').getByRole('menuitem', { name: mediaKind==='document'?'Document':'Photo or Video', exact: true });
+      if(attachment){
+        await step(mediaKind==='document'?'Uploading the PDF to the verified Telegram channel...':'Uploading the video to the verified Telegram channel...');
+        const [chooser]=await Promise.all([page.waitForEvent('filechooser',{timeout:30000}),trigger.click()]);
+        await chooser.setFiles([channelFilePayload(source)],{timeout:120000});
+        inputProof=await pinChannelFileInput(page,chooser.element(),source);
+      }else await uploadImages(page, files, step, {trigger});
       await photo(page).waitFor({ state: 'visible', timeout: 60000 });
       preview = photo(page).locator('[role="dialog"]'); editor = preview.locator('[data-chat-input-editor="tiptap"][contenteditable="true"]');
-      evidence = await verifyTelegramPhotos(photo(page), sources); await snapshot('album-prepared', preview);
+      if(mediaKind==='document')documentProof=await pinTelegramDocument(photo(page),source,inputProof);else if(mediaKind==='video')evidence=await verifyChannelVideo(photo(page),source);else evidence=await verifyTelegramPhotos(photo(page), sources);
+      await snapshot(attachment?mediaKind==='document'?'document-prepared':'video-prepared':'album-prepared', preview);
     } else { editor = editorFor(page); preview = pane(page).locator('.chat-input-main .rows-wrapper-wrapper'); }
     await editOwnDraft(page, guard, () => pasteCaption(page, editor, caption));
     const send = files.length ? preview.getByRole('button', { name: 'Send', exact: true }) : pane(page).locator('.chat-input-main').getByRole('button', { name: 'Send', exact: true });
     const preflight = async () => {
       await telegramSurface(page, expected, channel.peerId); await verifyTelegramGuard(page, guard);
-      if (files.length) await verifyTelegramPhotos(photo(page), sources, evidence); else await verifyPublicLink(page, expected, channel.peerId);
+      if (files.length) await verifyAttachment(); else await verifyPublicLink(page, expected, channel.peerId);
       if (await page.locator('.popup.active').count() !== (files.length ? 1 : 0)) throw attention('needs_attention', 'Telegram has an unexpected dialog. Nothing was sent.');
       await verifyCaption(editor, caption); await preparedButton(page, send);
       await verifyTelegramGuard(page, guard);
     };
-    await ctx.recordPreparation?.({ ...channel, imageCount: files.length, textOnly: !files.length });
+    await ctx.recordPreparation?.({ ...channel, imageCount:attachment?0:files.length,videoCount:mediaKind==='video'?files.length:0,documentCount:mediaKind==='document'?files.length:0,...(mediaKind==='document'?{documentName:source.name}:{}),textOnly: !files.length });
     status = await finishPost({ ...ctx, preflight, snapshot: label => snapshot(label, label === 'published' && publication ? pane(page).locator('[data-mid="' + publication.nativeMessageId + '"]').first() : preview),
       publish: async () => {
         await verifyTelegramGuard(page, guard); await telegramSurface(page, expected, channel.peerId); await verifyCaption(editor, caption);
-        if (files.length) await verifyTelegramPhotos(photo(page), sources, evidence);
+        if (files.length) await verifyAttachment();
         startedAt = Date.now();
         await send.evaluate((button, key) => { window[key].sendButton = button; window[key].armed = true; }, guard);
         try {
@@ -213,12 +230,13 @@ export async function prepareTelegram(ctx) {
           if (!await page.evaluate(key => window[key]?.submitted === true, guard)) throw attention('needs_attention', 'Telegram blocked Send because the target or draft changed.');
         } finally { await page.evaluate(key => { if (window[key]) window[key].armed = false; }, guard).catch(() => {}); }
       },
-      verify: async () => { publication = await confirmTelegramPublication({ page, expected, channel, caption, baseline, imageCount: files.length, startedAt, verifyContext: () => verifyTelegramGuard(page, guard), timeout: ctx.confirmationTimeout ?? 60000 }); }
+      verify: async () => { publication = await confirmTelegramPublication({ page, expected, channel, caption, baseline, imageCount: attachment?0:files.length,mediaKind,documentName:source?.name, startedAt, verifyContext: () => verifyTelegramGuard(page, guard), timeout: ctx.confirmationTimeout ?? 60000 }); }
     });
-    if (status === 'dry_run') { await cleanupOwnDraft(page, guard, caption, !!files.length, editor, sources, evidence); cleanupDone = true; await step('TEST complete · Send and Enter were blocked. Only the rehearsal draft was cleared.'); }
+    if (status === 'dry_run') { await cleanupOwnDraft(page, guard, caption, !!files.length, editor, sources, evidence,verifyAttachment); cleanupDone = true; await step('TEST complete · Send and Enter were blocked. Only the rehearsal draft was cleared.'); }
     return { status, ...(publication ? { publication } : {}) };
   } finally {
-    if (ctx.mode !== 'LIVE' && !cleanupDone && editor) try { await cleanupOwnDraft(page, guard, caption, !!files.length, editor, sources, evidence); } catch { /* Preserve changed human drafts and unknown targets. */ }
+    if (ctx.mode !== 'LIVE' && !cleanupDone && editor) try { await cleanupOwnDraft(page, guard, caption, !!files.length, editor, sources, evidence,verifyAttachment); } catch { /* Preserve changed human drafts and unknown targets. */ }
     await removeGuard(page, guard);
+    await releaseChannelFileInput(page,inputProof);await releaseTelegramDocument(page,documentProof);
   }
 }

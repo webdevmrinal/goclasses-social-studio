@@ -2,6 +2,7 @@
 // Container edits only: image payloads and colour-management data are retained.
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import sharp from 'sharp';
@@ -143,10 +144,10 @@ export async function cleanImage(buffer) {
 export async function verifyMediaIntegrity(media, dataDir) {
   for (const item of media) {
     if (!item.fileHash) continue; // Older versions stored optimized JPGs without a source hash.
-    const buffer = await fs.readFile(path.join(dataDir, 'uploads', item.filename));
-    if (sha256(buffer) !== item.fileHash) throw new Error(`${item.name}: the image changed after review. Upload it again.`);
+    const file=path.join(dataDir,'uploads',item.filename),hash=crypto.createHash('sha256');for await(const part of createReadStream(file))hash.update(part);
+    if (hash.digest('hex') !== item.fileHash) throw new Error(`${item.name}: the media file changed after review. Upload it again.`);
     if (item.verification) {
-      const checked = await inspectImage(buffer);
+      const checked = await inspectImage(await fs.readFile(file));
       if (checked.report.credentials || checked.report.aiMarkers.length) throw new Error(`${item.name}: embedded origin metadata reappeared. Review the image again.`);
     }
   }

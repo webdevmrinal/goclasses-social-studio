@@ -11,6 +11,8 @@ import { checkTelegramLogin, prepareTelegram } from './telegram.js';
 import { publicationBaseline, confirmPublication } from './publication.js';
 import { prepareXSubmit } from './x-submit.js';
 import { recoverablePage } from './recoverable-page.js';
+import { selectedMediaKind, prepareInstagramReel, prepareLinkedInVideo, prepareLinkedInDocument, prepareXVideo } from './media-posts.js';
+import { prepareYouTubeUpload } from './youtube-upload.js';
 
 export function destinationUrl(id, config) {
   const p = config.platforms[id];
@@ -148,6 +150,10 @@ export async function checkLogin({ page, id, config, step, requireEmpty, ai, own
 }
 
 export async function automate(ctx) {
+  const kind=selectedMediaKind(ctx);
+  if(ctx.media?.some(media=>(media.kind||'image')!==kind))throw new InterventionError('This destination contains mixed media types. Choose images, one video, or one PDF before continuing.');
+  if(kind==='document'&&!['linkedin','whatsapp','telegram'].includes(ctx.id))throw new InterventionError('This destination does not support PDF document uploads. Nothing was published.');
+  if(kind==='video'&&usesInstagramAndroid(ctx.instagram,ctx.id))throw new InterventionError('Video/Reel uploads use the Web route. Choose Web for this video before continuing.');
   if(ctx.page&&ctx.navigationAI?.state().automatic)ctx={...ctx,page:recoverablePage(ctx.page,{ai:ctx.navigationAI,platform:ctx.id.startsWith('youtube')?'youtube':ctx.id==='instagram'?'instagram_web':ctx.id,signal:ctx.signal,step:ctx.step,reportRecovery:ctx.reportRecovery,canRecover:ctx.canRecoverNavigation})};
   if(usesInstagramAndroid(ctx.instagram,ctx.id)){
     if(!ctx.instagramWorker)throw new InterventionError('The Android Instagram worker is unavailable.');
@@ -168,6 +174,14 @@ export async function automate(ctx) {
   }
   await snapshot('account-verified');
   if (id === 'manychat') return prepareManychat(ctx);
+  if(kind==='video'){
+    if(id==='instagram')return prepareInstagramReel(ctx);
+    if(id==='linkedin')return prepareLinkedInVideo(ctx);
+    if(id==='x')return prepareXVideo(ctx);
+    if(id.startsWith('youtube'))return prepareYouTubeUpload(ctx);
+    throw new InterventionError('This destination does not support video uploads. Nothing was published.');
+  }
+  if(kind==='document'&&id==='linkedin')return prepareLinkedInDocument(ctx);
   if (id === 'instagram') return instagram(ctx);
   if (id === 'linkedin') return linkedin(ctx);
   if (id === 'x') return x(ctx);

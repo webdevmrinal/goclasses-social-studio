@@ -1,6 +1,6 @@
 # GO Classes Social Studio
 
-Created by **Mrinal**. A responsive, Apple-inspired workspace for preparing and posting images and captions to Instagram, a LinkedIn company page, X, two YouTube communities, WhatsApp and Telegram Channels, and a new ManyChat comment-to-DM automation for each post.
+Created by **Mrinal**. A responsive workspace for preparing images, videos/Reels, PDFs and captions for Instagram, a LinkedIn company page, X, two YouTube channels, WhatsApp and Telegram Channels, and ManyChat comment-to-DM automations. Each destination accepts only its supported attachment types.
 
 ## Start on Windows or macOS
 
@@ -56,7 +56,7 @@ Connections is prefilled with **GO Classes for GATE CSE/DA** and its verified pu
 
 A run containing WhatsApp checks its linked session, exact channel name, unique public channel link, admin update composer and unsent drafts **before any destination runs**, and checks again at WhatsApp's turn. It searches only the Channels drawer. It never uses personal-chat search or a personal message composer. A missing or ambiguous channel, mismatched link, existing media selection or unsent text draft pauses for review. It preserves existing drafts.
 
-Add `=====WHATSAPP=====` to imported captions. WhatsApp supports text-only updates or **one image with a caption** in this worker, based on the signed-in channel uploader inspected during development. The app rejects additional images instead of splitting a draft into several updates or dropping images. Its 1,024-character caption cap is a conservative workspace limit. Choose one image in the WhatsApp tab independently of the carousel for other platforms, or clear its selection for text only.
+Add `=====WHATSAPP=====` to imported captions. This worker supports text-only channel updates, **one image**, or **one video up to 64 MiB**, with a caption of up to 1,024 characters. Choose the file independently in the WhatsApp tab. Additional or mixed attachments are blocked. PDF upload is unavailable in this WhatsApp Channel worker; use LinkedIn or Telegram for a PDF. This restriction describes the implemented worker route, rather than all WhatsApp clients or account features.
 
 TEST prepares the native channel composer, verifies its caption and attachment, and captures only the channel header or prepared update. Send and Enter-to-send are blocked during preparation. TEST never clicks Send; it discards its own media selection and clears any caption WhatsApp copies back into the update box only if it exactly matches the rehearsal text. Changed or human-written drafts are preserved for review. Private chat lists, full WhatsApp page HTML and QR codes are not captured in Activity.
 
@@ -68,7 +68,7 @@ YouTube confirmation opens one fresh, owned channel-feed tab when the original f
 
 Connections is prefilled with **GO Classes · @goclasses_cse**, [t.me/goclasses_cse](https://t.me/goclasses_cse). This is the broadcast channel; the discussion group in its description is a different destination. Sign in yourself at **Telegram Web K** on the worker using Telegram’s QR/phone flow, then use **Open & check**. The app reuses one Telegram tab and refuses multiple worker Telegram tabs or an unsupported Web client.
 
-Add **=====TELEGRAM=====** to the caption import. Existing six-section imports still work; both channel sections are optional, and a missing section clears its previous imported caption. A selected Telegram destination needs its own caption. Its visual tab supports text only, one photo, or an ordered album of up to **10 photos**, with independent image selection, ordering, scrolling and previews. Text-only updates allow 4,096 UTF-16 units; photo captions allow 1,024. These are standard workspace limits; a larger Premium allowance is not assumed. [Telegram documents albums of up to 10 items](https://telegram.org/blog/albums-saved-messages).
+Add **=====TELEGRAM=====** to the caption import. Both channel sections are optional; a missing section clears its previous imported caption. A selected Telegram destination needs its own caption. Choose text only, an ordered album of up to **10 photos**, **one MP4 video**, or **one PDF**, independently of the other destinations. Text-only updates allow 4,096 UTF-16 units; attachment captions allow 1,024. Telegram's MOV conversion changes the preview bytes, so this worker requires MP4 to verify the reviewed video unchanged. The worker uses the upload limits below and does not assume Premium allowances. See [Telegram's file-sharing FAQ](https://telegram.org/faq) and [photo albums](https://telegram.org/blog/albums-saved-messages).
 
 Before any destination in a run containing Telegram prepares or publishes, the worker freshly checks its session, exact channel name, the public **Link** row in **Channel Info**, and an editable **Broadcast** composer. A personal conversation, discussion group, read-only channel, existing draft, reply/edit/forward helper or media dialog pauses the run. The same channel and composer are checked again at Telegram’s turn.
 
@@ -183,7 +183,7 @@ The app refuses shared binding or a configured public origin without a password 
 
 The workspace keeps secondary controls collapsed: account fields and manual sign-in are under **Settings**, the full per-platform photo picker and order controls are under **Choose photos**, and per-file restore and download are under **File actions**. Images show a visible **AI metadata / Origin metadata / Clean** chip, and detected origin metadata gets a direct **Clean metadata** action. **View report** opens the full metadata report. Compact image tiles have labeled **Move earlier**, **Move later** and **Remove** buttons. Run screenshots and full diagnostics are under **Details**. Posting errors, excluded destinations, retry actions and LIVE confirmation remain visible. Mrinal’s attribution stays in the sidebar and mobile header.
 
-Upload up to ten originals to the shared library, then open each platform tab on the right. The tab shows its own photos, numbered order, caption and blocking issues. Use the **×** on a selected thumbnail to remove that photo only from this destination, or **Remove all** for an empty selection. **Choose photos** lets you add photos back and reorder them; **Use all** restores the library order when it fits the platform limit. WhatsApp’s **Use first photo** restores its default single photo. LinkedIn, X, both YouTube communities, WhatsApp and Telegram support caption-only posts; Instagram still needs a photo. Empty selections survive reloads and changes to the shared library. The shared library expands with the page without an internal scrollbar, and long filenames fit within compact tiles. The destination thumbnail strip still scrolls for many photos. Metadata cleaning, restoring originals and Undo preserve destination assignments.
+Upload up to ten originals to the shared library, then open each platform tab on the right. Each tab shows its selected media, order, caption and blocking issues. Video previews have playback controls; PDFs have document previews and filenames. Use **×** on a thumbnail to remove that file only from this destination, or **Remove all** for an empty selection. The picker lets you restore files and reorder photo galleries; unavailable formats show their reason. A video or PDF replaces that destination's photo gallery. LinkedIn, X, YouTube Community, WhatsApp and Telegram also support explicitly chosen caption-only posts; Instagram needs a photo or Reel video. Empty selections survive reloads and library changes. The shared library expands without an internal scrollbar, and long filenames fit compact tiles. Metadata cleaning, restoring originals and Undo preserve destination assignments.
 
 The appearance button in the top bar cycles **System → Dark → Light → System**. Its preference persists on the device; System follows the OS. Transitions respect reduced-motion settings. UI icons are a small, locally served Lucide set; see [third-party notices](THIRD_PARTY_NOTICES.md). Regenerate them with `npm run icons:build` after updating the icon package. Mrinal attribution remains in the interface and source.
 
@@ -205,6 +205,31 @@ The appearance button in the top bar cycles **System → Dark → Light → Syst
 - Closing the workspace tab does not stop the queue. Reopen it from any authorized device to reconnect.
 
 ## Content and storage
+
+### Videos, Reels and PDFs
+
+Upload JPG/PNG/WEBP images, H.264 **MP4/MOV** videos with optional AAC audio, or **PDF** documents. The worker checks actual file contents, codecs, dimensions, duration and size; renaming an unsupported file does not make it supported. FFprobe is bundled for Windows and macOS. Original uploads are retained without automatic video transcoding or PDF-to-image conversion. Image metadata cleaning applies only to still images.
+
+| Destination | Photos | Video route | PDF route |
+| --- | --- | --- | --- |
+| Instagram | Up to 10 | One Reel through Instagram Web, using the video's audio | Unavailable |
+| LinkedIn company page | Up to 10 | One native video | One document post |
+| X | Up to 4 | One native video | Unavailable |
+| YouTube DA / CS | Up to 10 in Community | One YouTube Studio upload; eligible videos become Shorts | Unavailable |
+| WhatsApp Channel | One | One native channel video | Unavailable in this worker |
+| Telegram Channel | Up to 10 | One MP4 video | One downloadable document |
+
+ManyChat references the verified Instagram post; it does not directly upload the video or PDF. Separate Android music and shared-post Story steps currently apply to photo posts. For a Reel, use the audio already in the video.
+
+The shared upload limits are **20 MiB per image, 512 MiB per video and 100 MiB per PDF**, with at most ten files in a draft. A destination can use a photo gallery, one video, or one PDF; mixed attachment types cannot be combined in one post. Unsupported selections are blocked before publication and show the reason in Compose/Preview. Supported files can be selected separately for each destination.
+
+Video limits in this worker are **3 seconds–15 minutes for Instagram and LinkedIn**, **0.5–140 seconds for X**, and no more than **15 minutes** for the other video routes. WhatsApp Channel videos are additionally capped at **64 MiB**. LinkedIn also checks its supported dimensions/aspect ratio and the **300-page** document limit. These worker limits do not assume paid account upgrades or every platform's largest possible upload.
+
+For YouTube video uploads, the first nonempty caption line supplies the title (up to 100 characters), and the complete caption supplies the description. A square or vertical video up to **180 seconds** is shown as a Short; other accepted videos use the regular video route. Images continue through Community. TEST never clicks Publish, but YouTube can retain the uploaded file as a private draft in Studio; review it there before another rehearsal or LIVE upload. A new native receipt/permalink must confirm the exact LIVE upload; final publication actions are never repeated automatically.
+
+Platform references: [Instagram Reels](https://help.instagram.com/225190788256708), [LinkedIn video](https://www.linkedin.com/help/linkedin/answer/a7174587) and [documents](https://www.linkedin.com/help/linkedin/answer/a519831), [X video](https://help.x.com/en/using-x/x-videos), [YouTube uploads](https://support.google.com/youtube/answer/57407) and [three-minute Shorts](https://support.google.com/youtube/answer/15424877), [Telegram files](https://telegram.org/faq), and [WhatsApp Channel updates](https://faq.whatsapp.com/265055289421317/). New video/PDF adapter coverage uses intercepted offline browser fixtures; it does not claim an authenticated LIVE publication rehearsal for those formats.
+
+### Existing photo galleries
 
 Still JPG, PNG, and WEBP files up to 20 MB are accepted, with at most 10 images per draft. New uploads are stored byte for byte in their original format: no resize, brightness change, contrast change, flattening, or JPEG conversion. Each platform tab has its own image selection and publishing order. New drafts initially inherit the shared library; an explicit selection stays independent when new files are uploaded. X accepts up to four images; the workspace supports up to ten for Instagram, LinkedIn and each YouTube community, and one for WhatsApp. A destination over its image-count limit is excluded until fixed; the others can still be reviewed and run. The app never silently truncates a selection. LinkedIn uses a photo gallery; Instagram and YouTube support multi-image posts. Native platform cropping/layout, file size limits and format support still apply. See [X's photo guide](https://help.x.com/en/using-x/posting-gifs-and-pictures), [LinkedIn's gallery guide](https://www.linkedin.com/help/linkedin/answer/a527229/?lang=en), and [YouTube's post guide](https://support.google.com/youtube/answer/7124474?hl=en).
 

@@ -20,3 +20,7 @@
 /* Keep post text legible above workspace-level preview theme rules. */
 .site-preview .carousel-strip:has(.carousel-item:only-child){display:none}
 :root[data-theme] .site-preview .site-caption{color:var(--post-ink)}
+
+/* Video and document post shapes show the exact selected file, with local controls. */
+.site-video{position:relative;min-width:0;background:#101318}.site-video>video{display:block;width:100%;max-height:520px;object-fit:contain;background:#101318}.site-video-label{position:absolute;top:12px;left:12px;padding:5px 8px;border-radius:6px;font-size:10px;font-weight:600;background:#000a;color:#fff;z-index:1;pointer-events:none}.site-reel>video{aspect-ratio:9/16;max-height:570px}.site-reel{max-width:340px;margin:auto}.site-preview .document-preview{background:var(--post-line);color:var(--post-ink)}.site-preview .document-art{background:var(--post-bg);color:var(--post-ink);min-height:200px}.site-preview .document-kind,.site-preview .document-art small{color:var(--post-muted)}.site-preview .document-preview .button{color:var(--post-ink);border-color:var(--post-muted)}.site-preview .site-gallery video{width:100%;height:100%;object-fit:contain;background:#101318}.site-preview .site-gallery .document-art{height:100%;min-height:160px}
+.site-preview .site-video-title{margin:0;padding:0 15px 10px;color:var(--post-ink);font-size:15px;font-weight:700;line-height:1.4;overflow-wrap:anywhere}
