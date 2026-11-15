@@ -55,7 +55,7 @@ function transportBudget({run,signal,timeout=20000,deadline=Infinity}){
 }
 async function resolveSelectedPhone(value,{run=runAdb,signal,timeout=20000,deadline=Infinity,onEvent,reconnect=false}={}){
  const device=androidDevice(value);
- if(device.type!=='phone')throw new Error('Phone recovery requires the explicitly selected physical phone.');
+ if(!device.serial)throw new Error('Phone recovery requires the explicitly selected physical phone.');
  const budget=transportBudget({run,signal,timeout,deadline}),command=budget.command;
  const report=async(phase,message)=>{await budget.wait(()=>onEvent?.({phase,message}));};
  const expected=device.transport==='wifi'?device.hardwareSerial:device.serial;

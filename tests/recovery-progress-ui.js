@@ -56,7 +56,7 @@ try{
  await panel.locator('.recovery-log summary').click();assert.match(await panel.locator('.recovery-events').innerText(),/Calling Gemini/);assert.match(await panel.locator('.recovery-events').innerText(),/Click the Discard button/);
  assert.doesNotMatch(await page.locator('body').innerText(),/FIXTURE_SECRET/);
  // Completed recovery remains accessible when away from Activity.
- await page.getByRole('button',{name:'Connections',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Open recovery progress',exact:true}).count(),1);
+ await page.getByRole('button',{name:'Connections',exact:true}).click();await page.locator('[data-design-utility="status"]').click();assert.equal(await page.getByRole('button',{name:'Open recovery progress',exact:true}).count(),1);
  await page.getByRole('button',{name:'Open recovery progress',exact:true}).click();await panel.waitFor();
  // Unavailable models pause honestly, with the actual cooldown and no fake progress.
  await update('paused','Gemini is busy. Continue manually, or try again after the cooldown.',{status:'paused',fix:'',action:''});
@@ -66,9 +66,9 @@ try{
  snapshot.recovery.events=[{phase:'proposed',source:'cache',model:'gemini-fixture',message:'Using cached guidance. No API call was made.',fix:'Close the permitted stale dialog.'}];snapshot.recovery.phase='proposed';snapshot.recovery.fix='Close the permitted stale dialog.';await emit();
  assert.equal(await panel.locator('[data-recovery-api]').innerText(),'Cached Gemini fix · gemini-fixture (no new API call)');
  // A state update preserves the user's scroll position instead of pulling to the last run.
- snapshot.runs=Array.from({length:18},(_,index)=>({id:'old-'+index,createdAt:new Date().toISOString(),mode:'TEST',status:'completed',captions:{x:'Older fixture run '+index},items:[{id:'x',status:'dry_run',screenshots:[]}]}));await emit();await page.evaluate(()=>scrollTo(0,650));const y=await page.evaluate(()=>scrollY);assert(y>0);
- snapshot.recovery.action='Inspect the allowed control';await emit();assert(Math.abs(await page.evaluate(()=>scrollY)-y)<=1,'Recovery updates preserve scroll position');
- await page.setViewportSize({width:390,height:844});await page.evaluate(()=>scrollTo(0,0));assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Recovery fits a phone viewport');
+ snapshot.runs=Array.from({length:18},(_,index)=>({id:'old-'+index,createdAt:new Date().toISOString(),mode:'TEST',status:'completed',captions:{x:'Older fixture run '+index},items:[{id:'x',status:'dry_run',screenshots:[]}]}));await emit();await page.locator('#main').evaluate(el=>el.scrollTop=650);const y=await page.locator('#main').evaluate(el=>el.scrollTop);assert(y>0);
+ snapshot.recovery.action='Inspect the allowed control';await emit();assert(Math.abs(await page.locator('#main').evaluate(el=>el.scrollTop)-y)<=1,'Recovery updates preserve scroll position');
+ await page.setViewportSize({width:390,height:844});await page.locator('#main').evaluate(el=>el.scrollTop=0);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Recovery fits a phone viewport');
  await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});assert(await panel.isVisible());
  await fs.mkdir(path.join(root,'test-results'),{recursive:true});await page.screenshot({path:path.join(root,'test-results/recovery-progress-ui.png'),fullPage:false});
  assert.deepEqual(pageErrors,[]);assert.deepEqual(external,[]);assert.deepEqual(unexpected,[]);assert.equal(practiceCalls,1);

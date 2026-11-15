@@ -199,7 +199,7 @@ export async function discardStory(s) {
     }else if(has(nodes,'gallery_title_text')||has(nodes,'row_feed_button_share')){
       await s.request('/back','POST',{});
     }else{
-      // Back/Discard can briefly expose a blank transition on slow emulators.
+      // Back/Discard can briefly expose a blank transition on slow phones.
       // Wait for a recognized surface; never click or dismiss an unknown one.
       await s.until(next=>['music_browser_container','music_editor_cancel_button','music_editor_done_button','link_sticker_list_cancel_button','share_story_button','direct_external_share_container_view','gallery_title_text','row_feed_button_share'].some(id=>has(next,id))||has(next,'story_share_controls_action_bar')&&has(next,'cancel_button')||has(next,'profile_header_create_button')&&has(next,'profile_tab')||next.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('igds_alert_dialog_primary_button')&&n.text==='Discard'),'The native screen changed. Close the owned rehearsal before continuing; unknown drafts were preserved.',10000);
       continue;

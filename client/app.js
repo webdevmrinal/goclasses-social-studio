@@ -2,11 +2,10 @@
 import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, captionLength } from '/shared/platforms.js';
 import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
 import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
-import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup } from './instagram.js';
+import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup, storyLayoutChoices } from './instagram.js';
 import {storyPresetLayout,selectedStoryPreset} from '/shared/story-layouts.js';
 import {phoneToolbar,phoneRows,phoneSetup,phoneGuardControl} from './phone-controls.js';
 import {syncStorySelection,setDestinationSelected,dependencyRequirements,resolveDependencyLinks,skipDestination} from '/shared/dependencies.js';
-import {platformPostPreview} from './platform-previews.js';
 import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
 import { freshDraft, workspaceFingerprint, reconcilePublishedDraft, restartChoices, draftFromRun } from '/shared/draft.js';
 import { mediaFor, updateDraftMedia, setTextOnly, metadataNeedsReview, TEXT_ONLY_PLATFORMS } from '/shared/media.js';
@@ -17,6 +16,8 @@ import '/vendor/webawesome/components/button-group/button-group.js';
 import '/vendor/webawesome/components/tooltip/tooltip.js';
 import '/vendor/webawesome/components/progress-bar/progress-bar.js';
 import { lucidePaths } from './icons.js';
+import {workspaceShell,composeMarkup,editorMarkup,reviewMarkup,actionbarMarkup,activityHeading,utility} from './workspace-design.js';
+import {nativePreview,brandLogo,designIcon} from './native-preview.js';
 
 const paths = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
@@ -74,8 +75,8 @@ draft.instagram.story.enabled=draft.instagram.story.enabled===true;draft.instagr
 try{draft.instagram.story.layout=storyLayout(draft.instagram.story.layout);}catch{draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);}
 draft.selected=draft.selected.filter(id=>id==='instagramStory'||draft.captions[id]?.trim());syncStorySelection(draft);
 let instagramTab='feed';
-let theme = 'system';
-try { theme = localStorage.getItem('mrinal.social-studio.theme') || 'system'; } catch { /* Use system appearance. */ }
+let theme = 'dark';
+try { theme = localStorage.getItem('mrinal.social-studio.theme') || 'dark'; } catch { /* Use system appearance. */ }
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
 function applyTheme() { document.documentElement.dataset.theme = theme === 'system' ? systemTheme.matches ? 'dark' : 'light' : theme; document.documentElement.classList.toggle('wa-dark', document.documentElement.dataset.theme === 'dark'); document.documentElement.classList.toggle('wa-light', document.documentElement.dataset.theme === 'light'); document.querySelector('meta[name="theme-color"]').content = document.documentElement.dataset.theme === 'dark' ? '#101318' : '#f7f8fa'; }
 applyTheme(); systemTheme.addEventListener('change', applyTheme);
@@ -85,6 +86,7 @@ let musicPickerUi=null;
 let musicPickerOpen=false,androidProgressDialog=null,androidProgressKey='',androidProgressDismissed='';
 let recoveryHelpDialog=null,recoveryHelpSelection=null,recoveryHelpContext=null,recoveryHelpRequestId=null,recoveryHelpLoading=false,recoveryHelpSubmitting=false,recoveryHelpGeneration=0,recoveryHelpError='';
 let captionTab = 'instagram';
+const design={utility:'',mobilePreview:false,device:'phone',channelEditor:false,more:false,modeMenu:false,reviewId:'instagram',activityFilter:'all',activitySearch:''};
 let mode = 'TEST'; // Never restore LIVE mode from storage or server state.
 let connected = false;
 let events, pollTimer, saveTimer, sending = false, uploading = false, reviewValid = false;
@@ -119,6 +121,8 @@ function renderReadiness() {
   document.querySelectorAll('[data-destination-status]').forEach(el => { const id = el.dataset.destinationStatus; el.textContent = !draft.selected.includes(id) ? '' : ready[id]?.ready ? 'Ready' : 'Needs attention'; el.classList.toggle('error-text', draft.selected.includes(id) && !ready[id]?.ready); });
   document.querySelectorAll('[data-editor-readiness]').forEach(el => { const item = ready[el.dataset.editorReadiness]; if(!item)return; el.className = 'destination-readiness blocked'; el.hidden = item.ready || !draft.selected.includes(el.dataset.editorReadiness) || el.dataset.editorReadiness==='instagram'&&instagramTab==='story'; el.innerHTML = item.ready ? '' : `${icon('info')}<div><strong>Fix before running</strong><ul>${item.errors.map(error => `<li>${escape(error)}</li>`).join('')}</ul></div>`; });
   document.querySelectorAll('[data-caption-tab]').forEach(el => { el.classList.toggle('needs-fix', draft.selected.includes(el.dataset.captionTab) && !ready[el.dataset.captionTab]?.ready); });
+  const issues=document.querySelector('[data-review-issues]');if(issues)issues.innerHTML=designReviewIssues();
+  document.querySelectorAll('[data-preview-destination]').forEach(row=>{const signal=row.querySelector('.signal'),id=row.dataset.previewDestination;if(signal){signal.classList.toggle('warn',!ready[id]?.ready);signal.innerHTML=designIcon(ready[id]?.ready?'circle-check':'circle-alert');}});
   const bar = document.querySelector('.actionbar'); if (bar) { const host = document.createElement('div'); host.innerHTML = actionbar(); bar.replaceWith(host.firstElementChild); }
 }
 async function refreshReadiness() {
@@ -172,22 +176,32 @@ function saveDraft() {
     catch { const el = document.querySelector('#draft-status'); if (el) el.textContent = 'Unsaved · export to keep'; }
   }, 350);
 }
-function shell() {
-  const titles = { settings: 'Connections', compose: 'Compose', preview: 'Preview', activity: 'Activity' };
-  app.innerHTML = `<div class="shell">
-    <aside class="sidebar" aria-label="Workspace sidebar">
-      <div class="brand"><div class="brand-mark" aria-hidden="true">G</div><div class="brand-text"><div class="brand-title">Social Studio<span class="hidden"> by Mrinal</span></div><div class="brand-caption">GO CLASSES</div></div></div>
-
-      <nav class="navigation" aria-label="Main navigation">${Object.entries(titles).map(([id, title]) => `<button class="nav-item ${view === id ? 'active' : ''}" data-view="${id}" ${view === id ? 'aria-current="page"' : ''} title="${title}">${icon(id === 'preview' ? 'eye' : id === 'settings' ? 'settings' : id)}<span>${title}</span></button>`).join('')}</nav>
-      <div class="sidebar-bottom"><div class="credit"><div class="avatar">M</div><div><p>Created by</p><strong>Mrinal</strong></div></div></div>
-    </aside>
-    <div class="content"><header class="topbar"><div class="mobile-brand"><div class="brand-mark">G</div><span>Social Studio<small class="mobile-author">Created by Mrinal</small></span></div><div class="top-actions"><button class="button subtle small ask-gemini" data-ask-gemini aria-label="Ask Gemini" title="Get fresh recovery steps from Gemini">${icon('sparkle')}<span>Ask Gemini</span></button><div data-recovery-shortcut>${recoveryShortcut()}</div><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div><button class="button subtle small" data-action="updates" title="App updates">${icon('refresh')}<span data-update-label>${state.update?.available?'Update now':'Updates'}</span></button><button class="button subtle round theme-toggle" data-action="theme" aria-label="Appearance: ${theme}. Change theme" title="Appearance: ${theme}">${icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun')}</button><div class="connection"><span class="dot ${connected ? '' : 'offline'}"></span><span id="connection-label">${connected ? 'Worker connected' : 'Reconnecting to worker'}</span></div>${state.protected ? `<button class="button subtle round" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>` : ''}</div></header>
-    <div data-manual-login-host>${manualLoginNotice()}</div><main id="main" class="main" tabindex="-1">${page()}</main></div>
-    ${actionbar()}
-  </div>`;
-  bindPage(); renderReadiness(); renderAndroidProgress(); updateWorkerControls();
-  centerCaptionTab();
+function designContext(){
+ return {design,view,draft,captionTab,instagramTab,mode,connected,phone:state.phone,update:state.update,protected:state.protected,platforms:PLATFORMS,config:state.config,verified:verifiedDestinations().length,busy:workerBusy(),sending,uploading,cleaning:cleaningMedia,reviewValid,reviewDraft,activeRun:activeRun(),
+  expanded:id=>disclosureExpansion.get(id)||false,manualLogin:manualLoginNotice,phoneTools:()=>phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false),recoveryShortcut,
+  destination:platform,account:accountLabel,ready:readiness,runnable:runnableIds,media:platformMedia,composerMedia,mediaFacts,mediaThumb:m=>mediaVisual(m,{compact:true,className:'media-thumb'}),mediaEditor:destinationMediaEditor,assetRow,undoMedia:lastMediaOrder,
+  captionReviewBanner:()=>captionReviewBanner(reviewDraft||draft),captionLength,captionLimit,isReel:instagramVideo(),editor:captionEditor,musicControl:()=>musicControl(draft.instagram,workerBusy()),postingControl:()=>postingMethodControl(draft.instagram,workerBusy(),state.config),manychatOptions,storyLinks:()=>storyLinks(draft.captions),storyChoices:()=>storyLayoutChoices({options:draft.instagram,images:platformMedia('instagram'),busy:workerBusy()}),storyPreview:latestStoryPreview(),preview:designPreview,blockedReview:designReviewIssues};
 }
+function designPreview(id,editable=false,device=design.device){
+ const p=platform(id)||platform('instagram');
+ const identity=state.config?.platforms[id==='instagramStory'?'instagram':id];
+ return nativePreview({id,account:identity?.channelName||identity?.companyName||(id==='x'?'GO Classes':accountLabel(p)),handle:state.config?.platforms[id==='instagramStory'?'instagram':id]?.handle||'',caption:draft.captions[id]||'',media:platformMedia(id),device,index:platformPreviewIndex['design'+id]||0,storyHtml:id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle,editable}):'',links:id==='manychat'?currentManychatLinks():[]});
+}
+function designReviewIssues(){
+ const ready=readiness(),id=design.reviewId,errors=ready[id]?.errors||[];
+ return (draft.selected.includes(id)&&errors.length?'<div class="notice review-issue"><div><b>'+escape(platform(id)?.name)+' needs attention</b>'+errors.map(error=>'<p>'+escape(error)+'</p>').join('')+'<button class="text-button" data-fix-destination="'+id+'">Edit destination</button></div></div>':'')+(id==='manychat'?manychatReview():'');
+}
+function refreshDesignPreview(){
+ const target=document.querySelector('[data-design-preview]');if(!target)return;const id=target.dataset.designPreview;
+ target.innerHTML=designPreview(id,view==='compose'&&id==='instagramStory');bindStoryGestures();
+}
+function shell() {
+ const scroll=document.querySelector('#main')?.scrollTop||0,form=document.querySelector('#settings-form'),edits=form?.dataset.dirty==='true'?[...form.querySelectorAll('[data-edited="true"]')].map(input=>({name:input.name,value:input.value})):[];
+ app.innerHTML=workspaceShell(designContext(),page(),actionbar());
+ document.querySelector('#main').scrollTop=scroll;
+ bindPage();const current=document.querySelector('#settings-form');if(current&&edits.length){current.dataset.dirty='true';for(const edit of edits){const input=[...current.elements].find(input=>input.name===edit.name);if(input){input.value=edit.value;input.dataset.edited='true';}}}renderReadiness();renderAndroidProgress();updateWorkerControls();centerCaptionTab();
+}
+
 function centerCaptionTab() {
   const tab = document.querySelector(`[data-caption-tab="${captionTab}"]`), tabs = document.querySelector('.caption-tabs');
   if (tab && tabs) tabs.scrollLeft += tab.getBoundingClientRect().left - tabs.getBoundingClientRect().left - tabs.clientWidth / 2 + tab.clientWidth / 2;
@@ -201,24 +215,10 @@ function page() {
   return composePage();
 }
 function footer() { return ''; }
-function composePage() {
-  const media = composerMedia();
-  mediaPreviewIndex = Math.max(0, Math.min(mediaPreviewIndex, media.length - 1));
-  const heroImage = media[mediaPreviewIndex];
-  return `<div class="hero compose-hero"><div class="title-row"><h1>New post</h1><small id="draft-status" class="save-status">Saved</small></div><div class="hero-actions"><button class="button small" data-action="fresh-workspace" aria-label="Fresh start" title="Clear this draft for a fresh start" ${workerBusy()||uploading?'disabled':''}>${icon('refresh')}<span>Fresh start</span></button><button class="button subtle" data-action="export" title="Export captions">${icon('download')}<span>Export</span></button><button class="button" data-action="import" title="Import all captions">${icon('upload')}<span>Import captions</span></button></div></div>
-    ${mode === 'LIVE' ? liveBanner() : ''}
-    <section aria-labelledby="destinations-title"><div class="section-heading"><h2 id="destinations-title">Destinations</h2><small>${draft.selected.length} action${draft.selected.length===1?'':'s'} selected</small></div>
-    <div class="destination-grid">${PLATFORMS.map(p => `<button class="destination ${draft.selected.includes(p.id) ? 'selected' : ''}" data-destination="${p.id}" aria-pressed="${draft.selected.includes(p.id)}" title="${p.name}: ${p.detail}">${platformIcon(p)}<span class="check">${icon('check')}</span><span class="destination-name">${escape(p.name.replace(' · GATE ', ' · '))}</span><span class="destination-status" data-destination-status="${p.id}"></span></button>`).join('')}</div>${draft.selected.includes('instagramStory')?`<div class="selected-story-pill" data-selected-story>${icon('instagram')}<span>Story included</span><button class="text-button" data-skip-destination="instagramStory" ${workerBusy()?'disabled':''}>Skip Story ${icon('close')}</button></div>`:''}</section>
-
-    <div class="composer-grid"><section class="panel media-panel" aria-label="Media upload"><div class="panel-label">Media <small>${media.length ? `${media.length} file${media.length === 1 ? '' : 's'}` : 'Photos, videos &amp; PDFs'}</small></div>
-      <label class="dropzone ${heroImage ? 'has-preview' : ''}" id="dropzone" tabindex="0" role="button" aria-label="Upload photos, videos or PDFs"><input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,application/pdf,.mp4,.mov,.pdf" multiple hidden ${uploading ? 'disabled' : ''}>${heroImage ? `${mediaVisual(heroImage,{id:'uploaded-preview',className:'uploaded-preview'+(mediaKind(heroImage)==='document'?' document-art':''),alt:'Preview: '+heroImage.name})}<span class="media-preview-caption">${mediaPreviewIndex + 1} of ${media.length} · ${uploading ? 'Uploading…' : 'Add media'}</span>${metadataChip(heroImage)}${heroImage.pending ? '<span class="uploading-badge" role="status">Uploading · preview ready</span>' : ''}` : `<span class="upload-art">${icon('image')}</span><strong>Drop or choose media</strong><p>Photos · MP4 / MOV videos · PDFs</p>`}</label>
-      <div class="asset-list" aria-label="Shared media library">${media.map(assetRow).join('')}</div>
-      ${lastMediaOrder ? '<button class="button small" data-undo-media>Undo image change</button>' : ''}
-      ${media.length ? `<div class="media-footer"><small>${media.length > 1 ? 'Drag to reorder' : ''}</small>${media.some(item=>mediaKind(item)==='image')?'<button class="text-button" data-metadata-help>About metadata</button>':''}</div>` : ''}</section>
-    <section class="panel caption-panel" aria-label="Platform captions"><div class="caption-tabs" role="tablist" aria-label="Caption destination">${PLATFORMS.map(p => `<button class="caption-tab ${captionTab === p.id ? 'active' : ''}" id="tab-${p.id}" role="tab" aria-controls="editor-${p.id}" aria-selected="${captionTab === p.id}" tabindex="${captionTab === p.id ? 0 : -1}" data-caption-tab="${p.id}">${icon(p.icon)}${p.id === 'youtubeDA' ? 'YT · DA' : p.id === 'youtubeCS' ? 'YT · CS' : p.name}</button>`).join('')}</div>
-    ${PLATFORMS.map(p => captionEditor(p)).join('')}</section></div>
-    ${footer()}`;
+function composePage(){
+ return '<input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,application/pdf,.mp4,.mov,.pdf" multiple hidden '+(uploading?'disabled':'')+'>'+composeMarkup(designContext());
 }
+
 function metadataChip(m){
   if(mediaKind(m)!=='image')return `<span class="metadata-chip file-type-chip" title="${m.pending?'Uploading file':'Original file preserved'}">${icon(mediaKind(m)==='video'?'play':'file-text')} ${mediaTypeLabel(m)}</span>`;
   const ai=Boolean(m.metadata?.aiMarkers?.length),origin=ai||m.metadata?.credentials;
@@ -279,18 +279,8 @@ function destinationMediaEditor(p) {
   const kind=images.length?mediaKind(images[0]):'image',selectionLabel=kind==='video'?(p.id==='instagram'?'Reel video':'Video'):kind==='document'?'PDF document':images.length+' '+(images.length===1?'photo':'photos'),inheritLabel=nonPhotos?'Use supported':p.id==='whatsapp'?'Use first photo':'Use all',selectionErrors=mediaSelectionErrors(p.id,images);
   return `<section class="destination-media" aria-label="${escape(p.name)} media"><div data-carousel-view="editor-${p.id}">${mediaCarousel(p,images)}</div><div class="destination-image-actions"><span>${selectionLabel}${kind==='image'?' selected':''}</span><div><button class="button subtle small" data-platform-media-action="${p.id}" data-selection-action="inherit" ${!defaults.length||(!nonPhotos&&p.id!=='whatsapp'&&all.length>p.maxImages)?'disabled':''}>${inheritLabel}</button><button class="button small" data-platform-media-action="${p.id}" data-selection-action="clear" ${!images.length?'disabled':''}>Remove all</button></div></div>${selectionErrors.length?`<p class="media-selection-error error-text">${selectionErrors.map(escape).join(' ')}</p>`:''}${disclosure('images-'+p.id,(nonPhotos?'Choose media':'Choose photos')+' · '+images.length+'/'+(kind==='image'?p.maxImages:1),picker,images.length>p.maxImages,'image-options')}</section>`;
 }
-function captionEditor(p) {
-  const text = draft.captions[p.id] || '';
-  const reel=p.id==='instagram'&&instagramVideo();
-  const count = captionLength(p, text), limit = captionLimit(p, platformMedia(p.id).length);
-  return `<div class="caption-body ${captionTab !== p.id ? 'hidden' : ''}" id="editor-${p.id}" role="tabpanel" aria-labelledby="tab-${p.id}">
-    <div class="caption-toolbar"><div class="caption-account">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div></div><div class="caption-action-group"><button class="button small subtle" data-only-destination="${p.id}" ${workerBusy()?'disabled':''} title="Select only ${escape(p.name)}">Only this</button>${p.id !== 'instagram' ? `<button class="button subtle small" data-copy-instagram="${p.id}" title="Copy caption from Instagram">${icon('copy')}<span>From Instagram</span></button>` : ''}</div></div>
-    <div data-editor-readiness="${p.id}"></div>${p.id==='instagram'?reel?'<div class="reel-route-notice" data-reel-route><strong>Reel · Web</strong><p>Uses the audio in your video. Separate music and Story steps are available for photo posts.</p></div>':instagramTabs(instagramTab)+`<div data-ig-panel="feed" class="${instagramTab!=='feed'?'hidden':''}">`+postingMethodControl(draft.instagram,workerBusy(),state.config):''}${destinationMediaEditor(p)}
-    <label class="editor-label" for="caption-${p.id}">${p.id === 'manychat' ? 'DM text' : 'Post caption'}</label>
-    <textarea class="caption-editor" id="caption-${p.id}" data-caption="${p.id}" placeholder="${p.id === 'manychat' ? 'Write your DM…' : 'Write a caption…'}" spellcheck="true">${escape(text)}</textarea>
-    <div class="caption-bottom"><span></span><span id="count-${p.id}" class="${count > limit||p.id==='instagram'&&instagramHashtags(text).length>5 ? 'error-text' : ''}">${p.id==='instagram'?instagramHashtags(text).length+' / 5 hashtags &middot; ':''}${count.toLocaleString()} / ${limit.toLocaleString()}${p.id === 'x' ? ' *' : ''}</span></div>
-    ${p.id==='instagram'&&!reel?musicControl(draft.instagram,workerBusy())+'</div>'+storyEditor({options:draft.instagram,images:platformMedia('instagram'),caption:text,handle:state.config?.platforms.instagram.handle,tab:instagramTab,busy:workerBusy(),captions:draft.captions,preview:latestStoryPreview(),testMode:mode==='TEST'}):''}${p.id === 'x' ? '<p class="caption-hint">Link and Unicode counts are checked before running.</p>' : ''}${p.id.startsWith('youtube')&&platformMedia(p.id).some(media=>mediaKind(media)==='video')?`<p class="caption-hint" data-youtube-upload-note><strong>Public · Not made for kids</strong><br>First caption line becomes the title.${mode==='TEST'?' TEST may leave a private draft.':''}</p>`:''}${p.id === 'manychat' ? manychatOptions() : ''}</div>`;
-}
+function captionEditor(p){return editorMarkup(p,designContext());}
+
 const nextManychatReplies = () => state.manychatNextReplies || replyBatch(state.config?.platforms.manychat.replyMessages);
 const currentManychatLinks = () => manychatLinks(draft.manychat, draft.captions.manychat);
 function manychatLinkFields() {
@@ -331,23 +321,9 @@ function preparedAutomation(item) {
 }
 
 function liveBanner() { return `<div class="live-banner">${icon('info')} Public posts · confirm with <strong>POST</strong> before publishing.</div>`; }
-function actionbar() {
-  if (view === 'settings' || view === 'activity') return '';
-  const busy = workerBusy() || sending || uploading || Boolean(cleaningMedia);
-  const eligible = runnableIds();
-  return `<div class="actionbar ${mode === 'LIVE' ? 'live-bar' : ''}"><div class="mode-info"><wa-button-group class="mode-switch" label="Publishing mode"><span id="test-mode-hint"><button class="${mode === 'TEST' ? 'active' : ''}" id="test-mode" data-mode="TEST" aria-pressed="${mode === 'TEST'}">TEST MODE</button></span><span id="live-mode-hint"><button class="${mode === 'LIVE' ? 'active live' : ''}" id="live-mode" data-mode="LIVE" aria-pressed="${mode === 'LIVE'}">LIVE</button></span></wa-button-group><wa-tooltip for="test-mode-hint">Prepare and review. Nothing is sent.</wa-tooltip><wa-tooltip for="live-mode-hint">Publish only after review and confirmation for this run.</wa-tooltip><div class="mode-copy ${mode === 'LIVE' ? 'live' : ''}"><small>${mode === 'TEST' ? 'Nothing will be published' : 'Public publishing'}</small></div></div><div class="action-buttons"><span class="run-readiness-count">${eligible.length} ready${draft.selected.length > eligible.length ? ` · ${draft.selected.length - eligible.length} excluded` : ''}</span><button class="button subtle" data-action="logins" ${busy ? 'disabled' : ''}>${icon('lock')} Check logins</button>${view === 'compose' ? `<button class="button primary" data-action="preview" ${uploading ? 'disabled' : ''}>Preview posts ${icon('arrow')}</button>` : `<button class="button ${mode === 'LIVE' ? 'danger' : 'primary'}" data-action="run" ${busy || !reviewValid || !reviewDraft?.selected.length || reviewDraft.selected.some(id => !readiness()[id]?.ready) ? 'disabled' : ''}>${icon('play')} ${sending ? 'Starting…' : mode === 'LIVE' ? 'Publish selected' : 'Run test'}</button>`}</div></div>`;
-}
-function previewPage() {
-  const ready = readiness(), images = selectedMedia();
-  return `<div class="hero"><div><h1>Review posts</h1></div><div class="hero-actions"><button class="button" data-view="compose">${icon('compose')}<span>Keep editing</span></button></div></div>${mode === 'LIVE' ? liveBanner() : ''}${captionReviewBanner(reviewDraft||draft)}<div class="review-summary"><span><strong>${reviewDraft?.selected.length || 0}</strong> included · ${draft.selected.length - (reviewDraft?.selected.length || 0)} excluded</span><span title="Final layout and cropping vary by platform.">Content preview</span></div><div class="preview-grid">${DESTINATIONS.filter(p => draft.selected.includes(p.id)).map(p => {
-    const images = platformMedia(p.id), caption = draft.captions[p.id] || '';
-    const valid = ready[p.id].ready;
-    const song=draft.instagram.music.source==='manual'?'Choose on device':(draft.instagram.music.source==='details'?draft.instagram.music.reference:draft.instagram.music.selection)?.title||'Song details';
-    const route=p.id==='instagram'?(instagramVideo()?'Reel · Web · Original audio':instagramMethod(draft.instagram)==='web'?'Web'+(draft.instagram.music.enabled?' · Android music: '+song:''):'Android'+(draft.instagram.music.enabled?' · '+song:'')):'';
-    const post=p.id==='instagramStory'&&instagramVideo()?'<div class="preview-placeholder">Story sharing is available for photo posts. This video will be published as a Reel.</div>':p.id==='instagramStory'?storyMockup({options:draft.instagram,images:platformMedia('instagram'),caption:draft.captions.instagram,handle:state.config?.platforms.instagram.handle})+'<div class="preview-caption">Instagram'+(draft.instagram.story.linkEnabled!==false?' · '+escape(draft.instagram.story.label)+' · '+escape(draft.instagram.story.url):'')+'</div>':platformPostPreview({id:p.id,account:accountLabel(p),handle:state.config?.platforms[p.id==='manychat'?'instagram':p.id]?.handle||'',caption,images,carousel:mediaCarousel(p,images,'review'),route,links:p.id==='manychat'?currentManychatLinks():[]});
-    return `<article class="panel preview-card ${valid?'':'excluded-preview'}" data-preview-destination="${p.id}"><div class="preview-header">${platformIcon(p)}<div><strong>${p.name}</strong><small>${escape(accountLabel(p))}</small></div><div class="preview-action-group"><button class="text-button" data-only-destination="${p.id}" ${workerBusy()?'disabled':''}>Only this</button><button class="text-button" data-skip-destination="${p.id}" ${workerBusy()?'disabled':''}>Skip</button></div></div>${post}${p.id==='manychat'?manychatReview():''}${!valid?`<div class="excluded-reasons">${ready[p.id].errors.map(error=>`<p>${escape(error)}</p>`).join('')}<button class="text-button" data-fix-destination="${p.id}">Edit this destination</button></div>`:''}<div class="preview-meta"><span class="badge ${valid?'':'warn'}">${icon(valid?'check':'info')}${valid?'Included in run':'Excluded · needs fixing'}</span><span>${countCharacters(caption).toLocaleString()} characters</span></div></article>`;
-  }).join('')}</div>${!draft.selected.length ? '<div class="panel empty-state"><h2>No destinations selected</h2><p>Choose destinations in Compose to see your previews.</p></div>' : ''}${footer()}`;
-}
+function actionbar(){return actionbarMarkup(designContext());}
+function previewPage(){return reviewMarkup(designContext());}
+
 const statusLabels = { queued: 'Queued', running: 'In progress', dry_run: 'Test complete', posted: 'Published', failed: 'Failed', uncertain: 'Verify outcome', attention: 'Needs attention', waiting_for_input: 'Your turn', awaiting_manual: 'Your turn', needs_setup: 'Choose flow', skipped: 'Skipped' };
 function statusBadge(item) {
   const good = ['posted', 'dry_run'].includes(item.status);
@@ -355,9 +331,8 @@ function statusBadge(item) {
   const warn = ['attention', 'waiting_for_input', 'awaiting_manual', 'needs_setup'].includes(item.status);
   return `<span class="badge ${bad ? 'bad' : warn ? 'warn' : good ? '' : 'neutral'}">${icon(item.status === 'running' ? 'refresh' : good ? 'check' : warn || bad ? 'info' : 'clock', item.status === 'running' ? 'spin' : '')}${statusLabels[item.status] || item.status}</span>`;
 }
-function activityPage() {
-  return `<div class="hero"><div><h1>Activity</h1></div><div class="hero-actions"><button class="button danger" data-kill-run="${activeRun()?.id||''}" ${!activeRun()||activeRun()?.status==='stopping'?'disabled':''} title="Stop this activity now. A submission already sent may still finish.">${icon('stop')} Stop now</button><button class="button" data-action="download-log">${icon('download')}<span>Export report</span></button></div></div><div id="recovery-progress-host">${recoveryPanel()}</div><div id="activity-runs">${renderRuns()}</div>${footer()}`;
-}
+function activityPage(){const c=designContext();return '<div class="page">'+activityHeading(c)+(design.utility?'<div class="panel-layout"><div class="activity-content">':'')+'<div id="recovery-progress-host">'+recoveryPanel()+'</div><section class="activity-list"><div class="activity-head"><span>Post</span><span>Destinations</span><span>Result</span><span>Time</span><span></span></div><div id="activity-runs">'+renderRuns()+'</div></section>'+utility(c)+(design.utility?'</div>':'')+'</div>';}
+
 function runMessage(item) {
   if(item.id==='instagramMusic'&&item.status==='uncertain')return 'Feed is published. Verify its music before retrying.';
   if (['posted', 'dry_run', 'queued'].includes(item.status)) return '';
@@ -375,14 +350,20 @@ function runDetails(run, item) {
 }
 function renderRuns() {
   if (!state.runs.length) return `<div class="panel empty-state">${icon('activity')}<h2>No runs yet</h2><button class="button primary" data-view="compose">Create a post ${icon('arrow')}</button></div>`;
-  return state.runs.map(run => {
+  const filtered=state.runs.filter(run=>{
+    const bad=run.items.some(item=>['failed','uncertain','attention','waiting_for_input','awaiting_manual','needs_setup'].includes(item.status)),published=run.mode==='LIVE'&&run.items.every(item=>['posted','skipped'].includes(item.status));
+    return (design.activityFilter==='all'||design.activityFilter==='attention'&&bad||design.activityFilter==='published'&&published||design.activityFilter==='tests'&&run.mode==='TEST')&&Object.values(run.captions||{}).join(' ').toLowerCase().includes(design.activitySearch.toLowerCase());
+  });
+  if(!filtered.length)return '<div class="empty-state"><p>No matching activity.</p></div>';
+  return filtered.map(run => {
     const done = run.items.filter(i => !['queued', 'running', 'attention', 'waiting_for_input', 'awaiting_manual'].includes(i.status)).length;
     const active = activeRun()?.id === run.id;
     const controls = active ? `${run.status === 'running' ? `<button class="button small" data-control="pause">${icon('pause')} Pause</button>` : ''}${run.status === 'paused' ? `<button class="button small" data-control="resume">${icon('play')} Resume</button>` : ''}${run.status === 'attention' ? `<button class="button primary small" data-control="continue">${icon('refresh')} I’ve fixed it · continue</button>` : ''}${run.status === 'awaiting_manual' ? `<button class="button primary small" data-control="done">${icon('check')} I’ve saved in ManyChat</button>` : ''}<button class="button small" data-kill-run="${run.id}" ${run.status === 'stopping' ? 'disabled' : ''}>${icon('stop')} ${run.status === 'stopping' ? 'Stopping…' : 'Stop now'}</button>` : run.items.some(i => i.status === 'failed') ? `<button class="button small" data-retry="${run.id}" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')} Restart failed</button>` : '';
     const failed = run.items.filter(item => ['failed', 'uncertain', 'attention', 'needs_setup'].includes(item.status));
     const success = run.items.filter(item => ['posted', 'dry_run'].includes(item.status)).length;
     const title = run.captions[run.items.find(item => item.id !== 'manychat')?.id || 'manychat']?.split('\n').find(line => line.trim()) || 'Publishing run';
-    return `<details class="panel run-card" data-run-id="${run.id}" ${runExpansion.get(run.id) ?? active ? 'open' : ''}><summary class="run-summary"><div><h2><span class="badge ${run.mode === 'LIVE' ? 'bad' : ''}">${run.mode === 'LIVE' ? 'LIVE' : 'TEST RUN'}</span><span>${success}/${run.items.length} ${run.mode === 'LIVE' ? 'published' : 'prepared'}</span>${failed.length ? `<span class="badge bad">${failed.length} need attention</span>` : ''}</h2><p class="run-caption-title">${escape(title)}</p><p>${prettyDate(run.createdAt)} · ${escape(run.status.replaceAll('_', ' '))}</p></div><span class="run-expand">${icon('chevron')}</span></summary><div class="run-detail"><div class="run-actions">${controls}<button class="button small" data-restart-draft="${run.id}" ${workerBusy()||uploading?'disabled':''}>${icon('compose')} Start fresh</button></div><wa-progress-bar class="progress" value="${done / run.items.length * 100}" label="Run progress: ${done} of ${run.items.length}"></wa-progress-bar>${run.items.map(item => {
+    const groups=[...new Set(run.items.map(item=>item.id))],thumb=run.media?.[0],result=failed.length?'Needs attention':run.status==='completed'?(run.mode==='LIVE'?'Published':'Test complete'):run.status.replaceAll('_',' ');
+    return `<details class="activity-entry run-card" data-run-id="${run.id}" ${runExpansion.get(run.id)??active?'open':''}><summary class="activity-summary"><div class="post-summary"><div class="thumb">${thumb?mediaVisual(thumb,{compact:true}):designIcon('file-text')}</div><div><div class="title">${escape(title)}</div><div class="sub">${run.mode==='LIVE'?'Live run':'Test run'} · ${prettyDate(run.createdAt)}</div></div></div><div class="logo-stack">${groups.slice(0,4).map(brandLogo).join('')}${groups.length>4?'<span class="additional">+'+(groups.length-4)+'</span>':''}</div><div class="state-cell"><span class="pill ${failed.length?'warn':success?'success':''}">${escape(result)}</span><small>${success}/${run.items.length} ${run.mode==='LIVE'?'published':'prepared'}</small></div><span class="time-cell">${prettyDate(run.createdAt)}</span>${designIcon('chevron-down')}</summary><div class="run-detail"><div class="run-actions">${controls}<button class="button small" data-restart-draft="${run.id}" ${workerBusy()||uploading?'disabled':''}>${icon('compose')} Start fresh</button></div><wa-progress-bar class="progress" value="${done / run.items.length * 100}" label="Run progress: ${done} of ${run.items.length}"></wa-progress-bar>${run.items.map(item => {
       const p = platform(item.id);
       return `<div class="run-item">${platformIcon(p)}<div><h3>${p.name}${item.id==='instagram'?` <small class="run-route">${instagramMethod(run.instagram)==='web'?'Web':'Android'}</small>`:''}</h3>${runMessage(item) ? `<p>${escape(runMessage(item))}</p>` : ''}${item.recoveryMessage&&item.recoveryMessage!==item.message?`<p class="text-muted">${escape(item.recoveryMessage)}</p>`:''}${item.status==='waiting_for_input'?`<div class="inline-controls"><button class="button primary small" data-native-open>Open Android handoff</button></div>`:''}${item.status === 'awaiting_manual' ? `<div class="inline-controls"><button class="button small" data-copy-manual="${run.id}">${icon('copy')} Copy ManyChat message</button><a href="${escape(state.config.platforms.manychat.flowUrl)}" target="_blank" rel="noopener noreferrer" class="muted-link">Open ManyChat ${icon('external')}</a></div>` : ''}${item.status === 'uncertain' ? `<div class="inline-controls"><button class="button small" data-resolve="${run.id}" data-platform="${item.id}" data-resolution="posted">Verified published</button><button class="button small" data-resolve="${run.id}" data-platform="${item.id}" data-resolution="failed">Verified not published</button></div>` : ''}${item.id === 'instagram' && item.status === 'posted' && !item.publication?.postUrl && run.items.some(i => ['instagramStory','manychat'].includes(i.id)) ? `<div class="inline-controls"><button class="button small" data-resolve="${run.id}" data-platform="instagram" data-resolution="posted">Add post link</button></div>` : ''}${['failed','attention','uncertain','needs_setup'].includes(item.status)?`<button class="text-button item-gemini-help" data-ask-gemini data-gemini-run="${escape(run.id)}" data-gemini-item="${escape(item.id)}">${icon('sparkle')} Get Gemini help</button>`:''}${item.publication?.postUrl ? `<a class="published-link" href="${escape(item.publication.postUrl)}" target="_blank" rel="noopener noreferrer">View post ${icon('external')}</a>` : ''}${runDetails(run, item)}</div><div class="run-item-right">${statusBadge(item)}${item.status === 'failed' ? `<button class="button small retry-one" data-retry="${run.id}" data-retry-platform="${item.id}" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')} Retry ${escape(p.name)}</button>` : ''}${item.startedAt ? `<span class="run-time" data-elapsed-start="${item.startedAt}" data-elapsed-end="${item.finishedAt || ''}">${elapsed(item.startedAt, item.finishedAt)}</span>` : ''}</div></div>`;
     }).join('')}</div></details>`;
@@ -412,7 +393,7 @@ function recoveryPanel(){
  return '<section class="panel recovery-panel" data-recovery-id="'+escape(recovery.id)+'" data-recovery-phase="'+escape(phase)+'" aria-labelledby="recovery-title"><div class="recovery-heading"><div><span class="recovery-symbol">'+icon(active?'refresh':'sparkle',active?'spin':'')+'</span><h2 id="recovery-title">'+(isPractice?'Gemini practice test':'Automatic recovery')+'</h2></div><span class="badge '+(recovery.status==='succeeded'?'':active?'neutral':'warn')+'" data-recovery-state role="status">'+escape(recoveryPhases[phase]||'Recovery update')+'</span></div><ol class="recovery-checkpoints" aria-label="Recovery stages">'+checkpoints.map(([key,label])=>'<li class="'+(phase===key?'current':reached.has(key)?'reached':'')+'" '+(phase===key?'aria-current="step"':'')+'>'+escape(label)+'</li>').join('')+'</ol><dl class="recovery-fields"><div><dt>Problem</dt><dd data-recovery-problem>'+escape(recovery.problem||'A navigation step needs attention.')+'</dd></div><div><dt>Gemini</dt><dd data-recovery-api>'+escape(gemini)+'</dd></div><div><dt>Suggested fix</dt><dd data-recovery-fix>'+escape(fix||(phase==='detected'||phase==='calling'?'Waiting for a suggestion':'No fix was suggested'))+'</dd></div><div><dt>Currently trying</dt><dd data-recovery-action aria-live="polite">'+escape(current)+'</dd></div></dl>'+(events.length?disclosure('recovery-'+recovery.id,'Recovery log','<ol class="recovery-events">'+events.map(event=>'<li><strong>'+escape(recoveryPhases[event.phase]||'Update')+'</strong><span>'+escape(event.message||event.action||event.fix||'')+'</span>'+(event.fix&&event.fix!==event.message?'<small>Fix: '+escape(event.fix)+'</small>':'')+(event.action&&event.action!==event.message?'<small>Action: '+escape(event.action)+'</small>':'')+'</li>').join('')+'</ol>',false,'recovery-log'):'')+(active&&recovery.canStop?'<div class="recovery-practice-footer"><button class="button small" data-action="recovery-stop">Stop recovery</button></div>':'')+(isPractice?'<div class="recovery-practice-footer"><small>Practice only. No social post is sent.</small>'+(!active?'<button type="button" class="button small" data-action="recovery-test" '+(workerBusy()||!ready?'disabled':'')+'>'+icon('refresh')+' Retry practice test</button>':'')+'</div>':'')+'</section>';
 }
 function renderRecovery(){
- const host=document.querySelector('#recovery-progress-host');if(host){const html=recoveryPanel();if(host.dataset.rendered!==html){const y=window.scrollY,x=window.scrollX;host.dataset.rendered=html;host.innerHTML=html;window.scrollTo({left:x,top:y,behavior:'instant'});}}
+ const host=document.querySelector('#recovery-progress-host');if(host){const html=recoveryPanel();if(host.dataset.rendered!==html){const main=document.querySelector('#main'),y=main?.scrollTop||0;host.dataset.rendered=html;host.innerHTML=html;if(main)main.scrollTop=y;}}
  const shortcut=document.querySelector('[data-recovery-shortcut]');if(shortcut){const html=recoveryShortcut();if(shortcut.innerHTML!==html)shortcut.innerHTML=html;}
  const ready=state.navigationAI?.configured&&state.navigationAI?.enabled&&state.navigationAI?.automatic;
  document.querySelectorAll('[data-action="recovery-test"]').forEach(button=>{button.disabled=workerBusy()||!ready;});
@@ -522,10 +503,8 @@ function navigationAdvice(handoff){
 function settingsPage() {
   const field = (id, key, label, hint = '', placeholder = '') => `<label class="field"><span>${label}</span><input name="${id}.${key}" value="${escape(state.config.platforms[id][key])}" placeholder="${escape(placeholder)}" autocomplete="off" ${/Url$/.test(key) ? 'type="url"' : 'type="text"'}>${hint ? `<small>${hint}</small>` : ''}</label>`;
   const fields = p => p.id === 'instagram' || p.id === 'x' ? field(p.id, 'handle', 'Account handle', p.id === 'x' ? 'Leave blank to detect your signed-in account.' : '', 'your-account') : p.id === 'linkedin' ? field(p.id, 'companyPageUrl', 'Company admin URL') + field(p.id, 'companyName', 'Company name') : p.id.startsWith('youtube') ? field(p.id, 'channelId', 'Channel ID', 'Detected when you check the account.', 'UC…') + field(p.id, 'channelName', 'Channel name') + field(p.id, 'handle', 'Channel handle') : ['whatsapp', 'telegram'].includes(p.id) ? field(p.id, 'channelName', 'Channel name') + field(p.id, 'channelUrl', 'Public channel link', 'Use the channel link, not a group or chat.') : manychatConnectionFields();
-  return `<div class="hero"><div><h1>Connections</h1></div><div class="hero-actions"><button class="button" data-action="navigation-help">${icon('sparkle')}<span>Navigation help</span></button><button class="button" data-action="logins" ${workerBusy() ? 'disabled' : ''}>${icon('refresh')}<span>${state.login.running ? 'Checking…' : 'Check logins'}</span></button></div></div>
-    ${disclosure('connection-help', 'Sign-in help', '<p>Sign in on the worker computer, then check again. Check logins checks all eight services. Both YouTube channels share one Google login.</p><p>If Google blocks sign-in, open an account’s Settings and use Manual sign-in. Close that sign-in window before checking again.</p><p>Team access and hosting instructions are in README.md.</p>', false, 'connection-help')}
-    <form id="settings-form"><div class="settings-grid">${PLATFORMS.map(p => `<section class="panel settings-card"><div class="settings-title">${platformIcon(p)}<div><h2>${p.name}</h2><small class="settings-identity">${escape(accountLabel(p))}</small></div></div>${p.id==='instagram'?nativeDeviceControl(state.config,workerBusy()):''}<div class="login-status" id="login-status-${p.id}">${loginStatus(p.id)}</div>
-      ${disclosure('connection-' + p.id, 'Settings', fields(p) + `<button class="button small" type="button" data-manual-login="${p.id}" ${workerBusy() ? 'disabled' : ''}>${icon('lock')} Manual sign-in</button>`, setupIssues(state.config, p.id).length > 0, 'connection-settings')}</section>`).join('')}</div><div class="settings-footer"><small>Settings are shared with your team.</small><button class="button primary" type="submit" ${workerBusy() ? 'disabled' : ''}>Save connections</button></div></form>${connectionsNext()}`;
+  const c=designContext();
+  return `<div class="page ${design.utility?'connection-utility-open':''}"><div class="page-title"><div><h1>Connections</h1><p>Your accounts, your phone, one workspace.</p></div><div class="page-actions"><button class="button subtle" data-action="navigation-help">${designIcon('sparkles')}Navigation help</button><button class="button primary" data-action="logins" ${workerBusy()?'disabled':''}>${designIcon('refresh-cw')}<span>${state.login.running?'Checking…':'Check logins'}</span></button></div></div><div class="connections-grid"><div><form id="settings-form"><section class="panel"><div class="panel-head"><div><h2>Social accounts</h2><div class="muted">Browser sessions stay on this computer</div></div></div>${PLATFORMS.map(p=>`<section class="connection-account"><div class="connection-card">${brandLogo(p.id)}<div class="spacer"><h3>${p.name}</h3><div class="muted settings-identity">${escape(accountLabel(p))}</div></div><div class="login-status" id="login-status-${p.id}">${loginStatus(p.id)}</div></div>${disclosure('connection-'+p.id,'Account settings',fields(p)+`<button class="button small" type="button" data-manual-login="${p.id}" ${workerBusy()?'disabled':''}>Manual sign-in</button>`,setupIssues(state.config,p.id).length>0,'connection-settings')}</section>`).join('')}</section><div class="settings-footer"><small>Settings are saved on this copy.</small><button class="button primary" type="submit" ${workerBusy()?'disabled':''}>Save connections</button></div></form>${connectionsNext()}</div><aside class="utility-panel"><h2>Office phone</h2><p class="utility-intro muted">USB or wireless debugging. Music and Story use the selected phone.</p><div class="phone-tools" data-phone-tools>${phoneToolbar(state.phone,phoneScanBusy(),state.capabilities?.instagramAndroid!==false)}</div>${nativeDeviceControl(state.config,workerBusy())}<div class="health-row"><h3>Recovery</h3><p>Use Gemini when navigation needs help.</p><button class="button small" data-ask-gemini>${designIcon('sparkles')}Ask Gemini</button></div><div class="health-row"><button class="button small" data-action="updates">App updates</button></div></aside></div>${design.utility?utility(c):''}</div>`;
 }
 function connectionsNext() {
   return `<section class="connections-next"><p id="verified-count">${verifiedDestinations().length} of ${PLATFORMS.length} connected</p><button class="button primary" data-action="continue-compose" ${workerBusy() || !verifiedDestinations().length ? 'disabled' : ''}>Continue to Compose ${icon('arrow')}</button></section>`;
@@ -545,7 +524,7 @@ function navigate(next) {
     document.querySelector('#discard-settings').onclick = () => { modal.close(); view = next; shell(); };
     return;
   }
-  view = next; shell(); window.scrollTo({ top: 0, behavior: 'instant' });
+  view=next;design.utility='';design.mobilePreview=false;shell();document.querySelector('#main').scrollTop=0;
 }
 function bindPage() {
   bindStoryGestures();
@@ -578,6 +557,7 @@ function bindPage() {
   const zone = document.querySelector('#dropzone');
   if (zone) {
     zone.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } };
+    zone.onclick=e=>{if(!e.target.closest('button,a,input'))file.click();};
     zone.ondragover = e => { e.preventDefault(); zone.classList.add('dragover'); };
     zone.ondragleave = () => zone.classList.remove('dragover');
     zone.ondrop = e => { e.preventDefault(); zone.classList.remove('dragover'); upload(e.dataTransfer.files); };
@@ -674,7 +654,7 @@ async function preview() {
     if(dependencyRequirements(reviewDraft).length){dependencyDialog(reviewDraft,async next=>{draft=next;saveDraft();await preview();});return;}
     if (selected.length) await api('/api/validate', { method: 'POST', body: reviewDraft });
     reviewValid = true; navigate('preview');
-    if (reviewBlocked.length) toast(`${reviewBlocked.length} destination${reviewBlocked.length === 1 ? '' : 's'} excluded until fixed. Review the reasons on each card.`);
+    if (reviewBlocked.length) toast(`${reviewBlocked.length} destination${reviewBlocked.length === 1 ? '' : 's'} excluded until fixed. Select a destination to review its issue.`);
   } catch (error) { toast(error.message, true); }
 }
 async function startRun(confirmation) {
@@ -727,6 +707,20 @@ async function copyText(text) {
 document.addEventListener('click', async e => {
   const button = e.target.closest('button'); if (!button || button.disabled) return;
   try {
+    if(button.dataset.designUtility){design.utility=button.dataset.designUtility==='close'?'':design.utility===button.dataset.designUtility?'':button.dataset.designUtility;shell();return;}
+    if(button.hasAttribute('data-design-route')){disclosureExpansion.set('design-publishing',!disclosureExpansion.get('design-publishing'));shell();return;}
+    if(button.hasAttribute('data-design-channels')){design.channelEditor=!design.channelEditor;shell();return;}
+    if(button.hasAttribute('data-design-more')){design.more=!design.more;shell();return;}
+    if(button.hasAttribute('data-design-mode')){design.modeMenu=!design.modeMenu;shell();return;}
+    if(button.dataset.designView){design.mobilePreview=button.dataset.designView==='preview';shell();return;}
+    if(button.dataset.designDevice){design.device=button.dataset.designDevice;shell();return;}
+    if(button.hasAttribute('data-design-add-media')){document.querySelector('#file-input')?.click();return;}
+    if(button.hasAttribute('data-design-media-settings')){const id='design-media-settings';disclosureExpansion.set(id,!disclosureExpansion.get(id));shell();return;}
+    if(button.dataset.designFilter){design.activityFilter=button.dataset.designFilter;shell();return;}
+    if(button.dataset.designReview){design.reviewId=button.dataset.designReview;design.mobilePreview=true;shell();return;}
+    if(button.dataset.designInclude){const id=button.dataset.designInclude;if(!draft.captions[id]?.trim()&&id!=='instagramStory'){captionDialog(id);return;}const next=structuredClone(draft);setDestinationSelected(next,id,true);await changeSelectedActions(next);return;}
+    if(button.hasAttribute('data-design-slide')){const target=button.closest('[data-design-preview]'),id=target.dataset.designPreview,length=platformMedia(id).length;if(length)platformPreviewIndex['design'+id]=((platformPreviewIndex['design'+id]||0)+Number(button.dataset.designSlide)+length)%length;refreshDesignPreview();return;}
+    if(button.dataset.action==='go-connections'){design.utility='';navigate('settings');return;}
     if(button.hasAttribute('data-ask-gemini')){await openRecoveryHelp(button.dataset.geminiRun?{scope:'item',runId:button.dataset.geminiRun,itemId:button.dataset.geminiItem}:undefined);return;}
     if(button.hasAttribute('data-recovery-help-close')){recoveryHelpDialog?.close();return;}
     if(button.hasAttribute('data-recovery-help-request')){await requestRecoveryHelp();return;}
@@ -741,7 +735,7 @@ document.addEventListener('click', async e => {
     if (button.dataset.action === 'theme') {
       theme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
       try { localStorage.setItem('mrinal.social-studio.theme', theme); } catch { /* Session preference still applies. */ }
-      applyTheme(); button.innerHTML = icon(theme === 'system' ? 'monitor' : theme === 'dark' ? 'moon' : 'sun'); button.setAttribute('aria-label', `Appearance: ${theme}. Change theme`); button.title = `Appearance: ${theme}`; return;
+      applyTheme();shell();return;
     }
     if (button.dataset.fixDestination) { captionTab = button.dataset.fixDestination==='instagramStory'?'instagram':button.dataset.fixDestination;if(button.dataset.fixDestination==='instagramStory')instagramTab='story'; navigate('compose'); document.querySelector(`#editor-${captionTab}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (button.dataset.removeDestinationMedia) {
@@ -775,7 +769,7 @@ document.addEventListener('click', async e => {
       if(workerBusy())return toast('Finish the current activity first.',true);
       const id = button.dataset.destination;if(!draft.selected.includes(id)&&!draft.captions[id]?.trim()){captionDialog(id);return;}setDestinationSelected(draft,id,!draft.selected.includes(id));saveDraft();shell();return;
     }
-    if (button.dataset.captionTab) { captionTab = button.dataset.captionTab; shell(); document.querySelector(`#tab-${captionTab}`)?.focus(); return; }
+    if (button.dataset.captionTab) { captionTab = button.dataset.captionTab; design.mobilePreview=false; shell(); document.querySelector(`#tab-${captionTab}`)?.focus(); return; }
     if (button.dataset.copyInstagram) { draft.captions[button.dataset.copyInstagram] = draft.captions.instagram; saveDraft(); shell(); toast('Instagram caption copied. Make it your own.'); return; }
     if (button.hasAttribute('data-metadata-help')) { metadataHelp(); return; }
     if (button.dataset.metadata) { await showMetadata(button.dataset.metadata); return; }
@@ -805,6 +799,7 @@ document.addEventListener('click', async e => {
       saveDraft(); navigate('compose'); return;
     }
     if (button.dataset.mode) {
+      design.modeMenu=false;
       if (button.dataset.mode === 'TEST') { mode = 'TEST'; shell(); }
       else if (mode !== 'LIVE') {
         showDialog('Switch to live publishing?', '<p>Live mode publishes publicly to the destinations you select. You’ll review your posts and type POST to confirm each run.</p>', '<button class="button" data-dialog-close>Stay in test mode</button><button class="button danger" id="enable-live">Enable live mode</button>');
@@ -895,6 +890,7 @@ document.addEventListener('click', async e => {
   } catch (error) { toast(error.message, true); }
 });
 document.addEventListener('input', e => {
+  if(e.target.id==='activity-search'){design.activitySearch=e.target.value;renderActivity();return;}
   if(e.target.hasAttribute('data-ig-method')){
     selectPostingRoute(e.target.value).catch(error=>{shell();toast(error.message,true);});return;
   }
@@ -931,7 +927,7 @@ document.addEventListener('input', e => {
   if (id === 'manychat') refreshManychatLinks();
   const p = platform(id), limit = captionLimit(p, platformMedia(id).length); const length = captionLength(p, e.target.value); const el = document.querySelector(`#count-${id}`);
   el.textContent = `${id==='instagram'?instagramHashtags(e.target.value).length+' / 5 hashtags ? ':''}${length.toLocaleString()} / ${limit.toLocaleString()}${id === 'x' ? ' *' : ''}`; el.classList.toggle('error-text', length > limit||id==='instagram'&&instagramHashtags(e.target.value).length>5);
-  const saved = document.querySelector('#draft-status'); if (saved) saved.textContent = 'Saving…'; saveDraft(); renderReadiness();
+  const saved = document.querySelector('#draft-status'); if (saved) saved.textContent = 'Saving…'; saveDraft(); renderReadiness();refreshDesignPreview();
 });
 document.addEventListener('keydown', e => {
   if (e.target.matches('[data-drag-media]') && ['ArrowUp', 'ArrowDown'].includes(e.key)) {
@@ -939,22 +935,20 @@ document.addEventListener('keydown', e => {
     if (target >= 0 && target < ids.length) { [ids[i], ids[target]] = [ids[target], ids[i]]; changeMediaOrder(ids, 'Image order updated.'); document.querySelector(`[data-drag-media="${id}"]`)?.focus(); } return;
   }
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && view === 'compose' && !modal.open) { e.preventDefault(); preview(); }
-  if (e.target.matches('[data-caption-tab]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
-    e.preventDefault(); const index = PLATFORMS.findIndex(p => p.id === captionTab);
-    captionTab = PLATFORMS[e.key === 'Home' ? 0 : e.key === 'End' ? PLATFORMS.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + PLATFORMS.length) % PLATFORMS.length].id;
-    shell(); document.querySelector(`#tab-${captionTab}`).focus();
+  if (e.target.matches('.channelbar [data-caption-tab]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();const tabs=[...document.querySelectorAll('.channelbar [data-caption-tab]')],index=tabs.indexOf(e.target),next=tabs[e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];captionTab=next.dataset.captionTab;shell();document.querySelector('.channelbar [data-caption-tab="'+captionTab+'"]').focus();
   }
 });
 document.addEventListener('toggle', event => { if (event.target.matches?.('details[data-run-id]')) runExpansion.set(event.target.dataset.runId, event.target.open); }, true);
 function renderActivity() {
-  const stop=document.querySelector('.hero [data-kill-run]'),active=activeRun();if(stop){stop.dataset.killRun=active?.id||'';stop.disabled=!active||active.status==='stopping';}
+  const stop=document.querySelector('.page-title [data-kill-run]'),active=activeRun();if(stop){stop.dataset.killRun=active?.id||'';stop.disabled=!active||active.status==='stopping';}
   const el = document.querySelector('#activity-runs');
   if(!el)return;
-  const y=window.scrollY,x=window.scrollX;
+  const main=document.querySelector('#main'),y=main.scrollTop;
   const anchor=[...el.children].find(card=>card.getBoundingClientRect().bottom>0),id=anchor?.dataset.runId,top=anchor?.getBoundingClientRect().top;
   const html=renderRuns();if(el.dataset.rendered===html)return;el.dataset.rendered=html;el.innerHTML=html;
   const next=id?el.querySelector('[data-run-id="'+id+'"]'):null;
-  window.scrollTo({left:x,top:next?y+next.getBoundingClientRect().top-top:y,behavior:'instant'});
+  main.scrollTop=next?y+next.getBoundingClientRect().top-top:y;
 }
 function applyStatus(data) {
   const changedConnections = JSON.stringify(state.login.items) !== JSON.stringify(data.login.items);
@@ -1013,7 +1007,7 @@ async function load() {
   const completed=reconcilePublishedDraft(draft,state.runs.find(run=>run.id===draft.submission?.runId));if(completed){draft=completed.draft;saveDraft();}
   for (const [id, ids] of Object.entries(draft.mediaByPlatform)) { if (!platform(id) || !Array.isArray(ids)) delete draft.mediaByPlatform[id]; else draft.mediaByPlatform[id] = ids.filter(key => draft.mediaIds.includes(key)); }
   connected = true;
-  if (activeRun() || state.recovery?.status === 'running') view = 'activity';
+  if(activeRun()||state.recovery?.status==='running')view='activity';else if(draft.mediaIds.length||draft.selected.length||verifiedDestinations().length)view='compose';
   shell(); connect();
 }
 function showLogin() {
@@ -1039,13 +1033,13 @@ async function musicDialog(){
   const images=platformMedia('instagram');if(!images.length)return toast('Upload and select Instagram images first.',true);
   musicPickerOpen=true;let pickerOwned=false,pickerOpening=true,busy=true,phase='opening',songs=[],playback=null,hasMore=true,started=Date.now(),progressStamp='';
   const skeletons=()=>Array.from({length:5},()=>'<div class="ig-song-skeleton" aria-hidden="true"><i></i><span></span><b></b></div>').join('');
-  showDialog('Instagram music','<div class="ig-emulator-sync is-busy" id="music-sync" aria-busy="true"><span class="ig-sync-orb" aria-hidden="true"></span><div><p id="music-state" role="status" aria-live="polite">Opening your images in Instagram...</p><small id="music-sync-hint">Connecting to the emulator</small></div><small id="music-elapsed"></small><span class="ig-sync-line" aria-hidden="true"></span></div><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required disabled><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results" aria-label="Instagram music results" aria-busy="true">'+skeletons()+'</div><div class="ig-music-pagination"><small id="music-count"></small><button class="button small" id="music-more" disabled>Load more</button></div><div id="music-player" class="ig-music-player" hidden></div>','<button class="button" id="music-retry" hidden>Try again</button><button class="button" data-music-close disabled>Cancel</button>');
+  showDialog('Instagram music','<div class="ig-phone-sync is-busy" id="music-sync" aria-busy="true"><span class="ig-sync-orb" aria-hidden="true"></span><div><p id="music-state" role="status" aria-live="polite">Opening your images in Instagram...</p><small id="music-sync-hint">Connecting to the phone</small></div><small id="music-elapsed"></small><span class="ig-sync-line" aria-hidden="true"></span></div><form id="music-search-form" class="ig-music-search"><input id="music-query" aria-label="Song or artist" placeholder="Song or artist" maxlength="100" minlength="2" required disabled><button class="button" disabled>Search</button></form><div id="music-results" class="ig-music-results" aria-label="Instagram music results" aria-busy="true">'+skeletons()+'</div><div class="ig-music-pagination"><small id="music-count"></small><button class="button small" id="music-more" disabled>Load more</button></div><div id="music-player" class="ig-music-player" hidden></div>','<button class="button" id="music-retry" hidden>Try again</button><button class="button" data-music-close disabled>Cancel</button>');
   modal.classList.add('ig-music-dialog');
   const el=id=>modal.querySelector('#'+id),label=message=>{el('music-state').textContent=message;};
   const elapsedTimer=setInterval(()=>{if(!musicPickerOpen)return;const clock=el('music-elapsed');if(!clock){clearInterval(elapsedTimer);return;}const seconds=Math.floor((Date.now()-started)/1000);clock.textContent=busy?Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0'):'';},1000);
   const sync=(next,message)=>{
     phase=next;if(message)label(message);el('music-sync').dataset.phase=phase;el('music-sync').classList.toggle('is-busy',busy);el('music-sync').classList.toggle('is-playing',!busy&&Boolean(playback&&!playback.paused));el('music-sync').setAttribute('aria-busy',String(busy));
-    el('music-sync-hint').textContent=phase==='error'?'Check the emulator, then try again. Nothing was shared.':busy?'Communicating with the emulator':playback?'Audio plays on the worker PC':'Choose a track, or load more from Instagram';
+    el('music-sync-hint').textContent=phase==='error'?'Check the phone, then try again. Nothing was shared.':busy?'Communicating with the phone':playback?'Audio plays on the worker PC':'Choose a track, or load more from Instagram';
   };
   const controls=()=>{modal.querySelectorAll('button,input').forEach(control=>control.disabled=busy);el('music-query').disabled=busy||!pickerOwned;el('music-search-form button').disabled=busy||!pickerOwned;el('music-retry').hidden=pickerOwned||phase!=='error';el('music-more').disabled=busy||!pickerOwned||!hasMore;el('music-more').textContent=busy&&phase==='loading'?'Loading...':hasMore?'Load more':'End of results';el('music-results').setAttribute('aria-busy',String(busy));};
   const finish=async()=>{clearInterval(elapsedTimer);musicPickerUi=null;musicPickerOpen=false;modal.classList.remove('ig-music-dialog');modal.close();await refresh();shell();};
@@ -1211,7 +1205,7 @@ async function updatesDialog(){
 let nativePostingChoice=false,changingPostingRoute=false;
 function phoneScanBusy(){const run=activeRun();return state.workerBusy||state.login.running||Boolean(run&&!['attention','paused'].includes(run.status));}
 function renderPhoneToolbar(){
- const target=document.querySelector('[data-phone-tools]');if(target){const html=phoneToolbar(state.phone,workerBusy(),state.capabilities?.instagramAndroid!==false);if(target.innerHTML!==html)target.innerHTML=html;}
+ for(const target of document.querySelectorAll('[data-phone-tools]')){const html=phoneToolbar(state.phone,workerBusy(),state.capabilities?.instagramAndroid!==false);if(target.innerHTML!==html)target.innerHTML=html;}
  const guardHtml=phoneGuardControl(state.phone,state.capabilities?.instagramAndroid!==false);for(const holder of document.querySelectorAll('[data-phone-guard-slot]'))if(holder.innerHTML!==guardHtml)holder.innerHTML=guardHtml;
  const progress=document.querySelector('[data-phone-screen-progress]');if(progress)progress.textContent=state.phone?.mirror?.message||'Opening phone screen…';
 }
@@ -1235,16 +1229,15 @@ async function showPhoneScreen(){
 }
 async function nativeDeviceDialog({posting=false}={}){
  nativePostingChoice=posting;
- const {devices}=await api('/api/android/devices');showDialog('Music & Story device','<p>Choose the device used for native Instagram steps.</p>'+phoneRows(devices,state.config.androidDevice)+(!devices.length?'<p>No USB phone detected. Connect and unlock it, then allow USB debugging, or use Scan for phone in the dashboard.</p>':'')+'<button class="button" data-native-type="emulator">Use dedicated emulator</button>','<button class="button" data-dialog-close>Cancel</button>');
+ const {devices}=await api('/api/android/devices');showDialog('Music & Story device','<p>Choose the device used for native Instagram steps.</p>'+phoneRows(devices,state.config.androidDevice)+(!devices.length?'<p>No USB phone detected. Connect and unlock it, then allow USB debugging, or use Scan for phone in the dashboard.</p>':''),'<button class="button" data-dialog-close>Cancel</button>');
 }
 
 async function selectPostingRoute(route){
  if(changingPostingRoute||workerBusy())return;
- if(!['web','emulator','phone'].includes(route))throw Error('Choose Web, Emulator or Phone.');
- if(route==='phone'&&state.config.androidDevice?.type!=='phone'){shell();await nativeDeviceDialog({posting:true});return;}
+ if(!['web','phone'].includes(route))throw Error('Choose Web or Phone.');
+ if(route==='phone'&&!state.config.androidDevice?.serial){shell();await nativeDeviceDialog({posting:true});return;}
  changingPostingRoute=true;
  try{
-  if(route==='emulator'&&state.config.androidDevice?.type!=='emulator'){const updated=structuredClone(state.config);updated.androidDevice={type:'emulator',serial:''};state.config=await api('/api/config',{method:'PUT',body:updated});}
   draft.instagram.postingMethod=route==='web'?'web':'android';if(route==='phone')draft.instagram.music.source='manual';saveDraft();shell();
  }finally{changingPostingRoute=false;}
 }

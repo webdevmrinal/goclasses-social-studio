@@ -238,9 +238,9 @@ export class Queue extends EventEmitter {
     const runController=new AbortController();this.runController={runId:run.id,controller:runController};
     try {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
-      if(nativeItem&&(nativeItem.id!=='instagramMusic'||run.config.androidDevice?.type==='phone')&&this.instagramWorker&&run.status!=='stopping'){
-        await this.log(run,nativeItem,'Checking the dedicated Android Instagram account before any destination runs...');
-        try{await this.instagramWorker.checkAccount(run.config,{runId:run.config.androidDevice?.type==='phone'||run.items.find(item=>item.status==='queued')===nativeItem?run.id:undefined,signal:runController.signal,connectionContext:{navigationAI:this.navigationAI,signal:runController.signal,canRecoverConnection:()=>!nativeItem.submitting&&!runController.signal.aborted&&run.status!=='stopping',reportRecovery:event=>this.reportRecovery(run,nativeItem,event),step:message=>this.log(run,nativeItem,message)},onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
+      if(nativeItem&&this.instagramWorker&&run.status!=='stopping'){
+        await this.log(run,nativeItem,'Checking the selected phone?s Instagram account before any destination runs...');
+        try{await this.instagramWorker.checkAccount(run.config,{runId:run.id,signal:runController.signal,connectionContext:{navigationAI:this.navigationAI,signal:runController.signal,canRecoverConnection:()=>!nativeItem.submitting&&!runController.signal.aborted&&run.status!=='stopping',reportRecovery:event=>this.reportRecovery(run,nativeItem,event),step:message=>this.log(run,nativeItem,message)},onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
         const channelItem = run.items.find(item => item.id === channelId && item.status === 'queued');
@@ -340,7 +340,7 @@ export class Queue extends EventEmitter {
             let cleanupTimer;
             const settled=await Promise.race([task.then(()=>true,()=>true),new Promise(resolve=>{cleanupTimer=setTimeout(()=>resolve(false),60000);})]);
             clearTimeout(cleanupTimer);
-            if(!settled)error=new InterventionError('Android has not finished stopping. Keep the emulator draft open for review; restart the worker before another Android attempt. No automatic retry was started.');
+            if(!settled)error=new InterventionError('Android has not finished stopping. Keep the phone draft open for review; restart the worker before another Android attempt. No automatic retry was started.');
           }
           if (!item.submitting && page && !page.isClosed()) {
             try { await assertNoChallenge(page); } catch (challenge) { error = challenge; }

@@ -57,7 +57,9 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     res.set('Cache-Control', 'private, no-store'); next();
   }, express.static(path.join(dataDir, 'logs'), { dotfiles: 'deny', index: false }));
 
-  let config = validateConfig(await readJson(path.join(dataDir, 'config.json'), defaults));
+  const savedConfig=await readJson(path.join(dataDir,'config.json'),defaults);
+  if(savedConfig.androidDevice?.type!=='phone')savedConfig.androidDevice={type:'phone',serial:''};
+  let config=validateConfig(savedConfig);
   let media = await readJson(path.join(dataDir, 'media.json'), []);
   let mediaWrite = Promise.resolve();
   const instagramWorker=new InstagramAndroidWorker({dataDir});await instagramWorker.init();
@@ -71,7 +73,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   const manualRecoveryHelp=new ManualRecoveryHelp({ai:navigationAI,build:selection=>buildManualRecoveryContext({...selection,runs:queue.runs,login:queue.login,phone:phoneTools.state(),recovery:queue.recoveryLog.state()}),onChange:value=>{queue.recoveryAdvice=value;queue.emit('change',queue.state());}});
   const studioState=()=>{const state=queue.state();return {...state,workerBusy:state.workerBusy||phoneTools.scanning||phoneTools.pairing===true,phone:phoneTools.state()};};
   await queue.init();
-  if(config.androidDevice.type==='phone'){phoneTools.monitor?.();Promise.resolve().then(()=>phoneTools.refresh?.()).catch(()=>{});}
+  if(config.androidDevice.serial){phoneTools.monitor?.();Promise.resolve().then(()=>phoneTools.refresh?.()).catch(()=>{});}
   queue.updateState=updateBridge.state;
   updateBridge.on('change',state=>{queue.updateState=state;queue.maintenance=['installing','restarting'].includes(state.phase);queue.emit('change',queue.state());});
   app.use('/api',(req,res,next)=>queue.recoveryTaskActive&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!['/navigation-ai/test/stop','/recovery-help','/recovery-help/cancel','/android/touch-guard'].includes(req.path)?res.status(409).json({error:'Wait for the recovery test to finish, or stop recovery first.'}):next());
@@ -158,7 +160,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
       if (JSON.stringify(config.platforms[id]) !== JSON.stringify(updated.platforms[id])) delete queue.login.items[id];
     }
     if(JSON.stringify(config.androidDevice)!==JSON.stringify(updated.androidDevice)){delete queue.login.items.instagramNative;if(queue.login.items.instagram?.transport==='android')delete queue.login.items.instagram;}
-    config = updated; queue.settings = config; await phoneTools.configure(config.androidDevice); if(config.androidDevice.type==='phone')await phoneTools.refresh(); queue.emit('change', queue.state()); res.json(config);
+    config = updated; queue.settings = config; await phoneTools.configure(config.androidDevice); if(config.androidDevice.serial){phoneTools.monitor?.();await phoneTools.refresh();} queue.emit('change', queue.state()); res.json(config);
   });
   const upload = multer({ dest: path.join(dataDir, 'incoming'), limits: { fileSize: 512 * 1024 * 1024, files: 10, fields: 0, parts: 10 }, fileFilter: (req, file, cb) => cb(acceptedUploadType(file)?null:new Error('Choose JPG, PNG, WEBP, H.264 MP4/MOV, or PDF files.'), true) });
   app.post('/api/upload', (req, res, next) => upload.array('images', 10)(req, res, error => { if (error) next(error); else next(); }), async (req, res) => {

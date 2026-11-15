@@ -111,7 +111,7 @@ export async function selectAlbumPhotos(s,album) {
   }
   await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('next_button_textview')&&n.enabled==='true'),'Instagram is still preparing the selected images.');
   await s.clickId('next_button_textview');
-  // Large carousels can decode slowly on the dedicated low-memory emulator.
+  // Large carousels can decode slowly on the dedicated low-memory phone.
   await s.until(nodes=>nodes.some(n=>visible(n)&&n['resource-id']===nativeId('media_thumbnail_tray_button')),'Instagram photo editor is still loading.',90000);
 }
 export async function photoEvidence(s){
@@ -136,7 +136,7 @@ export async function allowAlbum(s,album) {
   await s.until(nodes=>nodes.some(n=>n['resource-id']===nativeId('gallery_folder_menu_tv')),'Instagram photo access is not ready.');
   if(!(await s.screen()).some(n=>n['resource-id']===nativeId('btn_manage')))return;
   await s.clickId('btn_manage');
-  await s.until(nodes=>nodes.some(n=>n.text==='Select more photos'),'Choose limited photo access in the emulator.');
+  await s.until(nodes=>nodes.some(n=>n.text==='Select more photos'),'Choose limited photo access in the phone.');
   await s.click('xpath','//*[@text="Select more photos"]');
   await s.until(nodes=>nodes.some(n=>n['resource-id']==='com.google.android.providers.media.module:id/button_add'),'Android limited-photo picker did not open.');
   const picked=new Set(),matched=new Set();

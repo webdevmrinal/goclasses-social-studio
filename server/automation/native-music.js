@@ -151,7 +151,7 @@ export function musicPlayback(nodes,track){
 }
 export async function setMusicPlayback(s,track,playing){
   const nodes=await s.screen();assertMusicLibrary(nodes);const current=musicPlayback(nodes,track);
-  if(current===null)throw new InterventionError('The audio preview changed on the emulator. Preview the song again.');
+  if(current===null)throw new InterventionError('The audio preview changed on the phone. Preview the song again.');
   if(current!==playing)await s.click('id','audio_bar_playback_tap_target');
   await s.until(nodes=>musicPlayback(nodes,track)===playing,'Instagram did not confirm the playback change.');
   return {key:track.key,title:track.title,artist:track.artist,paused:!playing};

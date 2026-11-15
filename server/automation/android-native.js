@@ -4,13 +4,11 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import {androidDevice,EMULATOR_SERIAL,EMULATOR_AVD} from '../../shared/android-device.js';
+import {androidDevice} from '../../shared/android-device.js';
 import {resolveWifiPhone,recoverPhoneConnection,isAndroidTransportFailure} from '../android-devices.js';
 import { ANDROID_DRIVER_SETTINGS } from '../../shared/android-performance.js';
 import { InterventionError } from './utils.js';
 const exec = promisify(execFile);
-export const ANDROID_SERIAL = EMULATOR_SERIAL;
-export const ANDROID_AVD = EMULATOR_AVD;
 export const ANDROID_URL = 'http://127.0.0.1:4731';
 const decode = value => value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, key) => key[0] === '#' ? String.fromCodePoint(parseInt(key.slice(key[1]?.toLowerCase() === 'x' ? 2 : 1), key[1]?.toLowerCase() === 'x' ? 16 : 10)) : ({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[key]));
 export function nativeNodes(xml) {
@@ -59,7 +57,7 @@ export function nativeBounds(node) {
 export const xpathLiteral = value => !value.includes('"') ? '"' + value + '"' : !value.includes("'") ? "'" + value + "'" : 'concat(' + value.split('"').map(part => '"' + part + '"').join(", '\"', ") + ')';
 // Retry only an explicit pre-session instrumentation failure. A lost/ambiguous
 // response may have created a session, so it must never be retried automatically.
-export async function connectAndroidDriver(create,reset,recovery='Run android:start and try again.'){
+export async function connectAndroidDriver(create,reset,recovery='Run npm run phone:driver and try again.'){
   for(let attempt=0;attempt<2;attempt++){
     const {ok,result}=await create();
     if(ok&&result.value?.sessionId)return result.value.sessionId;
@@ -86,7 +84,7 @@ export async function cancelInstagramPhotoAccess(s){
   // Cancel pending edits only. Never press Allow on a stale dialog, broaden
   // permission, change its selected photos or dismiss the underlying post.
   await s.click('xpath','//android.widget.ImageButton[@package="'+PHOTO_PROVIDER+'" and @content-desc="Cancel"]');
-  await s.until(next=>!isPhotoAccessPicker(next)&&next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Android photo access is still closing. Close that dialog in the emulator and retry.',15000);
+  await s.until(next=>!isPhotoAccessPicker(next)&&next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'),'Android photo access is still closing. Close that dialog in the phone and retry.',15000);
   return true;
 }
 export async function dismissInstagramRatingPrompt(s,nodes){
@@ -94,24 +92,24 @@ export async function dismissInstagramRatingPrompt(s,nodes){
   if(!visible.some(n=>/^com\.instagram\.android:id\/appirater_/.test(n['resource-id']||'')))return false;
   const title=visible.filter(n=>n['resource-id']===nativeId('appirater_title_area'));
   const cancel=visible.filter(n=>n['resource-id']===nativeId('appirater_cancel_button'));
-  if(title.length!==1||title[0].text!=='Rate Instagram'||cancel.length!==1||cancel[0].text!=='No, thanks')throw new InterventionError('The Instagram rating dialog could not be verified. Close it yourself in the emulator; its screen and draft were preserved.');
-  if(visible.some(n=>/layout_edit_media_info_layout|edit_media_caption|caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text|direct_external_share_container_view/.test(n['resource-id']||'')||n.password==='true'))throw new InterventionError('Instagram has an unsent draft behind its rating dialog. Close it yourself in the emulator; the draft was preserved.');
-  if(s.ratingPromptDismissed)throw new InterventionError('The Instagram rating dialog appeared again. Close it yourself in the emulator; its screen and draft were preserved.');
+  if(title.length!==1||title[0].text!=='Rate Instagram'||cancel.length!==1||cancel[0].text!=='No, thanks')throw new InterventionError('The Instagram rating dialog could not be verified. Close it yourself in the phone; its screen and draft were preserved.');
+  if(visible.some(n=>/layout_edit_media_info_layout|edit_media_caption|caption_input_text_view|story_share_controls_action_bar|new_post_title|media_thumbnail_tray_button|gallery_folder_menu_tv|music_browser_container|music_search_clips_landing_page_container|audio_browser_track_|music_editor_controls_container|link_sticker_list_web_url_edit_text|direct_external_share_container_view/.test(n['resource-id']||'')||n.password==='true'))throw new InterventionError('Instagram has an unsent draft behind its rating dialog. Close it yourself in the phone; the draft was preserved.');
+  if(s.ratingPromptDismissed)throw new InterventionError('The Instagram rating dialog appeared again. Close it yourself in the phone; its screen and draft were preserved.');
   s.signal?.throwIfAborted();
   // Mark before the one allowed click: an ambiguous response must not replay it.
   s.ratingPromptDismissed=true;
   await s.click('xpath','//*[@package="com.instagram.android" and @resource-id="'+nativeId('appirater_cancel_button')+'" and @text="No, thanks" and @displayed="true"]');
-  await s.until(next=>!next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&/^com\.instagram\.android:id\/appirater_/.test(n['resource-id']||'')),'The Instagram rating dialog did not close. Close it yourself in the emulator; its screen and draft were preserved.',15000);
+  await s.until(next=>!next.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&/^com\.instagram\.android:id\/appirater_/.test(n['resource-id']||'')),'The Instagram rating dialog did not close. Close it yourself in the phone; its screen and draft were preserved.',15000);
   return true;
 }
-export const ANDROID_UNRESPONSIVE='Instagram is not responding in Android. Its draft was preserved. Wait for it in the emulator, or choose Web in Compose for a faster feed post. Nothing was retried automatically.';
-export const ANDROID_SYSTEM_UNRESPONSIVE='Android System UI is not responding. Its screen and draft were preserved. Wait in the emulator before another Android attempt, or use Web for the feed.';
+export const ANDROID_UNRESPONSIVE='Instagram is not responding in Android. Its draft was preserved. Wait for it in the phone, or choose Web in Compose for a faster feed post. Nothing was retried automatically.';
+export const ANDROID_SYSTEM_UNRESPONSIVE='Android System UI is not responding. Its screen and draft were preserved. Wait in the phone before another Android attempt, or use Web for the feed.';
 // Only a server-reported root-accessibility timeout can be retried, and only on
 // these read-only endpoints. A transport failure could hide a completed action.
 const ROOT_ACCESSIBILITY_TIMEOUT=/Timed out after \d+ms waiting for the root AccessibilityNodeInfo in the active window\b/i;
-const ANDROID_READ_UNAVAILABLE='Android could not read the current screen after accessibility timeouts. Its unsent draft was preserved. Wait in the emulator, then try again.';
+const ANDROID_READ_UNAVAILABLE='Android could not read the current screen after accessibility timeouts. Its unsent draft was preserved. Wait in the phone, then try again.';
 function inspectionTimeout(){
-  const error=new InterventionError('Android could not read the current screen before its time limit. Its unsent draft was preserved. Wait in the emulator, then try again.');
+  const error=new InterventionError('Android could not read the current screen before its time limit. Its unsent draft was preserved. Wait in the phone, then try again.');
   error.code='ANDROID_READ_TIMEOUT';
   return error;
 }
@@ -189,17 +187,11 @@ export class AndroidSession {
   async openOnce({ start = false } = {}) {
     // Warm workers skip the launcher, repeated PowerShell ownership queries and tuning.
     let ready=false;try{const response=await fetch(ANDROID_URL+'/status',{signal:AbortSignal.timeout(1200)});ready=response.ok&&(await response.json()).value?.ready===true;}catch{}
-    if(this.device.type==='phone'){
-      if(this.device.transport==='wifi'){try{this.serial=await resolveWifiPhone(this.device,{run:(args,options)=>this.hostAdb(args,options),signal:this.signal});}catch(error){const failure=new InterventionError(error.message);failure.code=error.code;throw failure;}}
-      if(await this.adb(['get-state']).catch(()=>'')!=='device')throw new InterventionError(this.device.transport==='wifi'?'Unlock the selected Wi-Fi phone, enable Wireless debugging, then use Scan for phone. No other device was selected.':'Connect and unlock the selected USB phone, then allow USB debugging. No other device was selected.');
-      if(await this.adb(['shell','getprop','ro.kernel.qemu'])==='1')throw new InterventionError('The selected phone is an emulator. Select the intended physical phone.');
-      if(!ready)await exec(process.execPath,[path.resolve('scripts/android-worker.mjs'),'server-start'],{windowsHide:true,timeout:70000,maxBuffer:1024*1024,signal:this.signal});
-    }else{
-    const existing=ready?await this.adb(['emu','avd','name']).catch(()=>''):'';
-    if(start&&(!ready||!existing.split(/\r?\n/).map(value=>value.trim()).includes(ANDROID_AVD)))await exec(process.execPath, [path.resolve('scripts/android-worker.mjs'), 'start'], { windowsHide:true, timeout:150000, maxBuffer:1024*1024, signal:this.signal });
-    const name = (existing||await this.adb(['emu','avd','name'])).split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&x!=='OK').join('');
-    if (name !== ANDROID_AVD || await this.adb(['shell','getprop','sys.boot_completed']) !== '1') throw new InterventionError('Start the dedicated Instagram Android emulator and finish signing in.');
-    }
+    if(!this.serial)throw new InterventionError('Select a connected physical phone in Connections before starting music or Story work.');
+    if(this.device.transport==='wifi'){try{this.serial=await resolveWifiPhone(this.device,{run:(args,options)=>this.hostAdb(args,options),signal:this.signal});}catch(error){const failure=new InterventionError(error.message);failure.code=error.code;throw failure;}}
+    if(await this.adb(['get-state']).catch(()=>'')!=='device')throw new InterventionError(this.device.transport==='wifi'?'Unlock the selected Wi-Fi phone, enable Wireless debugging, then use Scan for phone. No other device was selected.':'Connect and unlock the selected USB phone, then allow USB debugging. No other device was selected.');
+    if(await this.adb(['shell','getprop','ro.kernel.qemu'])==='1')throw new InterventionError('Select the intended physical phone. Virtual devices are not supported.');
+    if(!ready)await exec(process.execPath,[path.resolve('scripts/phone-worker.mjs'),'server-start'],{windowsHide:true,timeout:70000,maxBuffer:1024*1024,signal:this.signal});
     const packages = await this.adb(['shell','pm','list','packages']);
     const installedServer = packages.split(/\s+/).includes('package:io.appium.uiautomator2.server') && packages.includes('package:io.appium.uiautomator2.server.test');
     const deviceServer = installedServer ? await this.adb(['shell','dumpsys','package','io.appium.uiautomator2.server']) : '';
@@ -207,7 +199,7 @@ export class AndroidSession {
     const reusableServer = deviceServer.match(/versionName=([^\s]+)/)?.[1] === serverPackage.version;
     this.id=await connectAndroidDriver(async()=>{
     const response = await fetch(ANDROID_URL+'/session', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({capabilities:{alwaysMatch:{
-      platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':this.serial,'appium:deviceName':this.device.type==='phone'?this.serial:ANDROID_AVD,
+      platformName:'Android','appium:automationName':'UiAutomator2','appium:udid':this.serial,'appium:deviceName':this.serial,
       'appium:appPackage':'com.instagram.android','appium:autoLaunch':false,'appium:noReset':true,'appium:fullReset':false,
       'appium:skipUnlock':true,'appium:skipDeviceInitialization':packages.includes('package:io.appium.settings'),
       'appium:skipServerInstallation':reusableServer,'appium:uiautomator2ServerLaunchTimeout':60000,'appium:adbExecTimeout':60000,'appium:skipLogcatCapture':true,'appium:printPageSourceOnFindFailure':false,'appium:newCommandTimeout':900
@@ -217,7 +209,7 @@ export class AndroidSession {
       // Reset only our automation instrumentation, preserving Instagram data,
       // its signed-in account and every unsent editor. No publication is retried.
       for(const packageName of ['io.appium.uiautomator2.server','io.appium.uiautomator2.server.test'])await this.adb(['shell','am','force-stop',packageName]);
-    },this.device.type==='phone'?'Reconnect and unlock the selected phone, allow debugging, then retry.':'Run android:start and try again.');
+    },'Reconnect and unlock the selected phone, allow debugging, then retry.');
     this.signal?.throwIfAborted();
     this.ratingPromptDismissed=false;
     await this.request('/appium/settings','POST',{settings:ANDROID_DRIVER_SETTINGS});
@@ -304,7 +296,7 @@ export class AndroidSession {
       if(androidAnrOwner(nodes))throw new InterventionError(message);
       if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait'))throw new InterventionError('Android has another unrecognized system dialog. Its screen and draft were preserved.');
     }
-    if(nodes.some(n=>n.password==='true' && n.displayed==='true')) throw new InterventionError('Finish Instagram sign-in yourself in the emulator. Passwords and codes are never read or filled.');
+    if(nodes.some(n=>n.password==='true' && n.displayed==='true')) throw new InterventionError('Finish Instagram sign-in yourself in the phone. Passwords and codes are never read or filled.');
     return nodes;
   }
   async until(predicate, message='Instagram is still loading.', timeout=45000) {
@@ -366,7 +358,7 @@ export class AndroidSession {
   async screenshot() { return Buffer.from(await this.request('/screenshot'),'base64'); }
   async activate() {
     await this.request('/appium/device/activate_app','POST',{appId:'com.instagram.android'});
-    // Activation can return while a low-memory emulator still shows its launcher.
+    // Activation can return while a low-memory phone still shows its launcher.
     await this.until(async nodes=>{
       if(isPhotoAccessPicker(nodes)){await cancelInstagramPhotoAccess(this);return false;}
       return nodes.some(n=>n.displayed==='true'&&n.package==='com.instagram.android');
