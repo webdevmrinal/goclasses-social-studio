@@ -38,7 +38,7 @@ test('a blocked optional Story does not block a feed-only review',()=>{
 });
 test('Story caption import clears stale options and keeps a named application link',()=>{
   const value=importStory({instagramStory:'Application Form\nhttps://www.goclasses.in/apply'});
-  assert.equal(value.url,'https://www.goclasses.in/apply');assert.equal(value.label,'Application Form');assert(value.enabled);
+  assert.equal(value.url,'https://www.goclasses.in/apply');assert.equal(value.label,'Application Form');assert.equal(value.enabled,false);assert.equal(value.enabledByUser,false);
   assert.equal(importStory({}).enabled,false);assert.equal(importStory({}).url,'');
 });
 test('native catalogue parsing uses real track IDs and rejects incomplete rows',()=>{

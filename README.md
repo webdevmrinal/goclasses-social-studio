@@ -106,6 +106,14 @@ The existing Windows phone tools live under `%LOCALAPPDATA%\GoClassesSocialStudi
 
 Driver startup never starts a device or changes its display settings. Scanning, mirroring, touch guard and native publishing remain bound to your selected phone identity. Never disconnect during a pending Save or Share. TEST does not publish or save edits to an online post. LIVE retains account, caption, media, dependency and once-only submission checks.
 
+## Compose defaults
+
+Photo uploads automatically remove removable embedded origin metadata before selection. The original is retained separately, and the cleaned image is rescanned and checked for identical decoded pixels, dimensions and compressed image data. This is a container-metadata check, not a prediction of platform AI labels. Videos and PDFs stay unchanged. Idle older drafts with embedded origin markers are cleaned when opened or reviewed.
+
+New drafts default LinkedIn, WhatsApp and Telegram to Instagram photo 2 (or its only photo). The selection follows Instagram's order and cleaned-file replacements. Pick another thumbnail to override one channel; use its Instagram #2 button to follow again. The default switch preserves custom channel selections. X and both YouTube accounts keep their normal media selection.
+
+Story stays off after caption import, even when an Instagram Story section supplies a link suggestion. Enable it explicitly. New Story/link placements align automatically; dragging or sizing makes placement custom. Auto-align sits below the mockup. ManyChat imports reset to automatic link detection; manual button titles remain available alongside Re-detect buttons. Automatic recovery starts collapsed in Activity, with its current state badge visible.
+
 ## Interface
 
 The supplied Social Studio redesign is implemented with local fonts and assets: one platform rail, separate Feed/Story editors, a compact media library, one native-style preview, a destination checklist in Review, and searchable Activity rows with delivery details. YouTube groups its two accounts while keeping captions and selections independent. ManyChat is separate reply automation. Operational controls live in the connection-status panel and Connections. The action row occupies its own layout space on desktop, tablet and mobile; it never covers the editor.

@@ -3,9 +3,9 @@ import {PLATFORMS} from './platforms.js';
 import {TEXT_ONLY_PLATFORMS} from './media.js';
 import {DEFAULT_STORY_LAYOUT,instagramMethod} from './instagram.js';
 export function freshDraft(postingMethod='web'){
- return {captions:Object.fromEntries(PLATFORMS.map(p=>[p.id,''])),selected:[],mediaIds:[],mediaByPlatform:{},textOnlyPlatforms:[],manychat:{postUrl:'',links:[],linksMode:'auto'},instagram:{postingMethod,music:{enabled:false},story:{enabled:false,linkEnabled:false,url:'',label:'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)}}};
+ return {captions:Object.fromEntries(PLATFORMS.map(p=>[p.id,''])),selected:[],mediaIds:[],mediaByPlatform:{},mediaDefaults:{instagramSecond:true},textOnlyPlatforms:[],manychat:{postUrl:'',links:[],linksMode:'auto'},instagram:{postingMethod,music:{enabled:false},story:{enabled:false,enabledByUser:false,alignment:'auto',linkEnabled:false,url:'',label:'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)}}};
 }
-export function workspaceFingerprint(draft){return JSON.stringify(Object.fromEntries(['captions','selected','mediaIds','mediaByPlatform','textOnlyPlatforms','manychat','instagram'].map(key=>[key,draft[key]])));}
+export function workspaceFingerprint(draft){return JSON.stringify(Object.fromEntries(['captions','selected','mediaIds','mediaByPlatform','mediaDefaults','textOnlyPlatforms','manychat','instagram'].map(key=>[key,draft[key]])));}
 export function reconcilePublishedDraft(draft,run){
  const marker=draft.submission;if(!marker||marker.runId!==run?.id||run.mode!=='LIVE'||!['completed','completed_with_errors','stopped','interrupted'].includes(run.status))return null;
  const next=structuredClone(draft);delete next.submission;
@@ -37,7 +37,7 @@ export function draftFromRun(run,selected){
  d.mediaIds=[...new Set((run.media||[]).map(m=>m.id))];
  d.mediaByPlatform=Object.fromEntries(PLATFORMS.filter(p=>Object.hasOwn(run.mediaByPlatform||{},p.id)).map(p=>[p.id,[...new Set(run.mediaByPlatform[p.id].filter(id=>d.mediaIds.includes(id)))]]));
  d.textOnlyPlatforms=TEXT_ONLY_PLATFORMS.filter(id=>Object.hasOwn(d.mediaByPlatform,id)&&d.mediaByPlatform[id].length===0);
- d.instagram={postingMethod:instagramMethod(run.instagram),music:structuredClone(run.instagram?.music||{enabled:false}),story:{...d.instagram.story,...structuredClone(run.instagram?.story||{}),enabled:d.selected.includes('instagramStory'),sourcePostUrl:''}};
+ d.instagram={postingMethod:instagramMethod(run.instagram),music:structuredClone(run.instagram?.music||{enabled:false}),story:{...d.instagram.story,...structuredClone(run.instagram?.story||{}),enabled:d.selected.includes('instagramStory'),enabledByUser:d.selected.includes('instagramStory'),sourcePostUrl:''}};
  d.manychat={postUrl:'',links:structuredClone(run.manychat?.links||[]),linksMode:run.manychat?.linksMode||'auto'};
  return d;
 }

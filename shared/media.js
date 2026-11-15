@@ -1,16 +1,28 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import {defaultMediaFor,mediaKind} from './media-capabilities.js';
 export const TEXT_ONLY_PLATFORMS = Object.freeze(['linkedin', 'x', 'youtubeDA', 'youtubeCS', 'whatsapp', 'telegram']);
+export const SECOND_IMAGE_PLATFORMS=Object.freeze(['linkedin','whatsapp','telegram']);
+export function instagramPhotos(draft,media){
+ const selected=Object.hasOwn(draft.mediaByPlatform||{},'instagram')?(Array.isArray(draft.mediaByPlatform.instagram)?draft.mediaByPlatform.instagram:[]).map(id=>media.find(item=>item.id===id)).filter(Boolean):defaultMediaFor('instagram',media);
+ return selected.filter(item=>mediaKind(item)==='image');
+}
+export function followsInstagramSecond(draft,id){return SECOND_IMAGE_PLATFORMS.includes(id)&&draft.mediaDefaults?.instagramSecond===true&&!Object.hasOwn(draft.mediaByPlatform||{},id);}
 
 export function mediaIdsFor(draft, id) {
-  return Object.hasOwn(draft.mediaByPlatform || {}, id) ? draft.mediaByPlatform[id] : (id==='whatsapp'?(draft.mediaIds||[]).slice(0,1):draft.mediaIds||[]);
+  if(Object.hasOwn(draft.mediaByPlatform||{},id))return draft.mediaByPlatform[id];
+  if(followsInstagramSecond(draft,id)){const ids=draft.mediaByPlatform?.instagram||draft.mediaIds||[];return ids.length?[ids[1]||ids[0]]:[];}
+  return id==='whatsapp'?(draft.mediaIds||[]).slice(0,1):draft.mediaIds||[];
 }
 export function mediaFor(draft, media, id) {
   if(['instagramMusic','instagramStory','manychat'].includes(id))return [];
-  if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) return media.every(item=>mediaKind(item)==='image')?(id==='whatsapp'?media.slice(0,1):media):defaultMediaFor(id,media);
+  if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) {
+    if(followsInstagramSecond(draft,id)){const photos=instagramPhotos(draft,media);if(photos.length)return [photos[1]||photos[0]];}
+    return media.every(item=>mediaKind(item)==='image')?(id==='whatsapp'?media.slice(0,1):media):defaultMediaFor(id,media);
+  }
   return Array.isArray(draft.mediaByPlatform[id]) ? draft.mediaByPlatform[id].map(key => media.find(item => item.id === key)).filter(Boolean) : [];
 }
 export function selectionErrors(draft) {
+  if(draft.mediaDefaults!==undefined&&(!draft.mediaDefaults||typeof draft.mediaDefaults!=='object'||Array.isArray(draft.mediaDefaults)||typeof draft.mediaDefaults.instagramSecond!=='boolean'))return ['Choose whether other channels follow Instagram photo 2.'];
   const map = draft.mediaByPlatform;
   if (map === undefined) return [];
   if (!map || typeof map !== 'object' || Array.isArray(map)) return ['Invalid destination image selections.'];

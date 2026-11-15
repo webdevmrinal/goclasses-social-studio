@@ -253,3 +253,63 @@ dialog{font-family:Inter,Devanagari,sans-serif;max-height:calc(100dvh - 32px);ov
 .app .panel-layout .activity-head,.app .panel-layout .activity-summary{grid-template-columns:minmax(140px,1fr) 70px 105px 18px;gap:10px}
 .app .panel-layout .activity-head>span:nth-child(4),.app .panel-layout .activity-summary>.time-cell{display:none}
 @media(max-width:700px){.app .panel-layout>.activity-content,.app .connection-utility-open>.connections-grid{display:none}.app .panel-layout .activity-summary{grid-template-columns:minmax(0,1fr) auto}}
+
+/* Media stays in one compact, directly editable selection surface. */
+.app .media-workspace{min-width:0}
+.app .media-dropbar{display:flex;align-items:center;gap:11px;padding:13px;border:1px dashed #45516A;border-radius:9px;background:var(--input);cursor:pointer;transition:border-color .18s,background .18s}
+.app .media-dropbar b{font-size:11px;font-weight:550}
+.app .media-dropbar small{display:block;font-size:9px;color:var(--muted);margin-top:4px}
+.app .media-dropbar>.icon{color:var(--soft)}
+.app .media-dropbar.dragover{border-color:var(--blue);background:var(--tint)}
+.app .media-selection-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 9px;font-size:10px;color:var(--muted);flex-wrap:wrap}
+.app .media-selection-toolbar>div{display:flex;gap:4px;flex-wrap:wrap}
+.app .media-selection-toolbar .button{height:27px;min-height:0;font-size:9px;padding:0 7px;border-color:transparent}
+.app .media-selection-toolbar .is-selected{color:var(--blueLight);background:var(--tint)}
+.app .compact-media .image-options{margin:0;padding:0;border:0;background:transparent}
+.app .compact-media .image-options>summary{display:none}
+.app .media-choices.image-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,112px));gap:9px;padding:0;margin:0;overflow:visible;border:0}
+.app .media-choice-wrap{position:relative;min-width:0;transition:opacity .15s}
+.app .media-choices .image-choice{position:relative;display:flex;flex-direction:column;align-items:stretch;gap:5px;width:100%;min-width:0;max-width:none;height:auto;min-height:120px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--input);color:var(--muted);opacity:.72}
+.app .media-choices .image-choice.chosen{border:1px solid var(--blue);box-shadow:0 0 0 1px #517DFF44;background:var(--tint);opacity:1}
+.app .media-choices .image-choice>img,.app .media-choices .image-choice>video{width:100%;height:74px;object-fit:contain;pointer-events:none;border-radius:5px;background:#0E1116}
+.app .media-choices .choice-name{display:block;max-width:100%;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
+.app .media-choices .metadata-chip{align-self:flex-start;font-size:8px;padding:2px 5px;max-width:100%;min-width:0;white-space:nowrap;gap:3px}
+.app .media-choices .metadata-chip svg{width:9px;height:9px}
+.app .media-choices .choice-number{position:absolute;top:9px;right:9px;left:auto;bottom:auto;width:18px;height:18px;display:grid;place-items:center;border-radius:5px;background:#0E1116D9;color:white;font-size:9px;line-height:1}
+.app .media-choices .chosen .choice-number{background:var(--blue)}
+.app .media-choice-grip{position:absolute;top:8px;left:8px;z-index:2;display:grid;place-items:center;width:23px;height:23px;padding:4px;border-radius:5px;color:#DEE5F3;background:#101217DD;cursor:grab;touch-action:none}
+.app .media-choice-grip svg{width:15px;height:15px}
+.app [data-asset-id].dragging{opacity:.45}
+.app .media-choice-wrap.drop-before{box-shadow:-3px 0 0 var(--blue);border-radius:8px}
+.app .media-choice-wrap.drop-after{box-shadow:3px 0 0 var(--blue);border-radius:8px}
+.app .media-selection-note{font-size:9px;color:var(--soft);line-height:1.6;margin:8px 0 0}
+.app .secondary-image-default{display:flex;align-items:flex-start;gap:7px;font-size:10px;line-height:1.6;color:var(--muted);margin-top:13px}
+.app .secondary-image-default input{accent-color:var(--blue);margin-top:2px}
+.app .media-workspace .media-options{margin:12px 0 18px}
+.app .media-workspace .detailsbox[data-disclosure=design-media-settings]{border:0;padding:0;margin:0 0 16px}
+.app .media-workspace [data-disclosure=design-media-settings]>.detail-content{padding:0}
+.app .media-workspace .asset-list{padding-top:1px}
+.app .asset{width:100%;max-width:100%;box-sizing:border-box}
+.app .asset .asset-meta{overflow:hidden}
+.app .asset-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app .asset .asset-actions{position:static;max-width:28px;min-width:0}
+.app .asset-actions button{box-sizing:border-box;max-width:28px}
+.app .story-source-tile{margin-bottom:15px}
+.app .story-preview-actions{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 0 13px;flex-wrap:wrap}
+.app .story-preview-actions .tiny{font-size:9px}
+.app .manychat-detection-mode{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin:12px 0}
+.app .manychat-detection-mode label{display:flex;gap:6px;align-items:center;color:var(--muted)}
+.app .manychat-detection-mode input{accent-color:var(--blue)}
+.app .recovery-panel{padding:0;overflow:hidden}
+.app .recovery-summary{list-style:none;cursor:pointer;padding:13px 16px}
+.app .recovery-summary::-webkit-details-marker{display:none}
+.app .recovery-summary .recovery-heading{margin:0;padding:0;gap:10px}
+.app .recovery-summary h2{font-size:13px}
+.app .recovery-summary .recovery-symbol{width:27px;height:27px;border-radius:7px}
+.app .recovery-summary .recovery-symbol svg{width:15px;height:15px}
+.app .recovery-summary .recovery-heading>svg{width:13px;height:13px;transition:transform .18s}
+.app .recovery-panel[open] .recovery-summary .recovery-heading>svg{transform:rotate(90deg)}
+.app .recovery-body{padding:17px 19px;border-top:1px solid var(--line)}
+.app .recovery-body .recovery-fields{font-size:11px}
+.app .recovery-body .recovery-checkpoints{margin-top:0}
+@media(max-width:700px){.app .media-dropbar{padding:10px;gap:8px}.app .media-dropbar>.icon{display:none}.app .media-dropbar b{font-size:10px}.app .media-dropbar .button{font-size:10px;padding:0 8px}.app .media-choices.image-picker{grid-template-columns:repeat(auto-fill,minmax(86px,1fr))}.app .media-choices .image-choice>img,.app .media-choices .image-choice>video{height:68px}.app .secondary-image-default{font-size:9px}.app .media-selection-toolbar{gap:6px}.app .recovery-summary{padding:12px}.app .recovery-summary h2{font-size:11px}.app .recovery-summary .badge{font-size:8px}.app .recovery-body{padding:14px}.app .media-workspace .media-options{margin-bottom:15px}}

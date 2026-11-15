@@ -33,7 +33,7 @@ try{
  assert.equal(await page.getByRole('button',{name:'Try Gemini recovery',exact:true}).isEnabled(),true);
  assert.match(await page.locator('.navigation-practice').innerText(),/No social post.*API limits/);
  await page.getByRole('button',{name:'Try Gemini recovery',exact:true}).click();
- await page.getByRole('heading',{name:'Activity',exact:true}).waitFor();await panel.waitFor();
+ await page.getByRole('heading',{name:'Activity',exact:true}).waitFor();await panel.waitFor();assert.equal(await panel.evaluate(el=>el.open),false);await panel.locator(':scope>summary').click();
  assert.equal(practiceCalls,1);assert.equal(await page.locator('#modal').evaluate(el=>el.open),false);
  assert.equal(await panel.locator('[data-recovery-problem]').innerText(),'A discard-selection dialog blocks the editor.');
  assert.equal(await panel.locator('[data-recovery-api]').innerText(),'Waiting for a navigation check');

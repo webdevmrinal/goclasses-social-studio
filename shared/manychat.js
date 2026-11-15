@@ -65,24 +65,32 @@ function suggestedButtonLabel(context, url) {
 }
 // Keep the message unchanged; buttons are derived separately for review.
 export function detectManychatLinks(message = '') {
-  const text = String(message), found = [], seen = new Set();
-  for (const match of text.matchAll(/(?:https?:\/\/|www\.)[^\s<>"\u200B]+/giu)) {
-    let raw = match[0].replace(/[.,!;:]+$/g, '');
+  const text = String(message).replace(/[\u200B\u200C\u200D\uFEFF]/g,''), found = [], seen = new Set();
+  const urls=/(?<![@.\p{L}\p{N}_-])(?:https?:\/\/[^\s<>"`]+|www\.[^\s<>"`]+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|edu|gov|in|co|io|app|me|gle)(?=[:/?#\s),.!*\]]|$)(?::\d{1,5})?(?:[/?#][^\s<>"`]*)?)/giu;
+  let match;while((match=urls.exec(text))){
+    const before = text.slice(0, match.index),markdown=before.match(/\[([^\]\n]+)\]\(\s*$/)?.[1];
+    let raw = match[0];
+    for(const marker of ['**','__','*','_'])if(before.endsWith(marker)&&raw.endsWith(marker))raw=raw.slice(0,-marker.length);
+    // The first unmatched closing parenthesis ends a Markdown link. Balanced
+    // parentheses in a URL remain part of that URL, including brochure names.
+    if(markdown){let depth=0;for(let index=0;index<raw.length;index++){if(raw[index]==='(')depth++;else if(raw[index]===')'){if(!depth){raw=raw.slice(0,index);break;}depth--;}}}
+    raw=raw.replace(/[.,!;:]+$/g, '');
     for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']]) {
       while (raw.endsWith(close) && raw.split(close).length > raw.split(open).length) raw = raw.slice(0, -1);
     }
     let url;
-    try { url = new URL(/^www\./i.test(raw) ? `https://${raw}` : raw); } catch { continue; }
+    urls.lastIndex=match.index+raw.length;
+    raw=raw.replace(/&amp;/gi,'&');
+    try { url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { continue; }
     if (seen.has(url.href)) continue;
     seen.add(url.href);
-    const before = text.slice(0, match.index);
-    const markdown = before.match(/\[([^\]\n]+)\]\(\s*$/)?.[1];
     const line = before.split(/\r?\n/).at(-1).trim();
     const context = markdown || line || before.trimEnd().split(/\r?\n/).at(-1) || '';
     found.push({ label: suggestedButtonLabel(context, url), url: url.href });
   }
   return found;
 }
+export function resetManychatImport(){return {postUrl:'',links:[],linksMode:'auto'};}
 export function manychatLinks(value = {}, caption = '') {
   return value.linksMode === 'auto' || (!value.linksMode && !value.links?.length) ? detectManychatLinks(caption) : value.links ?? [];
 }

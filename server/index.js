@@ -164,7 +164,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   });
   const upload = multer({ dest: path.join(dataDir, 'incoming'), limits: { fileSize: 512 * 1024 * 1024, files: 10, fields: 0, parts: 10 }, fileFilter: (req, file, cb) => cb(acceptedUploadType(file)?null:new Error('Choose JPG, PNG, WEBP, H.264 MP4/MOV, or PDF files.'), true) });
   app.post('/api/upload', (req, res, next) => upload.array('images', 10)(req, res, error => { if (error) next(error); else next(); }), async (req, res) => {
-    const created = [];
+    const created = [], selected = [], sources = [];
     try {
       if (!req.files?.length) throw new Error('Choose at least one image, video, or PDF.');
       for (const file of req.files) {
@@ -172,14 +172,27 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
         await fs.rename(file.path,path.join(dataDir,'uploads',filename));
         let originalName=file.originalname;
         if([...originalName].every(char=>char.codePointAt(0)<=255)){const utf8=Buffer.from(originalName,'latin1').toString('utf8');if(!utf8.includes('\uFFFD'))originalName=utf8;}
-        created.push({id,filename,name:path.basename(originalName.replace(/\\/g,'/')),originalSize:file.size,url:`/media/${filename}`,preservedOriginal:true,...checked});
+        const original={id,filename,name:path.basename(originalName.replace(/\\/g,'/')),originalSize:file.size,url:`/media/${filename}`,preservedOriginal:true,...checked};
+        created.push(original);
+        if(checked.kind!=='image'){selected.push(original);continue;}
+        // Container-only cleaning is verified before the image enters a draft.
+        // Keep the uploaded original separately so downloads/restoration remain possible.
+        const cleaned=await cleanImage(await fs.readFile(path.join(dataDir,'uploads',filename)));
+        if(cleaned.fileHash===original.fileHash){
+          Object.assign(original,{metadata:cleaned.report,sourceMetadata:cleaned.sourceReport,verification:cleaned.verification,autoCleaned:true});selected.push(original);
+        }else{
+          const cleanId=randomUUID(),cleanFilename=`${cleanId}.${checked.format==='jpeg'?'jpg':checked.format}`;
+          const item={...original,id:cleanId,filename:cleanFilename,url:`/media/${cleanFilename}`,sourceId:id,size:cleaned.buffer.length,fileHash:cleaned.fileHash,metadata:cleaned.report,sourceMetadata:cleaned.sourceReport,verification:cleaned.verification,autoCleaned:true};
+          created.push(item);await fs.writeFile(path.join(dataDir,'uploads',cleanFilename),cleaned.buffer);selected.push(item);sources.push(original);
+        }
       }
       media.push(...created);
       const mediaSnapshot = structuredClone(media);
       mediaWrite = mediaWrite.then(() => atomicWrite(path.join(dataDir, 'media.json'), mediaSnapshot));
       await mediaWrite;
-      res.status(201).json({ media: created });
+      res.status(201).json({ media: selected, sources });
     } catch (error) {
+      const failedIds=new Set(created.map(item=>item.id));media=media.filter(item=>!failedIds.has(item.id));
       for (const m of created) await fs.rm(path.join(dataDir, 'uploads', m.filename), { force: true });
       throw error;
     } finally { for (const file of req.files || []) await fs.rm(file.path, { force: true }); }
@@ -201,7 +214,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     if (original.fileHash && original.fileHash !== (await inspectImage(buffer)).fileHash) throw new Error('The image changed after upload. Upload the original again.');
     const cleaned = await cleanImage(buffer), id = randomUUID(), filename = `${id}.${cleaned.metadata.format === 'jpeg' ? 'jpg' : cleaned.metadata.format}`;
     await fs.writeFile(path.join(dataDir, 'uploads', filename), cleaned.buffer);
-    const item = { ...original, id, filename, url: `/media/${filename}`, sourceId: original.id, format: cleaned.metadata.format, size: cleaned.buffer.length, fileHash: cleaned.fileHash, metadata: cleaned.report, sourceMetadata: cleaned.sourceReport, verification: cleaned.verification };
+    const item = { ...original, id, filename, url: `/media/${filename}`, sourceId: original.id, format: cleaned.metadata.format, size: cleaned.buffer.length, fileHash: cleaned.fileHash, metadata: cleaned.report, sourceMetadata: cleaned.sourceReport, verification: cleaned.verification,autoCleaned:req.body?.automatic===true };
     media.push(item); const snapshot = structuredClone(media); mediaWrite = mediaWrite.then(() => atomicWrite(path.join(dataDir, 'media.json'), snapshot)); await mediaWrite;
     res.status(201).json({ media: item });
   });

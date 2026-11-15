@@ -1,6 +1,6 @@
 // Social Studio — Created by Mrinal. Copyright (c) 2026 Mrinal.
 import { PLATFORMS, DESTINATIONS, countCharacters, parseCaptions, captionLimit, captionLength } from '/shared/platforms.js';
-import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft } from '/shared/manychat.js';
+import { DEFAULT_REPLY_MESSAGES, replyBatch, manychatLinks, validateManychatDraft, resetManychatImport } from '/shared/manychat.js';
 import { instagramMethod, usesInstagramAndroid, instagramHashtags, DEFAULT_STORY_LAYOUT, storyLayout, storyLinks, importStory, snapStoryPosition, alignStoryItems } from '/shared/instagram.js';
 import { instagramTabs, nativeDeviceControl, postingMethodControl, musicControl, storyEditor, storyMockup, storyLayoutChoices } from './instagram.js';
 import {storyPresetLayout,selectedStoryPreset} from '/shared/story-layouts.js';
@@ -8,7 +8,7 @@ import {phoneToolbar,phoneRows,phoneSetup,phoneGuardControl} from './phone-contr
 import {syncStorySelection,setDestinationSelected,dependencyRequirements,resolveDependencyLinks,skipDestination} from '/shared/dependencies.js';
 import {captionFacts,captionReviewKey} from '/shared/caption-review.js';
 import { freshDraft, workspaceFingerprint, reconcilePublishedDraft, restartChoices, draftFromRun } from '/shared/draft.js';
-import { mediaFor, updateDraftMedia, setTextOnly, metadataNeedsReview, TEXT_ONLY_PLATFORMS } from '/shared/media.js';
+import { mediaFor, updateDraftMedia, setTextOnly, metadataNeedsReview, TEXT_ONLY_PLATFORMS, SECOND_IMAGE_PLATFORMS, followsInstagramSecond, instagramPhotos } from '/shared/media.js';
 import { destinationReadiness, setupIssues } from '/shared/readiness.js';
 import {mediaKind,mediaSupport,defaultMediaFor,mediaSelectionErrors,UPLOAD_LIMITS} from '/shared/media-capabilities.js';
 import {mediaVisual,mediaFacts,mediaTypeLabel,documentPreview,localMediaUrl} from './media-preview.js';
@@ -70,9 +70,11 @@ draft.selected = Array.isArray(draft.selected) ? draft.selected.filter(id => DES
 draft.mediaIds = Array.isArray(draft.mediaIds) ? draft.mediaIds : [];
 draft.textOnlyPlatforms=Array.isArray(draft.textOnlyPlatforms)?draft.textOnlyPlatforms:[];
 draft.mediaByPlatform = draft.mediaByPlatform && typeof draft.mediaByPlatform === 'object' && !Array.isArray(draft.mediaByPlatform) ? draft.mediaByPlatform : {};
-draft.instagram={postingMethod:instagramMethod(draft.instagram),music:{enabled:false,...draft.instagram?.music},story:{enabled:false,linkEnabled:true,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
+draft.mediaDefaults={instagramSecond:true,...draft.mediaDefaults};
+draft.instagram={postingMethod:instagramMethod(draft.instagram),music:{enabled:false,...draft.instagram?.music},story:{enabled:false,enabledByUser:false,alignment:'auto',linkEnabled:false,url:'',label:'',sourcePostUrl:'',...draft.instagram?.story,layout:draft.instagram?.story?.layout||structuredClone(DEFAULT_STORY_LAYOUT)}};
 draft.instagram.story.enabled=draft.instagram.story.enabled===true;draft.instagram.music.enabled=draft.instagram.music.enabled===true;
 try{draft.instagram.story.layout=storyLayout(draft.instagram.story.layout);}catch{draft.instagram.story.layout=structuredClone(DEFAULT_STORY_LAYOUT);}
+if(!draft.instagram.story.enabledByUser&&!draft.submission)draft.selected=draft.selected.filter(id=>id!=='instagramStory');
 draft.selected=draft.selected.filter(id=>id==='instagramStory'||draft.captions[id]?.trim());syncStorySelection(draft);
 let instagramTab='feed';
 let theme = 'dark';
@@ -223,7 +225,7 @@ function metadataChip(m){
   if(mediaKind(m)!=='image')return `<span class="metadata-chip file-type-chip" title="${m.pending?'Uploading file':'Original file preserved'}">${icon(mediaKind(m)==='video'?'play':'file-text')} ${mediaTypeLabel(m)}</span>`;
   const ai=Boolean(m.metadata?.aiMarkers?.length),origin=ai||m.metadata?.credentials;
   const label=m.pending?'Scanning':m.verification?'Clean':ai?'AI metadata':origin?'Origin metadata':'Clean metadata';
-  const detail=m.pending?'Scanning embedded metadata':origin?'Embedded origin markers found. Click the metadata report for details.':'No embedded origin markers found. Platform AI labels cannot be predicted.';
+  const detail=m.pending?'Scanning embedded metadata':m.autoCleaned?'Automatically cleaned. Identical pixels, dimensions and compressed image data verified; the original is kept.':origin?'Embedded origin markers found. Click the metadata report for details.':'No embedded origin markers found. Platform AI labels cannot be predicted.';
   return `<span class="metadata-chip ${origin?'origin':m.pending?'pending':'clean'}" title="${detail}">${icon(origin?'info':'check')} ${label}</span>`;
 }
 function assetRow(m, i) {
@@ -233,7 +235,7 @@ function assetRow(m, i) {
     ${!m.pending ? `<button type="button" class="asset-grip" data-drag-media="${m.id}" aria-label="Reorder ${escape(m.name)}" title="Drag to reorder; use arrow keys to move" ${busy ? 'disabled' : ''}>${icon('grip')}</button>` : ''}
     <button class="asset-preview-button" data-media-preview="${i}" aria-label="Preview ${escape(m.name)}" aria-pressed="${i === mediaPreviewIndex}"><img src="${escape(m.url)}" alt=""></button>
     <div class="asset-meta"><div class="asset-name" title="${escape(m.name)}"><span class="asset-number">${i + 1}.</span> ${escape(m.name)}</div><div class="asset-facts">${metadataChip(m)}<small>${m.pending ? `Uploading · ${bytes(m.size)}` : `${m.width} × ${m.height} · ${bytes(m.size)} · ${(m.format || m.filename?.split('.').at(-1) || '').toUpperCase()}`}</small></div>
-    ${!m.pending ? `<div class="asset-tools">${origin?`<button type="button" class="text-button clean-action" data-clean-media="${m.id}" ${busy?'disabled':''}>${cleaningMedia===m.id?'Verifying...':'Clean metadata'}</button>`:''}<button type="button" class="text-button" data-metadata="${m.id}" title="View embedded metadata and quality verification">View report</button>${disclosure('asset-' + m.id, 'File actions', `${!m.verification ? origin ? '' : `<button type="button" class="text-button" data-clean-media="${m.id}" ${busy ? 'disabled' : ''}>${cleaningMedia === m.id ? 'Verifying…' : 'Clean metadata'}</button>` : `<button type="button" class="text-button" data-restore-media="${m.id}" ${busy ? 'disabled' : ''}>Use original</button>`}<a href="${escape(m.url)}" download="${escape(m.name.replace(/\.[^.]+$/, '') + '.' + (m.format === 'jpeg' ? 'jpg' : m.format || m.filename.split('.').at(-1)))}">Download</a>`, false, 'asset-options')}</div>${!m.preservedOriginal ? '<small class="legacy-media" title="Earlier optimized copy. Reupload the original for lossless preservation.">Optimized copy</small>' : ''}` : ''}</div>
+    ${!m.pending ? `<div class="asset-tools">${origin?`<button type="button" class="text-button clean-action" data-clean-media="${m.id}" ${busy?'disabled':''}>${cleaningMedia===m.id?'Verifying...':'Clean metadata'}</button>`:''}<button type="button" class="text-button" data-metadata="${m.id}" title="View embedded metadata and quality verification">View report</button>${disclosure('asset-' + m.id, 'File actions', `${!m.verification ? origin ? '' : `<button type="button" class="text-button" data-clean-media="${m.id}" ${busy ? 'disabled' : ''}>${cleaningMedia === m.id ? 'Verifying…' : 'Clean metadata'}</button>` : m.sourceId ? `<button type="button" class="text-button" data-restore-media="${m.id}" ${busy ? 'disabled' : ''}>Use original</button>` : ''}<a href="${escape(m.url)}" download="${escape(m.name.replace(/\.[^.]+$/, '') + '.' + (m.format === 'jpeg' ? 'jpg' : m.format || m.filename.split('.').at(-1)))}">Download</a>`, false, 'asset-options')}</div>${!m.preservedOriginal ? '<small class="legacy-media" title="Earlier optimized copy. Reupload the original for lossless preservation.">Optimized copy</small>' : ''}` : ''}</div>
     ${!m.pending ? `<div class="asset-actions"><div class="asset-order-buttons"><button type="button" data-move="${m.id}" data-direction="-1" aria-label="Move image ${i + 1} earlier" ${busy || i === 0 ? 'disabled' : ''}>${icon('up')}<span>Move earlier</span></button><button type="button" data-move="${m.id}" data-direction="1" aria-label="Move image ${i + 1} later" ${busy || i === draft.mediaIds.length - 1 ? 'disabled' : ''}>${icon('down')}<span>Move later</span></button></div><button class="asset-remove" data-remove="${m.id}" aria-label="Remove ${escape(m.name)} from draft" title="Remove from all destinations" ${busy ? 'disabled' : ''}>${icon('close')}<span>Remove</span></button></div>` : ''}</div>`;
 }
 function fileAssetRow(m,i){
@@ -269,15 +271,15 @@ function mediaCarousel(p, images, scope = 'editor') {
   const current=images[index],kind=mediaKind(current);
   return `<div class="preview-image destination-image destination-${kind}">${kind==='document'?documentPreview(current):mediaVisual(current,{id:scope+'-image-'+p.id,controls:kind==='video'})}${metadataChip(current)}<span class="image-count" id="image-count-${p.id}">${index+1} / ${images.length}</span>${images.length>1?`<div class="preview-nav"><button data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-step="-1" aria-label="Previous image">${icon('left')}</button><button data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-step="1" aria-label="Next image">${icon('right')}</button></div>`:''}</div><div class="carousel-strip" tabindex="0" aria-label="${escape(p.name)} selected media scroller">${images.map((m,i)=>`<div class="carousel-item"><button class="carousel-thumb ${index===i?'active':''}" data-carousel="${p.id}" data-carousel-scope="${scope}" data-carousel-index="${i}" aria-label="Show selected ${mediaKind(m)==='image'?'image':mediaTypeLabel(m).toLowerCase()} ${i+1}: ${escape(m.name)}" aria-pressed="${index===i}">${mediaVisual(m,{compact:true,className:mediaKind(m)==='document'?'file-thumbnail':''})}<span>${i+1}</span></button>${scope==='editor'?`<button class="carousel-remove" data-remove-destination-media="${p.id}" data-media-id="${m.id}" aria-label="Remove ${escape(m.name)} from ${escape(p.name)}" title="Remove from ${escape(p.name)}">${icon('close')}</button>`:''}</div>`).join('')}</div>`;
 }
-function destinationMediaEditor(p) {
-  if(p.id==='manychat'||!selectedMedia().length)return '';
-  const images=platformMedia(p.id),ids=images.map(m=>m.id),all=selectedMedia(),defaults=defaultMediaFor(p.id,all),unsupported=all.filter(m=>!mediaSupport(p.id,m).supported),nonPhotos=all.some(m=>mediaKind(m)!=='image');
-  const picker=`<div class="image-selection-heading"><span>${nonPhotos?'Choose photos, one video or one PDF':p.maxImages===1?'Choose one photo':`Choose up to ${p.maxImages} photos`}</span></div><div class="image-picker" tabindex="0" aria-label="Choose media for ${escape(p.name)}">${all.map(m=>{
-    const chosen=ids.indexOf(m.id),support=mediaSupport(p.id,m),kind=mediaKind(m),atPhotoLimit=kind==='image'&&images.every(item=>mediaKind(item)==='image')&&p.maxImages>1&&chosen<0&&ids.length>=p.maxImages,disabled=chosen<0&&(!support.supported||atPhotoLimit);
-    return `<button class="image-choice ${chosen>=0?'chosen':''} ${!support.supported?'unsupported-media':''}" data-pick-media="${p.id}" data-media-id="${m.id}" aria-pressed="${chosen>=0}" aria-label="${escape(p.name)}: ${escape(m.name)}${!support.supported?' · '+escape(support.reason):''}" title="${escape(!support.supported?support.reason:mediaTypeLabel(m)+': '+m.name)}" ${disabled?'disabled':''}>${mediaVisual(m,{compact:true,className:kind==='document'?'file-thumbnail':''})}<span class="choice-number">${chosen>=0?chosen+1:!support.supported?'—':'+'}</span><span class="choice-name">${escape(m.name)}</span>${kind!=='image'?`<small class="choice-kind">${mediaTypeLabel(m)}${!support.supported?' · Unavailable':''}</small>`:''}</button>`;
-  }).join('')}</div>${images.length>1?`<div class="selection-order" aria-label="${escape(p.name)} image order">${images.map((m,i)=>`<div><span>${i+1}. ${escape(m.name)}</span><button data-destination-move="${p.id}" data-media-id="${m.id}" data-direction="-1" aria-label="Move selected image ${i+1} earlier" ${i===0?'disabled':''}>${icon('left')}</button><button data-destination-move="${p.id}" data-media-id="${m.id}" data-direction="1" aria-label="Move selected image ${i+1} later" ${i===images.length-1?'disabled':''}>${icon('right')}</button></div>`).join('')}</div>`:''}${unsupported.length?`<p class="media-support-note">${[...new Set(unsupported.map(m=>mediaSupport(p.id,m).reason))].map(escape).join(' ')}</p>`:''}`;
-  const kind=images.length?mediaKind(images[0]):'image',selectionLabel=kind==='video'?(p.id==='instagram'?'Reel video':'Video'):kind==='document'?'PDF document':images.length+' '+(images.length===1?'photo':'photos'),inheritLabel=nonPhotos?'Use supported':p.id==='whatsapp'?'Use first photo':'Use all',selectionErrors=mediaSelectionErrors(p.id,images);
-  return `<section class="destination-media" aria-label="${escape(p.name)} media"><div data-carousel-view="editor-${p.id}">${mediaCarousel(p,images)}</div><div class="destination-image-actions"><span>${selectionLabel}${kind==='image'?' selected':''}</span><div><button class="button subtle small" data-platform-media-action="${p.id}" data-selection-action="inherit" ${!defaults.length||(!nonPhotos&&p.id!=='whatsapp'&&all.length>p.maxImages)?'disabled':''}>${inheritLabel}</button><button class="button small" data-platform-media-action="${p.id}" data-selection-action="clear" ${!images.length?'disabled':''}>Remove all</button></div></div>${selectionErrors.length?`<p class="media-selection-error error-text">${selectionErrors.map(escape).join(' ')}</p>`:''}${disclosure('images-'+p.id,(nonPhotos?'Choose media':'Choose photos')+' · '+images.length+'/'+(kind==='image'?p.maxImages:1),picker,images.length>p.maxImages,'image-options')}</section>`;
+function destinationMediaEditor(p){
+ if(p.id==='manychat')return '';
+ const available=composerMedia(),images=platformMedia(p.id),ids=images.map(m=>m.id),all=[...images,...available.filter(m=>!ids.includes(m.id))],busy=workerBusy()||uploading||Boolean(cleaningMedia),photos=instagramPhotos(draft,selectedMedia()),second=photos[1]||photos[0],following=followsInstagramSecond(draft,p.id),nonPhotos=all.some(m=>mediaKind(m)!=='image');
+ if(!all.length)return '';
+ const defaults=defaultMediaFor(p.id,selectedMedia()),errors=mediaSelectionErrors(p.id,images),unsupported=all.filter(m=>!m.pending&&!mediaSupport(p.id,m).supported);
+ const picker=all.map(m=>{const chosen=ids.indexOf(m.id),support=mediaSupport(p.id,m),kind=mediaKind(m),limited=kind==='image'&&images.every(item=>mediaKind(item)==='image')&&p.maxImages>1&&chosen<0&&ids.length>=p.maxImages,disabled=busy||m.pending||chosen<0&&(!support.supported||limited);
+  return '<div class="media-choice-wrap" data-asset-id="'+escape(m.id)+'"><button class="image-choice '+(chosen>=0?'chosen':'')+' '+(!support.supported&&!m.pending?'unsupported-media':'')+'" data-pick-media="'+p.id+'" data-media-id="'+escape(m.id)+'" aria-pressed="'+(chosen>=0)+'" aria-label="'+escape(p.name+': '+m.name)+'" title="'+escape(m.pending?'Uploading and cleaning':support.reason||m.name)+'" '+(disabled?'disabled':'')+'>'+mediaVisual(m,{compact:true,className:kind==='document'?'file-thumbnail':''}).replace('<img','<img draggable="false"')+'<span class="choice-number">'+(chosen>=0?chosen+1:!support.supported&&!m.pending?'—':'+')+'</span><span class="choice-name">'+escape(m.name)+'</span>'+(kind==='image'?metadataChip(m):'<span class="choice-kind">'+mediaTypeLabel(m)+'</span>')+'</button>'+(chosen>=0&&images.length>1?'<button class="media-choice-grip" data-drag-media="'+escape(m.id)+'" data-drag-platform="'+p.id+'" title="Drag to reorder; arrow keys also work" aria-label="Reorder '+escape(m.name)+'" '+(busy?'disabled':'')+'>'+icon('grip')+'</button>':'')+'</div>';
+ }).join('');
+ return '<section class="destination-media compact-media" aria-label="'+escape(p.name)+' media"><div class="media-selection-toolbar"><span>'+(following&&second?'Following Instagram photo '+(photos.length>1?'2':'1'):images.length+' selected')+'</span><div>'+(SECOND_IMAGE_PLATFORMS.includes(p.id)&&second?'<button class="button subtle small '+(following?'is-selected':'')+'" data-platform-media-action="'+p.id+'" data-selection-action="second" '+(busy?'disabled':'')+'>Instagram #'+(photos.length>1?'2':'1')+'</button>':'')+'<button class="button subtle small" data-platform-media-action="'+p.id+'" data-selection-action="inherit" '+(busy||!defaults.length?'disabled':'')+'>'+(nonPhotos?'Use supported':p.maxImages===1?'First photo':all.filter(m=>mediaKind(m)==='image').length>p.maxImages?'First '+p.maxImages+' photos':'All photos')+'</button><button class="button subtle small" data-platform-media-action="'+p.id+'" data-selection-action="clear" '+(busy||!images.length?'disabled':'')+'>'+(p.textOnly?'Text only':'Clear')+'</button></div></div><details class="image-options" open><summary>Choose media</summary><div class="image-picker media-choices" data-drag-surface="'+p.id+'" aria-label="Choose media for '+escape(p.name)+'">'+picker+'</div></details>'+(p.id==='instagram'?'<label class="secondary-image-default"><input type="checkbox" data-media-default '+(draft.mediaDefaults.instagramSecond?'checked':'')+' '+(busy?'disabled':'')+'><span>Auto-default: photo 2 for LinkedIn, WhatsApp & Telegram</span></label>':'')+'<div class="media-selection-note">'+(images.length>1?'Drag the grip to reorder. ':'')+'Click a photo to select or deselect.</div>'+(errors.length?'<p class="media-selection-error error-text">'+errors.map(escape).join(' ')+'</p>':'')+(unsupported.length?'<p class="media-support-note">'+[...new Set(unsupported.map(m=>mediaSupport(p.id,m).reason))].map(escape).join(' ')+'</p>':'')+'</section>';
 }
 function captionEditor(p){return editorMarkup(p,designContext());}
 
@@ -287,10 +289,10 @@ function manychatLinkFields() {
   const links = currentManychatLinks();
   let error = '';
   try { validateManychatDraft({ ...draft.manychat, postUrl: '' }, draft.captions.manychat); } catch (e) { error = e.message; }
-  return `<p class="import-help">${draft.manychat.linksMode === 'auto' ? 'Detected from your DM' : 'Custom links'}</p>
+  return `<div class="manychat-detection-mode"><label><input type="radio" name="manychat-links-mode" data-manychat-mode value="auto" ${draft.manychat.linksMode==='auto'?'checked':''}>Auto-detect links</label><label><input type="radio" name="manychat-links-mode" data-manychat-mode value="manual" ${draft.manychat.linksMode==='manual'?'checked':''}>Custom buttons</label></div><p class="import-help">${draft.manychat.linksMode === 'auto' ? links.length+' button'+(links.length===1?'':'s')+' detected from your DM' : 'Custom links'}</p>
     ${links.map((link, index) => `<div class="manychat-link-entry"><div class="manychat-link-row"><label class="field"><span>Button ${index + 1} · 20 characters</span><input data-manychat-link="${index}" data-link-field="label" maxlength="20" value="${escape(link.label || '')}" placeholder="Open the details"></label><label class="field"><span>Link</span><input type="url" data-manychat-link="${index}" data-link-field="url" value="${escape(link.url || '')}" placeholder="https://…"></label></div><button type="button" class="button subtle small" data-manychat-remove="${index}" aria-label="Remove button ${index + 1}">Remove</button></div>`).join('')}
-    ${!links.length ? '<p class="import-help">Add links to your DM or create a button.</p>' : ''}
-    <p class="manychat-links-error error-text" role="status">${escape(error)}</p><div class="inline-controls">${links.length < 3 ? '<button type="button" class="button small" data-manychat-add>Add a button</button>' : ''}${draft.manychat.linksMode === 'manual' ? '<button type="button" class="button subtle small" data-manychat-auto>Refresh from DM</button>' : ''}</div>`;
+    ${!links.length ? '<p class="import-help">No links found in this DM. Paste a link above to create a button.</p>' : ''}
+    <p class="manychat-links-error error-text" role="status">${escape(error)}</p><div class="inline-controls">${links.length < 3 ? '<button type="button" class="button small" data-manychat-add>Add a button</button>' : ''}<button type="button" class="button subtle small" data-manychat-auto>Re-detect buttons</button></div>`;
 }
 function refreshManychatLinks() {
   const target = document.querySelector('#manychat-link-fields');
@@ -390,10 +392,10 @@ function recoveryPanel(){
  const reached=new Set(events.map(event=>event.phase));reached.add(phase);
  const isPractice=recovery.practice===true||recovery.kind==='practice';
  const ready=state.navigationAI?.configured&&state.navigationAI?.enabled&&state.navigationAI?.automatic;
- return '<section class="panel recovery-panel" data-recovery-id="'+escape(recovery.id)+'" data-recovery-phase="'+escape(phase)+'" aria-labelledby="recovery-title"><div class="recovery-heading"><div><span class="recovery-symbol">'+icon(active?'refresh':'sparkle',active?'spin':'')+'</span><h2 id="recovery-title">'+(isPractice?'Gemini practice test':'Automatic recovery')+'</h2></div><span class="badge '+(recovery.status==='succeeded'?'':active?'neutral':'warn')+'" data-recovery-state role="status">'+escape(recoveryPhases[phase]||'Recovery update')+'</span></div><ol class="recovery-checkpoints" aria-label="Recovery stages">'+checkpoints.map(([key,label])=>'<li class="'+(phase===key?'current':reached.has(key)?'reached':'')+'" '+(phase===key?'aria-current="step"':'')+'>'+escape(label)+'</li>').join('')+'</ol><dl class="recovery-fields"><div><dt>Problem</dt><dd data-recovery-problem>'+escape(recovery.problem||'A navigation step needs attention.')+'</dd></div><div><dt>Gemini</dt><dd data-recovery-api>'+escape(gemini)+'</dd></div><div><dt>Suggested fix</dt><dd data-recovery-fix>'+escape(fix||(phase==='detected'||phase==='calling'?'Waiting for a suggestion':'No fix was suggested'))+'</dd></div><div><dt>Currently trying</dt><dd data-recovery-action aria-live="polite">'+escape(current)+'</dd></div></dl>'+(events.length?disclosure('recovery-'+recovery.id,'Recovery log','<ol class="recovery-events">'+events.map(event=>'<li><strong>'+escape(recoveryPhases[event.phase]||'Update')+'</strong><span>'+escape(event.message||event.action||event.fix||'')+'</span>'+(event.fix&&event.fix!==event.message?'<small>Fix: '+escape(event.fix)+'</small>':'')+(event.action&&event.action!==event.message?'<small>Action: '+escape(event.action)+'</small>':'')+'</li>').join('')+'</ol>',false,'recovery-log'):'')+(active&&recovery.canStop?'<div class="recovery-practice-footer"><button class="button small" data-action="recovery-stop">Stop recovery</button></div>':'')+(isPractice?'<div class="recovery-practice-footer"><small>Practice only. No social post is sent.</small>'+(!active?'<button type="button" class="button small" data-action="recovery-test" '+(workerBusy()||!ready?'disabled':'')+'>'+icon('refresh')+' Retry practice test</button>':'')+'</div>':'')+'</section>';
+ return '<details '+(disclosureExpansion.get('recovery-summary-'+recovery.id)?'open':'')+' data-disclosure="recovery-summary-'+escape(recovery.id)+'" class="panel recovery-panel" data-recovery-id="'+escape(recovery.id)+'" data-recovery-phase="'+escape(phase)+'" aria-labelledby="recovery-title"><summary class="recovery-summary"><div class="recovery-heading"><div><span class="recovery-symbol">'+icon(active?'refresh':'sparkle',active?'spin':'')+'</span><h2 id="recovery-title">'+(isPractice?'Gemini practice test':'Automatic recovery')+'</h2></div><span class="badge '+(recovery.status==='succeeded'?'':active?'neutral':'warn')+'" data-recovery-state role="status">'+escape(recoveryPhases[phase]||'Recovery update')+'</span>'+icon('chevron')+'</div></summary><div class="recovery-body"><ol class="recovery-checkpoints" aria-label="Recovery stages">'+checkpoints.map(([key,label])=>'<li class="'+(phase===key?'current':reached.has(key)?'reached':'')+'" '+(phase===key?'aria-current="step"':'')+'>'+escape(label)+'</li>').join('')+'</ol><dl class="recovery-fields"><div><dt>Problem</dt><dd data-recovery-problem>'+escape(recovery.problem||'A navigation step needs attention.')+'</dd></div><div><dt>Gemini</dt><dd data-recovery-api>'+escape(gemini)+'</dd></div><div><dt>Suggested fix</dt><dd data-recovery-fix>'+escape(fix||(phase==='detected'||phase==='calling'?'Waiting for a suggestion':'No fix was suggested'))+'</dd></div><div><dt>Currently trying</dt><dd data-recovery-action aria-live="polite">'+escape(current)+'</dd></div></dl>'+(events.length?disclosure('recovery-'+recovery.id,'Recovery log','<ol class="recovery-events">'+events.map(event=>'<li><strong>'+escape(recoveryPhases[event.phase]||'Update')+'</strong><span>'+escape(event.message||event.action||event.fix||'')+'</span>'+(event.fix&&event.fix!==event.message?'<small>Fix: '+escape(event.fix)+'</small>':'')+(event.action&&event.action!==event.message?'<small>Action: '+escape(event.action)+'</small>':'')+'</li>').join('')+'</ol>',false,'recovery-log'):'')+(active&&recovery.canStop?'<div class="recovery-practice-footer"><button class="button small" data-action="recovery-stop">Stop recovery</button></div>':'')+(isPractice?'<div class="recovery-practice-footer"><small>Practice only. No social post is sent.</small>'+(!active?'<button type="button" class="button small" data-action="recovery-test" '+(workerBusy()||!ready?'disabled':'')+'>'+icon('refresh')+' Retry practice test</button>':'')+'</div>':'')+'</div></details>';
 }
 function renderRecovery(){
- const host=document.querySelector('#recovery-progress-host');if(host){const html=recoveryPanel();if(host.dataset.rendered!==html){const main=document.querySelector('#main'),y=main?.scrollTop||0;host.dataset.rendered=html;host.innerHTML=html;if(main)main.scrollTop=y;}}
+ const host=document.querySelector('#recovery-progress-host');if(host){const current=host.querySelector('details[data-disclosure]');if(current)disclosureExpansion.set(current.dataset.disclosure,current.open);const html=recoveryPanel();if(host.dataset.rendered!==html){const main=document.querySelector('#main'),y=main?.scrollTop||0;host.dataset.rendered=html;host.innerHTML=html;if(main)main.scrollTop=y;}}
  const shortcut=document.querySelector('[data-recovery-shortcut]');if(shortcut){const html=recoveryShortcut();if(shortcut.innerHTML!==html)shortcut.innerHTML=html;}
  const ready=state.navigationAI?.configured&&state.navigationAI?.enabled&&state.navigationAI?.automatic;
  document.querySelectorAll('[data-action="recovery-test"]').forEach(button=>{button.disabled=workerBusy()||!ready;});
@@ -528,39 +530,39 @@ function navigate(next) {
 }
 function bindPage() {
   bindStoryGestures();
-  for (const handle of document.querySelectorAll('[data-drag-media]')) {
-    handle.onpointerdown = event => {
-      if (handle.disabled || event.button !== 0) return;
-      event.preventDefault(); handle.setPointerCapture(event.pointerId);
-      const id = handle.dataset.dragMedia; let targetId = id, after = false;
-      const dragged = handle.closest('.asset'); dragged.classList.add('dragging');
-      handle.onpointermove = move => {
-        document.querySelectorAll('.asset.drop-before,.asset.drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
-        const target = document.elementFromPoint(move.clientX, move.clientY)?.closest('[data-asset-id]');
-        if (!target || target.dataset.assetId === id) return;
-        targetId = target.dataset.assetId; after = move.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
-        target.classList.add(after ? 'drop-after' : 'drop-before');
-      };
-      handle.onpointerup = up => {
-        handle.releasePointerCapture(up.pointerId); handle.onpointermove = handle.onpointerup = null;
-        document.querySelectorAll('.asset').forEach(el => el.classList.remove('dragging', 'drop-before', 'drop-after'));
-        if (targetId === id) return;
-        const order = draft.mediaIds.filter(value => value !== id), index = order.indexOf(targetId);
-        if (index < 0) return; order.splice(index + (after ? 1 : 0), 0, id); changeMediaOrder(order, 'Image order updated.');
-      };
-      handle.onpointercancel = () => { handle.onpointermove = handle.onpointerup = null; document.querySelectorAll('.asset').forEach(el => el.classList.remove('dragging', 'drop-before', 'drop-after')); };
+  for(const handle of document.querySelectorAll('[data-drag-media]')){
+   handle.onpointerdown=event=>{
+    if(handle.disabled||event.button!==0)return;event.preventDefault();handle.setPointerCapture(event.pointerId);
+    const id=handle.dataset.dragMedia,platformId=handle.dataset.dragPlatform,surface=handle.closest('[data-drag-surface]')||handle.closest('.asset-list'),dragged=handle.closest('[data-asset-id]');let targetId=id,after=false;
+    dragged?.classList.add('dragging');
+    handle.onpointermove=move=>{
+     surface?.querySelectorAll('.drop-before,.drop-after').forEach(el=>el.classList.remove('drop-before','drop-after'));
+     const target=document.elementFromPoint(move.clientX,move.clientY)?.closest('[data-asset-id]');
+     if(!target||!surface?.contains(target)||target.dataset.assetId===id)return;
+     const rect=target.getBoundingClientRect(),from=dragged.getBoundingClientRect(),sameRow=Math.abs(rect.top-from.top)<rect.height/2;
+     targetId=target.dataset.assetId;after=sameRow?move.clientX>rect.left+rect.width/2:move.clientY>rect.top+rect.height/2;target.classList.add(after?'drop-after':'drop-before');
+     const main=document.querySelector('#main'),bounds=main.getBoundingClientRect();if(move.clientY>bounds.bottom-35)main.scrollTop+=12;else if(move.clientY<bounds.top+35)main.scrollTop-=12;
     };
+    const finish=up=>{
+     if(handle.hasPointerCapture(up.pointerId))handle.releasePointerCapture(up.pointerId);handle.onpointermove=handle.onpointerup=handle.onpointercancel=null;
+     surface?.querySelectorAll('.dragging,.drop-before,.drop-after').forEach(el=>el.classList.remove('dragging','drop-before','drop-after'));
+     if(up.type==='pointercancel'||targetId===id||!surface?.contains(document.elementFromPoint(up.clientX,up.clientY)))return;
+     const ids=platformId?platformMedia(platformId).map(m=>m.id):[...draft.mediaIds],order=ids.filter(value=>value!==id),index=order.indexOf(targetId);if(index<0)return;order.splice(index+(after?1:0),0,id);
+     if(platformId){draft.mediaByPlatform[platformId]=order;saveDraft();shell();}else changeMediaOrder(order,'Image order updated.');
+    };handle.onpointerup=handle.onpointercancel=finish;
+   };
   }
   // Delegate most events once; only native file/form controls need per-render listeners.
   const file = document.querySelector('#file-input');
   if (file) file.onchange = () => upload(file.files);
   const zone = document.querySelector('#dropzone');
   if (zone) {
-    zone.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } };
+    zone.onkeydown = e => { if (e.target===zone&&(e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); file.click(); } };
     zone.onclick=e=>{if(!e.target.closest('button,a,input'))file.click();};
-    zone.ondragover = e => { e.preventDefault(); zone.classList.add('dragover'); };
-    zone.ondragleave = () => zone.classList.remove('dragover');
-    zone.ondrop = e => { e.preventDefault(); zone.classList.remove('dragover'); upload(e.dataTransfer.files); };
+    const drop=zone.closest('[data-file-drop]')||zone;
+    drop.ondragover = e => { e.preventDefault(); zone.classList.add('dragover'); };
+    drop.ondragleave = () => zone.classList.remove('dragover');
+    drop.ondrop = e => { e.preventDefault(); zone.classList.remove('dragover'); upload(e.dataTransfer.files); };
   }
   const form = document.querySelector('#settings-form');
   if (form) {
@@ -574,16 +576,23 @@ function bindPage() {
     };
   }
 }
+async function cleanExistingDraftImages(){
+ if(cleaningMedia||uploading||workerBusy()||draft.submission)return;
+ const pending=selectedMedia().filter(m=>mediaKind(m)==='image'&&!m.verification&&(m.metadata?.credentials||m.metadata?.aiMarkers?.length));if(!pending.length)return;
+ try{for(const item of pending){if(!draft.mediaIds.includes(item.id))continue;cleaningMedia=item.id;shell();const result=await api('/api/media/'+item.id+'/clean',{method:'POST',body:{automatic:true}});state.media.push(result.media);updateDraftMedia(draft,draft.mediaIds.map(id=>id===item.id?result.media.id:id),{[item.id]:result.media.id});}saveDraft();}
+ finally{cleaningMedia=null;shell();}
+}
 async function upload(files) {
   if (uploading || !files?.length) return;
   if (draft.mediaIds.length + files.length > 10) return toast('Choose up to 10 files. Remove a file to add another.', true);
   const kindForFile=file=>['image/jpeg','image/png','image/webp'].includes(file.type)?'image':['video/mp4','video/quicktime'].includes(file.type)?'video':file.type==='application/pdf'?'document':(!file.type||file.type==='application/octet-stream')&&/\.(mp4|mov)$/i.test(file.name)?'video':(!file.type||file.type==='application/octet-stream')&&/\.pdf$/i.test(file.name)?'document':null;
   for(const file of files){const kind=kindForFile(file);if(!kind)return toast(file.name+': choose a JPG, PNG, WEBP, MP4, MOV or PDF.',true);if(file.size>UPLOAD_LIMITS[kind])return toast(file.name+': '+(kind==='image'?'photos':kind==='video'?'videos':'PDFs')+' must be '+Math.round(UPLOAD_LIMITS[kind]/1024/1024)+' MB or smaller.',true);}
+  const previousPhotos=selectedMedia().filter(m=>mediaKind(m)==='image'),previousInstagram=platformMedia('instagram'),appendInstagram=Object.hasOwn(draft.mediaByPlatform,'instagram')&&previousPhotos.length>0&&previousInstagram.length===previousPhotos.length&&previousPhotos.every(m=>previousInstagram.some(chosen=>chosen.id===m.id));
   const form = new FormData(); for (const f of files) form.append('images', f);
   pendingMedia = [...files].map((file, index) => ({ id: `pending-${Date.now()}-${index}`, name: file.name, url: URL.createObjectURL(file), size: file.size, kind:kindForFile(file), format:file.name.split('.').at(-1).toLowerCase(), pending: true }));
   mediaPreviewIndex = selectedMedia().length;
   lastMediaOrder = null; uploading = true; shell();
-  try { const result = await api('/api/upload', { method: 'POST', body: form }); state.media.push(...result.media); updateDraftMedia(draft,[...draft.mediaIds,...result.media.map(m=>m.id)]); saveDraft(); toast(`${result.media.every(media=>mediaKind(media)==='image')?(result.media.length===1?'Image ready':'Images ready'):(result.media.length===1?'Media ready':'Media files ready')}.`); }
+  try { const result = await api('/api/upload', { method: 'POST', body: form }); state.media.push(...(result.sources||[]),...result.media);draft.instagram.story.alignment='auto'; updateDraftMedia(draft,[...draft.mediaIds,...result.media.map(m=>m.id)]);if(appendInstagram)draft.mediaByPlatform.instagram=[...previousInstagram.map(m=>m.id),...result.media.filter(m=>mediaKind(m)==='image').map(m=>m.id)];saveDraft(); toast(`${result.media.every(media=>mediaKind(media)==='image')?(result.media.length===1?'Image ready':'Images ready'):(result.media.length===1?'Media ready':'Media files ready')}.`); }
   catch (error) { toast(error.message, true); }
   finally {
     const temporaryUrls = pendingMedia.map(m => m.url); pendingMedia = []; uploading = false; shell();
@@ -642,7 +651,7 @@ async function changeSelectedActions(candidate,{review=view==='preview'}={}) {
 async function preview() {
   if(workerBusy()||uploading)return toast('Finish the current activity first.',true);
   try {
-    syncStorySelection(draft);
+    await cleanExistingDraftImages();syncStorySelection(draft);
     const source = structuredClone(draft), stamp = JSON.stringify(source);
     if(dependencyRequirements(source).length){dependencyDialog(source,async next=>{draft=next;saveDraft();await preview();});return;}
     const checked = await api('/api/readiness', { method: 'POST', body: source });
@@ -693,7 +702,7 @@ function importDialog() {
   document.querySelector('#parse-captions').onclick = () => {
     const { captions, errors } = parseCaptions(document.querySelector('#import-captions').value);
     if (errors.length) { document.querySelector('#dialog-error').textContent = errors.join('\n'); return; }
-    draft.captions = captions; draft.instagram.story=importStory(captions);draft.selected=PLATFORMS.filter(p=>captions[p.id]?.trim()).map(p=>p.id);if(draft.instagram.story.enabled)draft.selected.push('instagramStory');saveDraft(); modal.close(); view = 'compose'; shell(); toast('Captions imported.');
+    draft.captions=captions;draft.manychat=resetManychatImport();draft.instagram.story=importStory(captions);draft.selected=PLATFORMS.filter(p=>captions[p.id]?.trim()).map(p=>p.id);if(draft.instagram.story.enabled)draft.selected.push('instagramStory');saveDraft(); modal.close(); view = 'compose'; shell(); toast('Captions imported.');
   };
 }
 async function copyText(text) {
@@ -718,13 +727,14 @@ document.addEventListener('click', async e => {
     if(button.hasAttribute('data-design-media-settings')){const id='design-media-settings';disclosureExpansion.set(id,!disclosureExpansion.get(id));shell();return;}
     if(button.dataset.designFilter){design.activityFilter=button.dataset.designFilter;shell();return;}
     if(button.dataset.designReview){design.reviewId=button.dataset.designReview;design.mobilePreview=true;shell();return;}
-    if(button.dataset.designInclude){const id=button.dataset.designInclude;if(!draft.captions[id]?.trim()&&id!=='instagramStory'){captionDialog(id);return;}const next=structuredClone(draft);setDestinationSelected(next,id,true);await changeSelectedActions(next);return;}
+    if(button.dataset.designInclude){const id=button.dataset.designInclude;if(!draft.captions[id]?.trim()&&id!=='instagramStory'){captionDialog(id);return;}const next=structuredClone(draft);setDestinationSelected(next,id,true);if(id==='instagramStory'){next.instagram.story.enabledByUser=true;next.instagram.story.alignment='auto';}await changeSelectedActions(next);return;}
     if(button.hasAttribute('data-design-slide')){const target=button.closest('[data-design-preview]'),id=target.dataset.designPreview,length=platformMedia(id).length;if(length)platformPreviewIndex['design'+id]=((platformPreviewIndex['design'+id]||0)+Number(button.dataset.designSlide)+length)%length;refreshDesignPreview();return;}
     if(button.dataset.action==='go-connections'){design.utility='';navigate('settings');return;}
     if(button.hasAttribute('data-ask-gemini')){await openRecoveryHelp(button.dataset.geminiRun?{scope:'item',runId:button.dataset.geminiRun,itemId:button.dataset.geminiItem}:undefined);return;}
     if(button.hasAttribute('data-recovery-help-close')){recoveryHelpDialog?.close();return;}
     if(button.hasAttribute('data-recovery-help-request')){await requestRecoveryHelp();return;}
     if(button.hasAttribute('data-recovery-help-cancel')){await cancelRecoveryHelp();return;}
+    if(button.dataset.action==='edit-feed'){captionTab='instagram';instagramTab='feed';shell();return;}
     if(button.dataset.igTab){instagramTab=button.dataset.igTab;shell();return;}
     if(button.hasAttribute('data-story-preset')){selectStoryLayout(button.dataset.storyPreset);return;}
     if(button.hasAttribute('data-story-align')){autoAlignStory();return;}
@@ -747,10 +757,11 @@ document.addEventListener('click', async e => {
     }
     if (button.dataset.pickMedia) {
       const id = button.dataset.pickMedia, p = platform(id), selected = platformMedia(id).map(media=>media.id), image = button.dataset.mediaId;
-      const chosen=selectedMedia().find(media=>media.id===image);if(!chosen)return;if(!selected.includes(image)&&!mediaSupport(id,chosen).supported)return toast(mediaSupport(id,chosen).reason,true);const kind=mediaKind(chosen),replace=kind!=='image'||platformMedia(id).some(media=>mediaKind(media)!=='image')||p.maxImages===1;draft.mediaByPlatform[id]=selected.includes(image)?selected.filter(key=>key!==image):replace?[image]:[...selected,image];setTextOnly(draft,id,!draft.mediaByPlatform[id].length);
+      const chosen=selectedMedia().find(media=>media.id===image);if(!chosen)return;if(!selected.includes(image)&&!mediaSupport(id,chosen).supported)return toast(mediaSupport(id,chosen).reason,true);const kind=mediaKind(chosen),replace=kind!=='image'||platformMedia(id).some(media=>mediaKind(media)!=='image')||p.maxImages===1||SECOND_IMAGE_PLATFORMS.includes(id)&&selected.length<=1;draft.mediaByPlatform[id]=selected.includes(image)?selected.filter(key=>key!==image):replace?[image]:[...selected,image];setTextOnly(draft,id,!draft.mediaByPlatform[id].length);
       platformPreviewIndex['editor' + id] = Math.max(0, draft.mediaByPlatform[id].indexOf(image)); saveDraft(); shell(); return;
     }
-    if (button.dataset.platformMediaAction) { const id = button.dataset.platformMediaAction; if (button.dataset.selectionAction === 'inherit'){delete draft.mediaByPlatform[id];setTextOnly(draft,id,false);}else{draft.mediaByPlatform[id]=[];setTextOnly(draft,id,true);} platformPreviewIndex['editor' + id] = 0; saveDraft(); shell(); return; }
+    if(button.dataset.platformMediaAction){const id=button.dataset.platformMediaAction,action=button.dataset.selectionAction;if(action==='second'){const photos=instagramPhotos(draft,selectedMedia());if(draft.mediaDefaults.instagramSecond)delete draft.mediaByPlatform[id];else draft.mediaByPlatform[id]=photos.length?[(photos[1]||photos[0]).id]:[];setTextOnly(draft,id,false);}else if(action==='inherit'){draft.mediaByPlatform[id]=defaultMediaFor(id,selectedMedia()).map(m=>m.id);setTextOnly(draft,id,false);}else{draft.mediaByPlatform[id]=[];setTextOnly(draft,id,true);}saveDraft();shell();return;}
+
     if (button.dataset.destinationMove) {
       const id = button.dataset.destinationMove, ids = platformMedia(id).map(media=>media.id), index = ids.indexOf(button.dataset.mediaId), target = index + Number(button.dataset.direction);
       if (index >= 0 && target >= 0 && target < ids.length) { [ids[index], ids[target]] = [ids[target], ids[index]]; draft.mediaByPlatform[id] = ids; saveDraft(); shell(); } return;
@@ -784,9 +795,9 @@ document.addEventListener('click', async e => {
     }
     if (button.dataset.restoreMedia) { const item = state.media.find(m => m.id === button.dataset.restoreMedia); if (item?.sourceId) changeMediaOrder(draft.mediaIds.map(id => id === item.id ? item.sourceId : id), 'Original image restored.', { [item.id]: item.sourceId }); return; }
     if (button.hasAttribute('data-undo-media')) { const restore = lastMediaOrder; if (restore) { draft.mediaIds = restore.ids; draft.mediaByPlatform = restore.selections;draft.textOnlyPlatforms=restore.textOnlyPlatforms||[]; lastMediaOrder = null; saveDraft(); shell(); toast('Image change undone.'); } return; }
-    if (button.hasAttribute('data-manychat-add')) { customizeManychatLinks(); if (draft.manychat.links.length < 3) draft.manychat.links.push({ label: '', url: '' }); saveDraft(); refreshManychatLinks(); return; }
-    if (button.hasAttribute('data-manychat-remove')) { customizeManychatLinks(); draft.manychat.links.splice(Number(button.dataset.manychatRemove), 1); saveDraft(); refreshManychatLinks(); return; }
-    if (button.hasAttribute('data-manychat-auto')) { draft.manychat.linksMode = 'auto'; draft.manychat.links = []; saveDraft(); refreshManychatLinks(); return; }
+    if (button.hasAttribute('data-manychat-add')) { customizeManychatLinks(); if (draft.manychat.links.length < 3) draft.manychat.links.push({ label: '', url: '' }); saveDraft();refreshManychatLinks();refreshDesignPreview();return; }
+    if (button.hasAttribute('data-manychat-remove')) { customizeManychatLinks(); draft.manychat.links.splice(Number(button.dataset.manychatRemove), 1); saveDraft();refreshManychatLinks();refreshDesignPreview();return; }
+    if (button.hasAttribute('data-manychat-auto')) { draft.manychat.linksMode = 'auto'; draft.manychat.links = []; saveDraft();refreshManychatLinks();refreshDesignPreview();return; }
     if (button.dataset.remove) { changeMediaOrder(draft.mediaIds.filter(id => id !== button.dataset.remove)); return; }
     if (button.dataset.move) { const ids = [...draft.mediaIds], i = ids.indexOf(button.dataset.move), target = i + Number(button.dataset.direction || -1); if (i >= 0 && target >= 0 && target < ids.length) { [ids[target], ids[i]] = [ids[i], ids[target]]; changeMediaOrder(ids, 'Image order updated.'); } return; }
     if (button.hasAttribute('data-media-preview')) { mediaPreviewIndex = Number(button.dataset.mediaPreview); shell(); return; }
@@ -890,6 +901,8 @@ document.addEventListener('click', async e => {
   } catch (error) { toast(error.message, true); }
 });
 document.addEventListener('input', e => {
+  if(e.target.hasAttribute('data-media-default')){draft.mediaDefaults.instagramSecond=e.target.checked;saveDraft();shell();return;}
+  if(e.target.hasAttribute('data-manychat-mode')){if(e.target.value==='manual')customizeManychatLinks();else Object.assign(draft.manychat,{linksMode:'auto',links:[]});saveDraft();refreshManychatLinks();refreshDesignPreview();return;}
   if(e.target.id==='activity-search'){design.activitySearch=e.target.value;renderActivity();return;}
   if(e.target.hasAttribute('data-ig-method')){
     selectPostingRoute(e.target.value).catch(error=>{shell();toast(error.message,true);});return;
@@ -897,9 +910,10 @@ document.addEventListener('input', e => {
   if(e.target.hasAttribute('data-song-source')){draft.instagram.music.source=e.target.value;draft.instagram.music.reference||={title:'',artist:'',audioUrl:''};saveDraft();shell();return;}
   if(e.target.dataset.songField){draft.instagram.music.reference||={};draft.instagram.music.reference[e.target.dataset.songField]=e.target.value;saveDraft();return;}
   if(e.target.dataset.igField){const [section,key]=e.target.dataset.igField.split('.');draft.instagram[section][key]=e.target.type==='checkbox'?e.target.checked:e.target.value;if(section==='music'&&key==='enabled'&&e.target.checked){if(state.config.androidDevice?.type==='phone')draft.instagram.music.source='manual';else if(!draft.instagram.music.selection)draft.instagram.music.source='details';draft.instagram.music.reference||={title:'',artist:'',audioUrl:''};}
+    if(key==='linkEnabled')draft.instagram.story.alignment='auto';
     if(key==='linkEnabled'&&selectedStoryPreset(draft.instagram.story)!=='custom')draft.instagram.story.layout=storyPresetLayout(selectedStoryPreset(draft.instagram.story),storyPresetMeasurements());
     if(key==='linkEnabled'||key==='facebookEnabled'||section==='music'&&key==='enabled'){saveDraft();shell();return;}
-    if(section==='story'&&key==='enabled'){setDestinationSelected(draft,'instagramStory',e.target.checked);saveDraft();shell();return;}
+    if(section==='story'&&key==='enabled'){draft.instagram.story.enabledByUser=e.target.checked;draft.instagram.story.alignment='auto';setDestinationSelected(draft,'instagramStory',e.target.checked);saveDraft();shell();return;}
     const label=document.querySelector('[data-story-label]');if(label&&key==='label')label.textContent=e.target.value||'Application Form';saveDraft();return;}
   if(e.target.dataset.storySize){const key=e.target.dataset.storySize,item=draft.instagram.story.layout[key];item.width=Number(e.target.value)/100;item.x=Math.max(item.width/2+.02,Math.min(1-item.width/2-.02,item.x));updateStoryItem(key);markStoryCustom();saveDraft();return;}
 
@@ -907,18 +921,17 @@ document.addEventListener('input', e => {
   if (e.target.hasAttribute('data-manychat-link')) {
     const index = Number(e.target.dataset.manychatLink);
     const wasAutomatic = draft.manychat.linksMode === 'auto';
-    customizeManychatLinks();
+    customizeManychatLinks();document.querySelectorAll('[data-manychat-mode]').forEach(input=>input.checked=input.value==='manual');
     draft.manychat.links[index] = { label: '', url: '', ...draft.manychat.links[index], [e.target.dataset.linkField]: e.target.value };
     if (wasAutomatic) {
       // Preserve focus while making the mode change visible.
       const help = document.querySelector('#manychat-link-fields .import-help');
       if (help) help.textContent = 'Custom links';
-      const controls = document.querySelector('#manychat-link-fields .inline-controls');
-      controls?.insertAdjacentHTML('beforeend', '<button type="button" class="button subtle small" data-manychat-auto>Refresh from DM</button>');
+
     }
     const message = document.querySelector('.manychat-links-error');
     if (message) { try { validateManychatDraft({ ...draft.manychat, postUrl: '' }, draft.captions.manychat); message.textContent = ''; } catch (error) { message.textContent = error.message; } }
-    saveDraft(); return;
+    saveDraft();refreshDesignPreview();return;
   }
   const id = e.target.dataset.caption;
   if (!id) return;
@@ -930,9 +943,9 @@ document.addEventListener('input', e => {
   const saved = document.querySelector('#draft-status'); if (saved) saved.textContent = 'Saving…'; saveDraft(); renderReadiness();refreshDesignPreview();
 });
 document.addEventListener('keydown', e => {
-  if (e.target.matches('[data-drag-media]') && ['ArrowUp', 'ArrowDown'].includes(e.key)) {
-    e.preventDefault(); const id = e.target.dataset.dragMedia, ids = [...draft.mediaIds], i = ids.indexOf(id), target = i + (e.key === 'ArrowUp' ? -1 : 1);
-    if (target >= 0 && target < ids.length) { [ids[i], ids[target]] = [ids[target], ids[i]]; changeMediaOrder(ids, 'Image order updated.'); document.querySelector(`[data-drag-media="${id}"]`)?.focus(); } return;
+  if(e.target.matches('[data-drag-media]')&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
+   e.preventDefault();const id=e.target.dataset.dragMedia,scope=e.target.dataset.dragPlatform,ids=scope?platformMedia(scope).map(m=>m.id):[...draft.mediaIds],index=ids.indexOf(id),target=index+(['ArrowRight','ArrowDown'].includes(e.key)?1:-1);
+   if(target>=0&&target<ids.length){[ids[index],ids[target]]=[ids[target],ids[index]];if(scope){draft.mediaByPlatform[scope]=ids;saveDraft();shell();}else changeMediaOrder(ids,'Image order updated.');document.querySelector('[data-drag-media="'+id+'"]')?.focus();}return;
   }
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && view === 'compose' && !modal.open) { e.preventDefault(); preview(); }
   if (e.target.matches('.channelbar [data-caption-tab]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
@@ -1008,7 +1021,7 @@ async function load() {
   for (const [id, ids] of Object.entries(draft.mediaByPlatform)) { if (!platform(id) || !Array.isArray(ids)) delete draft.mediaByPlatform[id]; else draft.mediaByPlatform[id] = ids.filter(key => draft.mediaIds.includes(key)); }
   connected = true;
   if(activeRun()||state.recovery?.status==='running')view='activity';else if(draft.mediaIds.length||draft.selected.length||verifiedDestinations().length)view='compose';
-  shell(); connect();
+  shell();connect();await cleanExistingDraftImages().catch(error=>toast('Automatic metadata cleanup: '+error.message,true));
 }
 function showLogin() {
   events?.close(); clearInterval(pollTimer); androidProgressDialog?.close();document.querySelector('#android-progress-pill')?.remove();connected = false; mode = 'TEST'; if (modal.open) modal.close();
@@ -1080,7 +1093,7 @@ function refreshStoryLayoutSelection(){
  const id=selectedStoryPreset(draft.instagram.story);
  for(const button of document.querySelectorAll('[data-story-preset]')){const active=button.dataset.storyPreset===id;button.setAttribute('aria-pressed',String(active));button.querySelector('.layout-selected').hidden=!active;}
 }
-function markStoryCustom(){draft.instagram.story.layoutPreset='custom';refreshStoryLayoutSelection();}
+function markStoryCustom(){draft.instagram.story.layoutPreset='custom';draft.instagram.story.alignment='manual';const status=document.querySelector('[data-story-alignment-state]');if(status)status.textContent='Custom placement';refreshStoryLayoutSelection();}
 function storyPresetMeasurements(){
  const canvas=document.querySelector('[data-story-canvas]'),card=canvas?.querySelector('[data-story-item="card"]'),image=card?.querySelector('img'),height=canvas?.getBoundingClientRect().height||1;
  const photo=platformMedia('instagram')[0];
@@ -1090,7 +1103,7 @@ function selectStoryLayout(id){
  if(workerBusy())return;
  if(id==='custom'){markStoryCustom();saveDraft();return;}
  const layout=storyPresetLayout(id,storyPresetMeasurements());
- draft.instagram.story.layout=layout;draft.instagram.story.layoutPreset=id;
+ draft.instagram.story.layout=layout;draft.instagram.story.layoutPreset=id;draft.instagram.story.alignment='preset';
  const canvas=document.querySelector('[data-story-canvas]');clearTimeout(storyLayoutTimer);canvas?.classList.add('is-aligning');
  for(const key of ['card','link'])updateStoryItem(key);
  canvas?.setAttribute('data-ig-layout',JSON.stringify(layout));
@@ -1118,14 +1131,22 @@ function moveStoryItem(key,x,y,{magnetic=false}={}){
   item.x=next.x;item.y=next.y;updateStoryItem(key);
   if(magnetic)storyGuides(next.guides);
 }
+function applyStoryAlignment(){
+ const story=draft.instagram.story,canvas=document.querySelector('[data-story-canvas]');if(!canvas)return false;
+ const before=JSON.stringify(story.layout);let measurements=storyMeasurements();
+ if(!canvas.getBoundingClientRect().height){const photo=platformMedia('instagram')[0],aspect=(photo?.width||1)/(photo?.height||1);measurements={hasLink:story.linkEnabled!==false,cardHeight:story.layout.card.width*9/16/aspect+.12,linkHeight:.07};}
+ try{story.layout=alignStoryItems(story.layout,measurements);}catch{
+  const safe=storyPresetLayout('signature',storyPresetMeasurements());story.layout.card.width=safe.card.width;updateStoryItem('card');story.layout=alignStoryItems(story.layout,storyMeasurements());
+ }
+ for(const key of ['card','link'])updateStoryItem(key);canvas.dataset.igLayout=JSON.stringify(story.layout);
+ const status=document.querySelector('[data-story-alignment-state]');if(status)status.textContent='Automatically aligned';
+ if(before===JSON.stringify(story.layout))return false;
+ story.layoutPreset='custom';refreshStoryLayoutSelection();
+ canvas.classList.add('is-aligning');setTimeout(()=>canvas.isConnected&&canvas.classList.remove('is-aligning'),300);return true;
+}
 function autoAlignStory(){
-  if(workerBusy())return;
-  draft.instagram.story.layout=alignStoryItems(draft.instagram.story.layout,storyMeasurements());markStoryCustom();
-  const canvas=document.querySelector('[data-story-canvas]');canvas?.classList.add('is-aligning');
-  for(const key of ['card','link'])updateStoryItem(key);
-  setTimeout(()=>canvas?.classList.remove('is-aligning'),250);
-  storyGuides({x:.5});settleStoryGuides();saveDraft();
-  const status=document.querySelector('[data-story-alignment]');if(status)status.textContent=draft.instagram.story.linkEnabled===false?'Post centered':'Post and link aligned';
+ if(workerBusy())return;draft.instagram.story.alignment='auto';draft.instagram.story.layoutPreset='custom';applyStoryAlignment();refreshStoryLayoutSelection();storyGuides({x:.5});settleStoryGuides();saveDraft();
+ const status=document.querySelector('[data-story-alignment]');if(status)status.textContent=draft.instagram.story.linkEnabled===false?'Post centered':'Post and link aligned';
 }
 function bindStoryGestures(){
   for(const button of document.querySelectorAll('[data-story-mini-layout]')){const layout=JSON.parse(button.dataset.storyMiniLayout);for(const [key,selector] of [['card','.mini-post'],['link','.mini-link']]){const el=button.querySelector(selector);if(el){el.style.left=layout[key].x*100+'%';el.style.top=layout[key].y*100+'%';if(key==='card')el.style.width=layout[key].width*100+'%';}}}
@@ -1134,6 +1155,7 @@ function bindStoryGestures(){
     for(const key of ['card','link']){const el=canvas.querySelector('[data-ig-item="'+key+'"]'),item=layout[key];if(!el)continue;el.style.left=item.x*100+'%';el.style.top=item.y*100+'%';el.style.width=item.width*100+'%';}
   }
   let fitted=false;
+  if(!workerBusy()&&(!draft.instagram.story.alignment||draft.instagram.story.alignment==='auto')){fitted=applyStoryAlignment();const image=document.querySelector('[data-story-canvas] .ig-post-card img');if(image&&!image.complete)image.addEventListener('load',()=>{if(image.isConnected&&draft.instagram.story.alignment==='auto'&&applyStoryAlignment())saveDraft();},{once:true});}
   for(const el of document.querySelectorAll('[data-story-item]')){
     const key=el.dataset.storyItem,before={...draft.instagram.story.layout[key]};moveStoryItem(key,before.x,before.y);const after=draft.instagram.story.layout[key];fitted ||= before.x!==after.x||before.y!==after.y;
     el.onpointerdown=e=>{

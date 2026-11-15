@@ -53,10 +53,10 @@ test('an unsupported-only library cannot silently become an ordinary text post',
  for(const id of ['x','youtubeDA','youtubeCS','whatsapp']){const draft=draftFor(id,[pdf]);assert.deepEqual(mediaFor(draft,[pdf],id),[]);assert(validateDraft(draft,[pdf]).some(error=>/PDF/.test(error)),id+' blocks omitted unsupported attachment');draft.mediaByPlatform[id]=[];setTextOnly(draft,id,true);assert.deepEqual(validateDraft(draft,[pdf]),[],id+' permits a deliberate text-only selection');}
  const instagram=draftFor('instagram',[pdf]);instagram.mediaByPlatform.instagram=[];assert(validateDraft(instagram,[pdf]).some(error=>/add at least/.test(error)));
 });
-test('image-only libraries preserve existing gallery limits and WhatsApp first-photo selection',()=>{
+test('image-only libraries preserve gallery limits and new drafts follow Instagram photo 2',()=>{
  const photos=Array.from({length:11},(_,index)=>({...photo,id:'photo-'+index})),x=draftFor('x',photos.slice(0,5));assert.equal(mediaFor(x,photos.slice(0,5),'x').length,5);assert(validateDraft(x,photos.slice(0,5)).some(error=>/4 images/.test(error)));
  const instagram=draftFor('instagram',photos);assert(validateDraft(instagram,photos).some(error=>/10 images/.test(error)));instagram.mediaIds=photos.slice(0,10).map(m=>m.id);assert.deepEqual(validateDraft(instagram,photos.slice(0,10)),[]);
- assert.deepEqual(mediaFor(draftFor('whatsapp',photos),photos,'whatsapp').map(m=>m.id),['photo-0']);assert.equal(defaultMediaFor('x',photos).length,4);
+ assert.deepEqual(mediaFor(draftFor('whatsapp',photos),photos,'whatsapp').map(m=>m.id),['photo-1']);assert.equal(defaultMediaFor('x',photos).length,4);
 });
 test('image metadata review never labels non-image attachments as clean or asks for image cleaning',()=>{
  const marked={credentials:true,aiMarkers:['origin']},library=[{...photo,metadata:marked},{...video,metadata:marked},{...pdf,metadata:marked}],draft=draftFor('linkedin',library);draft.mediaByPlatform.linkedin=['clip'];assert.deepEqual(metadataNeedsReview(draft,library),[]);draft.mediaByPlatform.linkedin=['pdf'];assert.deepEqual(metadataNeedsReview(draft,library),[]);draft.mediaByPlatform.linkedin=['photo'];assert.deepEqual(metadataNeedsReview(draft,library).map(m=>m.id),['photo']);

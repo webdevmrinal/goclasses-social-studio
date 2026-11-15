@@ -73,7 +73,7 @@ export function storyErrors(story={},selected=[]) {
 }
 export function importStory(captions) {
   const raw=captions.instagramStory||'',link=storyLinks({instagramStory:raw})[0];
-  return {enabled:Boolean(raw.trim()),facebookEnabled:false,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
+  return {enabled:false,enabledByUser:false,alignment:'auto',facebookEnabled:false,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
 }
 
 // Positions stay normalized so mouse, touch and keyboard edits share the same review.
