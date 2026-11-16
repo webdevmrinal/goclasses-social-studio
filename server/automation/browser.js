@@ -70,8 +70,11 @@ export class BrowserManager extends EventEmitter {
   child = null;
   manualProcess = null;
   pages = new Map();
+  ownedPages = new WeakSet();
   constructor({ dataDir = DATA } = {}) { super(); this.dataDir = dataDir; }
   async open() {
+    clearTimeout(this.idleTimer);this.idleTimer=null;
+    if(this.idleClosing)await this.idleClosing;
     if (this.manualProcess) throw new Error('Finish signing in and close the separate sign-in browser window, then click Check logins again.');
     if (this.context) return this.context;
     if (this.launching) return this.launching;
@@ -89,7 +92,7 @@ export class BrowserManager extends EventEmitter {
     // The debugging endpoint is loopback-only and never served through the web app.
     const child = spawn(browser.executable, [
       `--user-data-dir=${profile}`, '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`,
-      '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
+      '--disable-background-mode',
       '--no-first-run', '--no-default-browser-check', '--start-maximized', 'about:blank'
     ], { stdio: 'ignore', windowsHide: false });
     this.child = child;
@@ -127,11 +130,31 @@ export class BrowserManager extends EventEmitter {
     }
     if (!page || page.isClosed()) {
       page = await context.newPage();
+      this.ownedPages.add(page);
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
     }
     this.pages.set(id, page);
     await page.bringToFront();
     return page;
+  }
+  async release(id) {
+    const page=this.pages.get(id);
+    // Release only this manager's completed page. Never close an adopted
+    // session, a failed preview or a manual sign-in window to save resources.
+    if(!page||!this.ownedPages.has(page))return false;
+    if(!page.isClosed())await page.close({runBeforeUnload:false});
+    for(const [key,value] of this.pages)if(value===page)this.pages.delete(key);
+    return true;
+  }
+  idle({canClose=()=>true,delay=30000}={}) {
+    clearTimeout(this.idleTimer);
+    this.idleTimer=setTimeout(()=>{
+      this.idleTimer=null;
+      // Only a completely empty dedicated worker can shut down automatically.
+      // Review/error tabs and unknown or manually opened pages keep it alive.
+      if(!canClose()||this.manualProcess||this.launching||this.idleClosing||!this.context||this.context.pages().some(p=>!p.isClosed()&&p.url()!=='about:blank'))return;
+      this.idleClosing=this.close().catch(()=>{}).finally(()=>{this.idleClosing=null;});
+    },delay);this.idleTimer.unref?.();
   }
   async manualLogin(url) {
     if (this.manualProcess) throw new Error('A manual sign-in window is already open. Complete sign-in there and close that window first.');
@@ -152,6 +175,7 @@ export class BrowserManager extends EventEmitter {
     if (this.manualProcess === child) { this.manualProcess = null; this.emit('manual-login-change'); }
   }
   async close() {
+    clearTimeout(this.idleTimer);this.idleTimer=null;
     if (this.launching) await this.launching.catch(() => {});
     const connection = this.connection;
     if (connection) {

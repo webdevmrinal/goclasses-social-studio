@@ -369,6 +369,9 @@ export class Queue extends EventEmitter {
           await this.log(run, item, item.message);
         }
         runController.signal.removeEventListener('abort',cancel);
+        if(item.status==='posted'&&page&&!native){
+          try{await this.browser.release?.(item.id);}catch{/* Cleanup cannot downgrade a confirmed publication. */}
+        }
         await this.change();
       }
     } finally {
@@ -376,6 +379,7 @@ export class Queue extends EventEmitter {
       if(this.instagramWorker?.handoff||this.instagramWorker?.preflight)await this.instagramWorker.close().catch(error=>this.emit('workerError',error));
       if(this.runController?.runId===run.id)this.runController=null;
       this.processing = false; this.emit('change', this.state());
+      this.browser.idle?.({canClose:()=>!this.active&&!this.processing&&!this.login.running&&!this.recoveryTaskActive&&!this.instagramWorker?.busy});
       const pending = this.pendingKick; this.pendingKick = null;
       if (pending && this.active === pending && ['running', 'stopping'].includes(pending.status)) this.process(pending).catch(error => this.emit('workerError', error));
     }
@@ -410,8 +414,11 @@ export class Queue extends EventEmitter {
             this.login.items[id].screenshot = item.screenshots[0].url;
           } catch { /* A diagnostic screenshot must not hide the login result. */ }
         }
+        if(this.login.items[id].status==='verified'&&page){
+          try{await this.browser.release?.(id);}catch{/* Keep the verified result even if a completed tab cannot close. */}
+        }
         this.emit('change', this.state());
       }
-    } finally { this.login.running = false; this.emit('change', this.state()); }
+    } finally { this.login.running = false; this.emit('change', this.state());this.browser.idle?.({canClose:()=>!this.active&&!this.processing&&!this.login.running&&!this.recoveryTaskActive&&!this.instagramWorker?.busy}); }
   }
 }

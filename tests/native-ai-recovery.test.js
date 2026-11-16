@@ -25,6 +25,13 @@ function provider(action={type:'click',controlId:'c1'},overrides={}){
  const calls=[];return {calls,state:()=>({enabled:true,automatic:true}),async plan(input){calls.push(input);return typeof action==='function'?action(input):{action,model:'gemini-offline-fixture'};},...overrides};
 }
 const recover=(s,ai,options={})=>recoverNativeWithAI({s,ai,details:feedDetails,inspect:ready,...options});
+test('Gemini can recover a renamed Story sticker control through its bounded Compose parent',async()=>{
+ const nodes=[n('story_share_controls_action_bar'),n('camera_photo_texture_view'),n('renamed_sticker_control','',{class:'android.view.View',clickable:'true',bounds:'[300,100][400,200]'}),n('','',{'content-desc':'Stickers',class:'android.view.View',bounds:'[305,105][395,195]'})];
+ const s=fixture(nodes,{onAction:s=>{s.nodes=[n('camera_photo_texture_view'),button('changed_link_control','',{'content-desc':'Link Sticker'})];return null;}}),ai=provider();
+ const result=await recoverNativeWithAI({s,ai,details:{kind:'navigation',title:'Open Story stickers'},inspect:nodes=>nodes.some(n=>n['content-desc']==='Link Sticker')});
+ assert(result.completed);assert.equal(ai.calls.length,1);assert.equal(ai.calls[0].stage,'open_story_stickers');assert.equal(s.mutations.length,1);
+ assert.deepEqual(ai.calls[0].controls,[{id:'c1',label:'Stickers',role:'button',enabled:true,scrollable:false}]);
+});
 
 test('a renamed Music button is clicked once, with only a sanitized local control token sent',async()=>{
  const s=fixture(photo([n('unknown_private_id','PRIVATE SECRET'),n('song_title','PRIVATE SONG')]),{onAction:s=>{s.nodes=library();return null;}}),ai=provider(),steps=[];

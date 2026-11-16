@@ -3,6 +3,8 @@ const INSTAGRAM='com.instagram.android',PREFIX=INSTAGRAM+':id/';
 const stages=new Map([
   ['Open Instagram music','open_feed_music'],
   ['Open Story music','open_story_music'],
+  ['Open Story stickers','open_story_stickers'],
+  ['Open the Story link editor','open_story_link'],
   ['Show the post\u2019s music row','find_post_music_row'],
   ["Show the post's music row",'find_post_music_row'],
   ['Open Edit info in Instagram','open_post_edit'],
@@ -18,9 +20,9 @@ const resources=new Set([
   'music_browser_container','music_search_clips_landing_page_container',
   'row_search_edit_text','content_list','bottom_sheet_drag_handle_frame',
   'bottom_sheet_container','music_editor_controls_container','album_art_button',
-  'music_button','story_share_controls_action_bar','next_button_textview'
+  'music_button','story_share_controls_action_bar','next_button_textview','asset_button','camera_photo_texture_view'
 ]);
-const labels=new Set(['Audio','Music','Add music','Edit','Edit info','Add audio','Add product details','Next','Return to music search','Search music','Browse','For you']);
+const labels=new Set(['Audio','Music','Add music','Edit','Edit info','Add audio','Add product details','Next','Return to music search','Search music','Browse','For you','Stickers','Link Sticker','Link']);
 const classes=new Set([
   'android.view.View','android.view.ViewGroup','android.widget.Button',
   'android.widget.ImageButton','android.widget.TextView','android.widget.EditText',
@@ -56,7 +58,7 @@ export function navigationAIContext(nodes,details){
   }))return null;
   const controls=[];
   for(const node of visible){
-    const resource=typeof node['resource-id']==='string'&&node['resource-id'].startsWith(PREFIX)?node['resource-id'].slice(PREFIX.length):'';
+    const resource=typeof node['resource-id']==='string'?(node['resource-id'].startsWith(PREFIX)?node['resource-id'].slice(PREFIX.length):resources.has(node['resource-id'])?node['resource-id']:''):'';
     const known=resources.has(resource);
     if(privateId.test(String(node['resource-id']||''))||forbiddenIds.has(resource)||!known&&finalId.test(String(node['resource-id']||''))||[node.text,node['content-desc']].some(v=>typeof v==='string'&&finalLabel.test(v)))continue;
     const className=classes.has(node.class)?node.class:classes.has(node.tag)?node.tag:undefined;
@@ -64,7 +66,8 @@ export function navigationAIContext(nodes,details){
     const semantic=!input&&[node.text,node['content-desc']].find(value=>labels.has(value)&&(resource!=='m2_audio_row'||value==='Add music'));
     // Safe labels on renamed, clickable native controls remain useful without
     // transmitting their unknown resource ID or other accessibility strings.
-    if(!known&&!(semantic&&flag(node.clickable)===true&&interactiveClasses.has(className)))continue;
+    const composeLabel=['open_story_stickers','open_story_link'].includes(stage)&&semantic&&interactiveClasses.has(className);
+    if(!known&&!(semantic&&flag(node.clickable)===true&&interactiveClasses.has(className))&&!composeLabel)continue;
     const control={};
     if(semantic)control.label=semantic;
     if(known)control.resourceId=PREFIX+resource;

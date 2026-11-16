@@ -5,7 +5,8 @@ const proof=value=>JSON.stringify(value&&Object.fromEntries(['key','title','arti
 export class NativeInterventions{
  constructor(queue){this.queue=queue;this.pending=null;}
  async wait(run,item,signal,details,inspect,{pause,resume}){
-  signal.throwIfAborted();if(item.submitting||this.pending)throw new InterventionError('Manual preparation is unavailable after submission or during another handoff.');
+  signal.throwIfAborted();const readOnly=details.kind==='interruption'&&details.readOnly===true;
+  if(item.submitting&&!readOnly||this.pending)throw new InterventionError(this.pending&&readOnly?details.instructions:'Manual preparation is unavailable after submission or during another handoff.');
   const {aiContext,...publicDetails}=details;
   const previous=run.status,intervention={...publicDetails,id:randomUUID(),createdAt:new Date().toISOString()};
   pause();item.intervention=intervention;item.status='waiting_for_input';run.status='waiting_for_input';item.message=details.instructions;
@@ -13,7 +14,7 @@ export class NativeInterventions{
   try{
    return await new Promise((resolve,reject)=>{
     abort=()=>reject(signal.reason||new InterventionError('Stopped by operator.'));
-    this.pending={run,item,signal,inspect,resolve,reject,intervention,busy:false,adviceController:new AbortController()};signal.addEventListener('abort',abort,{once:true});
+    this.pending={run,item,signal,inspect,resolve,reject,intervention,readOnly,busy:false,adviceController:new AbortController()};signal.addEventListener('abort',abort,{once:true});
     if(signal.aborted)abort();else { this.queue.change().catch(reject); this.advice(this.pending,aiContext).catch(()=>{}); }
    });
   }finally{
@@ -34,7 +35,7 @@ export class NativeInterventions{
  }
  async act({runId,itemId,id,action,reviewId}){
   const p=this.pending;
-  if(!p||p.run.id!==runId||p.item.id!==itemId||p.intervention.id!==id||p.run.status!=='waiting_for_input'||p.item.submitting||p.signal.aborted)throw new InterventionError('This Android handoff is no longer active.');
+  if(!p||p.run.id!==runId||p.item.id!==itemId||p.intervention.id!==id||p.run.status!=='waiting_for_input'||p.item.submitting&&!p.readOnly||p.signal.aborted)throw new InterventionError('This Android handoff is no longer active.');
   if(!['check','continue'].includes(action)||p.busy)throw new InterventionError('Wait for the current screen check.');
   p.busy=true;
   try{

@@ -25,3 +25,16 @@ test('restart expires a handoff and keeps its unsent preparation eligible for re
 test('manual handoffs cannot be opened after a final save may have started',async t=>{
  let prompts=0;const {q}=await fixture(t,async ctx=>{await ctx.markSubmitting();await assert.rejects(ctx.intervene({kind:'music'},()=>{prompts++;return true;}),/after submission/);throw Error('Lost Save response');});const run=await q.start(params);await until(()=>!q.processing);assert.equal(prompts,0);assert.equal(run.items[0].status,'uncertain');assert.equal(q.interventions.pending,null);
 });
+test('an interruption after submission pauses readback only and never sends again',async t=>{
+ let sends=0,ready=false,reads=0;
+ const {q}=await fixture(t,async ctx=>{
+  await ctx.markSubmitting();sends++;
+  await ctx.intervene({kind:'interruption',readOnly:true,instructions:'Finish the call and return to Instagram'},async()=>{reads++;return ready;});
+  return 'posted';
+ });
+ const run=await q.start(params);await until(()=>run.status==='waiting_for_input');
+ await pause(650);assert.equal(sends,1);
+ await assert.rejects(q.interventions.act(request(run,'continue')),/expected screen/);
+ ready=true;await q.interventions.act(request(run,'continue'));await until(()=>!q.processing);
+ assert.equal(sends,1);assert.equal(reads,2);assert.equal(run.items[0].status,'posted');
+});

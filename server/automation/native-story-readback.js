@@ -2,14 +2,13 @@
 import sharp from 'sharp';
 import {nativeId,nativeBounds} from './android-native.js';
 import {InterventionError} from './utils.js';
+import {instagramOwnStoryIdentity,instagramStoryAgeSeconds} from '../../shared/instagram-story-viewer.js';
 const own=n=>n.filter(x=>x.displayed==='true'&&x.package==='com.instagram.android');
 export function ownStoryViewer(nodes,handle){
- const n=own(nodes),one=id=>n.filter(x=>x['resource-id']===nativeId(id));
- return one('reel_viewer_root').length===1&&one('reel_viewer_title').length===1&&one('reel_viewer_title')[0].text===handle&&one('self_toolbar_menu_button').length===1&&one('viewers_facepile_label').some(x=>x.text==='Activity');
+ return Boolean(instagramOwnStoryIdentity(nodes,handle));
 }
 export function storyAgeSeconds(value){
- const text=String(value||'').trim().toLowerCase();if(/^(now|just now)$/.test(text))return 0;
- const m=text.match(/^(\d+)\s*(s|m|h|d)$/);return m?Number(m[1])*({s:1,m:60,h:3600,d:86400}[m[2]]):null;
+ return instagramStoryAgeSeconds(value);
 }
 export async function storyPreviewPixels(image,canvas){
  return sharp(image).extract({left:Math.round(canvas.x+canvas.width*.15),top:Math.round(canvas.y+canvas.height*.18),width:Math.round(canvas.width*.70),height:Math.round(canvas.height*.70)}).resize(160,200,{fit:'fill'}).removeAlpha().raw().toBuffer();
@@ -37,7 +36,7 @@ export async function verifyOwnPublishedStory(s,{handle,preview,submittedAt,maxS
  }
  for(let i=0;i<maxStories;i++){
   s.signal?.throwIfAborted();if(!ownStoryViewer(nodes,handle))throw new InterventionError('Story verification left your own viewer. No Story was resent.');
-  const current=own(nodes),age=storyAgeSeconds(current.find(x=>x['resource-id']===nativeId('reel_viewer_timestamp'))?.text),canvases=current.filter(x=>x['resource-id']===nativeId('reel_viewer_media_container'));
+  const current=own(nodes),age=instagramOwnStoryIdentity(nodes,handle)?.ageSeconds,canvases=current.filter(x=>x['resource-id']===nativeId('reel_viewer_media_container'));
   if(age!==null&&age<=Math.max(0,(Date.now()-submittedAt)/1000)+90&&canvases.length===1){
    const canvas=nativeBounds(canvases[0]),actual=await storyPreviewPixels(await s.screenshot(),canvas),comparison=compareStoryPixels(preview,actual);
    if(comparison.matches)return {verifiedBy:'native_own_story_preview',instagramAccepted:true,acknowledgement:'matching_published_story',handle,ageSeconds:age,comparison,verifiedAt:new Date().toISOString(),completionDismissed:true};

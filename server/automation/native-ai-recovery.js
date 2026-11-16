@@ -36,18 +36,19 @@ function bindingsFor(nodes,details){
  const context=snapshotSafe(nodes)&&navigationAIContext(nodes,details);if(!context)return null;
  const bindings=[];
  const add=(label,command,extra={})=>bindings.push({label,command,...extra});
- const localAction={open_feed_music:'feed-music',open_story_music:'story-music',open_post_edit:'post-edit'}[context.stage];
+ const localAction={open_feed_music:'feed-music',open_story_music:'story-music',open_post_edit:'post-edit',open_story_stickers:'story-stickers',open_story_link:'story-link'}[context.stage];
  if(localAction){
   if(localAction==='post-edit'&&details.verifiedPost!==true)return null;
   let candidate;
   try{candidate=nativeNavigationCandidate(nodes,localAction,{...(localAction==='post-edit'?{guard:menuScreen}:{})});}
   catch{return null;}
   if(candidate){
-   const labels=localAction==='post-edit'?['Edit']:localAction==='feed-music'?['Audio','Music','Add music']:['Music','Add music'];
+   const labels=localAction==='post-edit'?['Edit']:localAction==='feed-music'?['Audio','Music','Add music']:localAction==='story-stickers'?['Stickers']:localAction==='story-link'?['Link Sticker','Link']:['Music','Add music'];
    const choices=own(nodes).filter(node=>labels.includes(node.text)||labels.includes(node['content-desc']));
    if(choices.length!==1)return null;
    const node=choices[0],label=labels.find(value=>value===node.text||value===node['content-desc']);
-   if(safeNode(node)&&sourceControl(context,node,label))add(label,candidate);
+   if(localAction==='story-stickers'&&context.controls.some(c=>c.label==='Stickers'||c.resourceId===nativeId('asset_button')))add('Stickers',candidate);
+   else if(safeNode(node)&&sourceControl(context,node,label))add(label,candidate);
   }
  }
  if(context.stage==='open_post_music'&&editScreen(nodes)){

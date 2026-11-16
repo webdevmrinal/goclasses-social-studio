@@ -28,10 +28,12 @@ export class InstagramAndroidWorker {
   chosenMusic(options,handle){return options.music.source==='manual'?{manual:true,source:'manual',durationSeconds:30}:options.music.source==='details'?musicReference(options.music.reference):this.selection(options.music.selection,handle);}
   bindSessionContext(s,ctx={},signal=s.signal,onProgress){
     s.signal=signal;s.onUnresponsive=onProgress||ctx.step||((message)=>this.progress(message));
+    s.onLocatorRecovery=ctx.step||onProgress;
     const connectionContext=ctx.step||!onProgress?ctx:{...ctx,step:onProgress};
     // Refresh the closure at each destination boundary. A held music session
     // must never retain that item's submission gate when Story starts.
     s.onConnectionRecovery=details=>recoverPhoneSession({ctx:connectionContext,signal:s.signal,...details});
+    s.onInterruption=ctx.intervene?async(details,inspect)=>ctx.intervene({kind:'interruption',readOnly:true,title:'Phone interrupted — automation paused',instructions:details.message+' Leave Done, Save, Your story and Share untouched. The current screen will be checked before work resumes.'},inspect):null;
     return s;
   }
   async open(config,signal,onProgress,ctx={}){

@@ -7,6 +7,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {androidDevice} from '../../shared/android-device.js';
 import {resolveWifiPhone,recoverPhoneConnection,isAndroidTransportFailure} from '../android-devices.js';
 import { ANDROID_DRIVER_SETTINGS } from '../../shared/android-performance.js';
+import {instagramOwnStoryIdentity} from '../../shared/instagram-story-viewer.js';
+import {androidInterruption} from '../../shared/android-interruptions.js';
 import { InterventionError } from './utils.js';
 const exec = promisify(execFile);
 export const ANDROID_URL = 'http://127.0.0.1:4731';
@@ -281,6 +283,23 @@ export class AndroidSession {
     this.armInspectionKeepAlive();
     let nodes=nativeNodes(await this.request('/source','GET',undefined,{deadline}));
     this.armInspectionKeepAlive();
+    const interrupted=androidInterruption(nodes,{expectedInstagram:Boolean(this.accountHandle)});
+    if(interrupted){
+      const failure=Object.assign(new InterventionError(interrupted.message),{code:'ANDROID_INTERRUPTION'});
+      if(!this.onInterruption||this.interruptionPending)throw failure;
+      this.interruptionPending=true;const pausedAt=Date.now();
+      try{
+        await this.onInterruption(interrupted,async()=>{
+          const current=nativeNodes(await this.request('/source'));
+          if(androidInterruption(current,{expectedInstagram:true})||!current.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'))return false;
+          return true;
+        });
+        // A read-only recheck resumes the original stage. It never replays
+        // the tap preceding an interruption, especially a final Save/Share.
+        nodes=nativeNodes(await this.request('/source'));
+        if(androidInterruption(nodes,{expectedInstagram:true}))throw failure;
+      }finally{this.interruptionPauseMs=(this.interruptionPauseMs||0)+Math.max(0,Date.now()-pausedAt);this.interruptionPending=false;}
+    }
     const anr=androidAnrOwner(nodes);
     if(nodes.some(n=>n.displayed==='true'&&n['resource-id']==='android:id/aerr_wait')&&!anr)throw new InterventionError('Android has an unrecognized app-not-responding dialog. Close it yourself before continuing. Its draft was preserved.');
     if(anr){
@@ -300,8 +319,9 @@ export class AndroidSession {
     return nodes;
   }
   async until(predicate, message='Instagram is still loading.', timeout=45000) {
-    let end=Date.now()+timeout,accountedPause=this.connectionPauseMs||0;
-    const extendForConnection=()=>{const total=this.connectionPauseMs||0;end+=Math.max(0,total-accountedPause);accountedPause=total;};
+    const pauseTotal=()=>Number(this.connectionPauseMs||0)+Number(this.interruptionPauseMs||0);
+    let end=Date.now()+timeout,accountedPause=pauseTotal();
+    const extendForConnection=()=>{const total=pauseTotal();end+=Math.max(0,total-accountedPause);accountedPause=total;};
     while(Date.now()<end) {
       let nodes;
       try{nodes=await this.screen({deadline:end});}
@@ -319,9 +339,18 @@ export class AndroidSession {
   }
   async find(using,value,{deadline=Infinity}={}) {
     const locator=controlLocator(using,value);
+    const qualified=using==='id'&&(String(value).match(/^com\.instagram\.android:id\/([a-zA-Z_][a-zA-Z0-9_]*)$/)||String(value).match(/^([a-zA-Z_][a-zA-Z0-9_]*)$/));
     // Appium prefixes unqualified IDs; native Compose widgets also use plain IDs.
     if(using==='id' && !value.includes(':')) { using='xpath'; value='//*[@resource-id='+xpathLiteral(value)+']'; }
     let nodes=await this.request('/elements','POST',{using,value},{deadline});
+    if(!nodes.length&&qualified){
+      // Compose keeps the same logical ID but often drops Android's package
+      // prefix. An exact, package-scoped alias is safe and needs no AI call.
+      const short=qualified[1];using='xpath';
+      value='//*[@package="com.instagram.android" and (@resource-id='+xpathLiteral('com.instagram.android:id/'+short)+' or @resource-id='+xpathLiteral(short)+')]';
+      nodes=await this.request('/elements','POST',{using,value},{deadline});
+      if(nodes.length===1)await this.onLocatorRecovery?.('Instagram changed a control identifier. Matched its exact Compose equivalent; continuing...');
+    }
     const end=Math.min(Date.now()+4000,deadline);
     while(!nodes.length&&Date.now()<end){
       await inspectionPause(this.signal,250,end);if(Date.now()>=end)break;
@@ -370,7 +399,7 @@ export class AndroidSession {
     for(let i=0;i<12;i++){
       const current=(await this.screen()).filter(n=>n.displayed==='true');
       if(await dismissInstagramRatingPrompt(this,current))continue;
-      if(current.some(n=>n['resource-id']===nativeId('reel_viewer_root'))&&current.some(n=>n['resource-id']===nativeId('reel_viewer_title')&&n.text===expected)&&current.some(n=>n['resource-id']===nativeId('self_toolbar_menu_button'))){await this.request('/back','POST',{});await delay(300);continue;}
+      if(instagramOwnStoryIdentity(current,expected)){await this.request('/back','POST',{});await delay(300);continue;}
       if(current.some(n=>n['resource-id']===nativeId('direct_external_share_container_view')||n['resource-id']===nativeId('direct_private_share_container_view'))){
         if(current.some(n=>/EditText$/.test(n.class||'')&&n.text&&!/^Search(?:\.\.\.|\u2026)?$/i.test(n.text)))throw new InterventionError('Close the Instagram sharing menu and preserve its unsent message before continuing.');
         await this.request('/back','POST',{});await delay(400);continue;

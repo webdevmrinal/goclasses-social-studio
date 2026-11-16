@@ -5,6 +5,8 @@ import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
 import {digest} from './native-photos.js';
 import {assistNativeStage} from './native-music.js';
+import {scopedNativeControl} from './native-scoped-control.js';
+import {recoverNativeNavigation} from './native-navigation.js';
 const has=(nodes,id)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(id));
 export async function changedSticker(before,after,canvas,lower=false) {
   const left=canvas.x+24,top=Math.round(canvas.y+canvas.height*(lower==='all'?.3:lower?.68:.34));
@@ -34,10 +36,14 @@ export async function addStoryLink(s,{url,label,layout},ctx={}) {
   // inspecting its outcome, or by a manual checkpoint, never by replaying it.
   const checkpoint=(title,instructions,attempt,inspect,kind='preparation')=>assistNativeStage(s,ctx,{kind,title,instructions},attempt,inspect);
   await checkpoint('Open Story stickers','Open the sticker tray for this prepared Story and leave Link visible. Do not tap Your story, Save or Share.',async()=>{
-    await s.click('id','asset_button');return s.until(current=>current.some(n=>n.displayed==='true'&&n['content-desc']==='Link Sticker'),'Link sticker is not available on this account.');
+    const ready=current=>current.some(n=>n.displayed==='true'&&n['content-desc']==='Link Sticker');
+    try{await s.click('id','asset_button');}catch(error){if(error.code!=='ANDROID_CONTROL_UNAVAILABLE')throw error;return recoverNativeNavigation(s,{action:'story-stickers',guard:storyEditor,ready});}
+    return s.until(ready,'Link sticker is not available on this account.');
   },current=>current.some(n=>n.displayed==='true'&&n['content-desc']==='Link Sticker'),'navigation');
   await checkpoint('Open the Story link editor','Open Link for the prepared Story and leave its URL field visible. Do not share the Story.',async()=>{
-    await s.click('accessibility id','Link Sticker');return s.until(current=>Boolean(field(current,'link_sticker_list_web_url_edit_text')),'Link editor is still loading.');
+    const ready=current=>Boolean(field(current,'link_sticker_list_web_url_edit_text'));
+    try{await s.click('accessibility id','Link Sticker');}catch(error){if(error.code!=='ANDROID_CONTROL_UNAVAILABLE')throw error;return recoverNativeNavigation(s,{action:'story-link',ready});}
+    return s.until(ready,'Link editor is still loading.');
   },current=>Boolean(field(current,'link_sticker_list_web_url_edit_text')),'navigation');
   await checkpoint('Check the Story link','Enter the reviewed Story URL exactly: '+url+'. Leave the link editor open; do not tap Done or Share.',async()=>{
     await s.text('id',nativeId('link_sticker_list_web_url_edit_text'),url);
@@ -56,7 +62,9 @@ export async function addStoryLink(s,{url,label,layout},ctx={}) {
   };
   const sticker=await checkpoint('Finish the Story link sticker','Finish only this reviewed link sticker and return to the Story editor. Keep its reviewed URL and button text. Leave Your story and Share untouched.',async()=>{
     if(!exactFields(await s.screen()))throw new InterventionError('The Story URL or button text differs from the reviewed values.');
-    await s.clickId('link_sticker_list_done_button');
+    const nodes=await s.screen(),control=scopedNativeControl(nodes,{guard:exactFields,resources:['link_sticker_list_done_button','link_sticker_list_done_icon_button'],labels:['Done'],allowLocalDone:true});
+    if(!control)throw new InterventionError('The local Story link confirmation changed. Its reviewed fields were preserved.');
+    await s.click(control.using,control.value);
     await s.until(storyEditor,'The Story link preview did not load.');
     for(let attempt=0;attempt<12;attempt++){
       await new Promise(resolve=>setTimeout(resolve,300));
@@ -185,8 +193,14 @@ export async function discardStory(s) {
     }else if(has(nodes,'music_editor_done_button')){
       // Inherited feed music uses a clip editor without a Cancel resource.
       await s.request('/back','POST',{});
-    }else if(has(nodes,'link_sticker_list_cancel_button')){
-      await s.clickId('link_sticker_list_cancel_button');
+    }else if(has(nodes,'link_sticker_list_web_url_edit_text')){
+      const control=scopedNativeControl(nodes,{guard:n=>has(n,'link_sticker_list_web_url_edit_text'),resources:['link_sticker_list_cancel_button','link_sticker_list_back_icon_button'],labels:['Back']});
+      if(!control)throw new InterventionError('The owned Story link editor could not close safely. Its draft was preserved.');
+      await s.click(control.using,control.value);
+    }else if(has(nodes,'camera_photo_texture_view')&&nodes.some(n=>n.displayed==='true'&&n.package==='com.instagram.android'&&n['content-desc']==='Link Sticker')){
+      // Closing the owned link form returns to the sticker tray on current
+      // Instagram, not directly to the Story editor.
+      await s.request('/back','POST',{});
     }else if(has(nodes,'share_story_button')){
       await s.request('/back','POST',{});
     }else if(has(nodes,'story_share_controls_action_bar')&&has(nodes,'cancel_button')){
@@ -201,7 +215,7 @@ export async function discardStory(s) {
     }else{
       // Back/Discard can briefly expose a blank transition on slow phones.
       // Wait for a recognized surface; never click or dismiss an unknown one.
-      await s.until(next=>['music_browser_container','music_editor_cancel_button','music_editor_done_button','link_sticker_list_cancel_button','share_story_button','direct_external_share_container_view','gallery_title_text','row_feed_button_share'].some(id=>has(next,id))||has(next,'story_share_controls_action_bar')&&has(next,'cancel_button')||has(next,'profile_header_create_button')&&has(next,'profile_tab')||next.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('igds_alert_dialog_primary_button')&&n.text==='Discard'),'The native screen changed. Close the owned rehearsal before continuing; unknown drafts were preserved.',10000);
+      await s.until(next=>['music_browser_container','music_editor_cancel_button','music_editor_done_button','link_sticker_list_web_url_edit_text','link_sticker_list_cancel_button','share_story_button','direct_external_share_container_view','gallery_title_text','row_feed_button_share'].some(id=>has(next,id))||has(next,'camera_photo_texture_view')&&next.some(n=>n.displayed==='true'&&n['content-desc']==='Link Sticker')||has(next,'story_share_controls_action_bar')&&has(next,'cancel_button')||has(next,'profile_header_create_button')&&has(next,'profile_tab')||next.some(n=>n.displayed==='true'&&n['resource-id']===nativeId('igds_alert_dialog_primary_button')&&n.text==='Discard'),'The native screen changed. Close the owned rehearsal before continuing; unknown drafts were preserved.',10000);
       continue;
     }
     await new Promise(resolve=>setTimeout(resolve,450));

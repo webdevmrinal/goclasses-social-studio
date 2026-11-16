@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mrinal. Local accessibility recovery; never publishes.
 import {nativeId,nativeBounds,xpathLiteral} from './android-native.js';
 import {InterventionError} from './utils.js';
+import {scopedNativeControl} from './native-scoped-control.js';
 
 const INSTAGRAM='com.instagram.android';
 const attempts=new WeakMap();
@@ -12,6 +13,8 @@ const riskyId=/(?:^|[/:_])(?:save|share|post|publish|send|delete|discard|remove|
 const plans={
   'feed-music':{labels:['Audio','Music','Add music'],scope:n=>unique(n,'media_thumbnail_tray_button')&&!['share_footer_button','caption_input_text_view','story_share_controls_action_bar','action_sheet_container','music_editor_controls_container','row_search_edit_text'].some(id=>has(n,id))},
   'story-music':{labels:['Music','Add music'],scope:n=>unique(n,'story_share_controls_action_bar')&&!['music_editor_done_button','music_editor_controls_container','row_search_edit_text','action_sheet_container'].some(id=>has(n,id))},
+  'story-stickers':{labels:['Stickers'],scope:n=>unique(n,'story_share_controls_action_bar')&&unique(n,'camera_photo_texture_view')&&!['link_sticker_list_web_url_edit_text','music_editor_controls_container','row_search_edit_text'].some(id=>has(n,id))},
+  'story-link':{labels:['Link Sticker','Link'],scope:n=>unique(n,'camera_photo_texture_view')&&!['link_sticker_list_web_url_edit_text','music_editor_controls_container','row_search_edit_text'].some(id=>has(n,id))},
   'post-edit':{labels:['Edit'],guard:true,scope:n=>unique(n,'action_sheet_container')&&unique(n,'recycler_view')}
 };
 const fail=message=>{const error=new InterventionError(message+' Its screen and draft were preserved. Continue manually on the selected Android device.');error.code='ANDROID_NAVIGATION_UNCERTAIN';return error;};
@@ -28,6 +31,10 @@ export function nativeNavigationCandidate(nodes,action,{guard}={}){
   if(!plan.scope(visible)||(plan.guard&&typeof guard!=='function')||(guard&&!guard(nodes)))throw fail('The expected Instagram navigation screen changed.');
   if(visible.some(n=>/direct_(?:external|private)_share_container_view/.test(n['resource-id']||'')))throw fail('Instagram has an open recipient screen.');
   const matches=visible.filter(n=>plan.labels.includes(n.text)||plan.labels.includes(n['content-desc']));
+  if(action!=='post-edit'&&(matches.length>1||matches.length===1&&matches[0].clickable!=='true')){
+    const resolved=scopedNativeControl(nodes,{guard:n=>plan.scope(own(n))&&(!guard||guard(n)),labels:plan.labels});
+    if(resolved)return resolved;
+  }
   // Several labels can describe different controls. Never rank or guess one.
   if(matches.length>1)throw fail('More than one Instagram navigation control matched.');
   if(!matches.length)return null;
