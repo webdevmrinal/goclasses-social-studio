@@ -3,6 +3,8 @@ import sharp from 'sharp';
 import {nativeId,nativeBounds} from './android-native.js';
 import {InterventionError} from './utils.js';
 import {instagramOwnStoryIdentity,instagramStoryAgeSeconds} from '../../shared/instagram-story-viewer.js';
+import {storyUploadState} from '../../shared/story-upload.js';
+const notReady=message=>Object.assign(new InterventionError(message),{code:'STORY_NOT_READY'});
 const own=n=>n.filter(x=>x.displayed==='true'&&x.package==='com.instagram.android');
 export function ownStoryViewer(nodes,handle){
  return Boolean(instagramOwnStoryIdentity(nodes,handle));
@@ -27,15 +29,17 @@ export function storyReadbackAvailable(nodes){
 export async function verifyOwnPublishedStory(s,{handle,preview,submittedAt,maxStories=8}={}){
  if(!handle||!preview||!Number.isFinite(submittedAt))throw new InterventionError('The reviewed Story comparison is unavailable. No Story was resent.');
  let nodes=await s.screen();
+ if(storyUploadState(nodes))throw notReady('The Story is still uploading. Its existing Share was not repeated.');
  if(!ownStoryViewer(nodes,handle)){
   await s.account(handle);nodes=await s.screen();
   const n=own(nodes),avatar=n.filter(x=>x['resource-id']===nativeId('row_profile_header_imageview')&&/^Your profile\..*story$/i.test(x['content-desc']||''));
-  if(avatar.length!==1||!n.some(x=>x['resource-id']===nativeId('action_bar_title')&&x.text===handle))throw new InterventionError('The own-profile Story entry is unavailable. No Story was resent.');
+  if(avatar.length!==1||!n.some(x=>x['resource-id']===nativeId('action_bar_title')&&x.text===handle))throw notReady('The own-profile Story entry is unavailable. No Story was resent.');
   await s.clickId('row_profile_header_imageview_frame_layout');
   nodes=await s.until(n=>ownStoryViewer(n,handle)&&n,'The own Story viewer did not load. No Story was resent.',15000);
  }
  for(let i=0;i<maxStories;i++){
   s.signal?.throwIfAborted();if(!ownStoryViewer(nodes,handle))throw new InterventionError('Story verification left your own viewer. No Story was resent.');
+  if(storyUploadState(nodes))throw notReady('The Story is still uploading. Its existing Share was not repeated.');
   const current=own(nodes),age=instagramOwnStoryIdentity(nodes,handle)?.ageSeconds,canvases=current.filter(x=>x['resource-id']===nativeId('reel_viewer_media_container'));
   if(age!==null&&age<=Math.max(0,(Date.now()-submittedAt)/1000)+90&&canvases.length===1){
    const canvas=nativeBounds(canvases[0]),actual=await storyPreviewPixels(await s.screenshot(),canvas),comparison=compareStoryPixels(preview,actual);
@@ -48,5 +52,5 @@ export async function verifyOwnPublishedStory(s,{handle,preview,submittedAt,maxS
   await s.gesture([{type:'pointerMove',duration:0,x:Math.round(b.x+b.width*.97),y:Math.round(b.y+b.height*.55)},{type:'pointerDown',button:0},{type:'pointerUp',button:0}]);
   await new Promise(resolve=>setTimeout(resolve,300));nodes=await s.screen();
  }
- throw new InterventionError('The published Story could not be matched to its reviewed card and link. Verify it before retrying; no Story was resent.');
+ throw notReady('The published Story could not be matched to its reviewed card and link. Verify it before retrying; no Story was resent.');
 }

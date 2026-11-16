@@ -270,7 +270,7 @@ export class InstagramAndroidWorker {
           preflight:async()=>{ctx.signal?.throwIfAborted();if(JSON.stringify(await storyAudienceEvidence(s,options.story))!==JSON.stringify(evidence))throw new InterventionError('The reviewed Story changed. Nothing was shared.');},
           publish:async()=>{submitted=true;submittedAt=Date.now();await publishStory(s,evidence,options.story);},
           verify:async()=>{
-            const receipt=await confirmNativeStoryPublication(s,{handle:ctx.config.platforms.instagram.handle,preview,submittedAt,onDiagnostic:async receipt=>ctx.recordPreparation({...preparation,receipt})});
+            const receipt=await confirmNativeStoryPublication(s,{handle:ctx.config.platforms.instagram.handle,preview,submittedAt,onDiagnostic:async receipt=>{await ctx.recordPreparation({...preparation,receipt});if(receipt.phase==='uploading')await ctx.step('Story uploading'+(receipt.percent!==undefined?' '+receipt.percent+'%':'')+'; waiting for Instagram confirmation...');else if(receipt.phase==='waiting_for_upload')await ctx.step('Waiting for the submitted Story to appear. Share will not be repeated...');}});
             publication={...receipt,sourcePostUrl:url,requestedDestinations:evidence.destinations};
           }
         });

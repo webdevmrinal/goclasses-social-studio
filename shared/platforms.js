@@ -2,6 +2,7 @@
 import { mediaFor, selectionErrors } from './media.js';
 import {mediaKind,mediaSelectionErrors,mediaSupport} from './media-capabilities.js';
 import { INSTAGRAM_STORY, INSTAGRAM_MUSIC, instagramOptions, storyErrors, instagramHashtags } from './instagram.js';
+import {extractStoryImport} from './story-import.js';
 export const PLATFORMS = [
   { id: 'instagram', delimiter: 'INSTAGRAM', name: 'Instagram', detail: 'Photo post or Reel', color: '#c54786', icon: 'instagram', limit: 2200, maxImages: 10 },
   { id: 'linkedin', delimiter: 'LINKEDIN', name: 'LinkedIn', detail: 'Company post', color: '#1479ba', icon: 'linkedin', limit: 3000, maxImages: 10, textOnly: true },
@@ -20,8 +21,9 @@ export const captionLength = (p, text = '') => p.id === 'telegram' ? text.length
 export const countCharacters = text => [...(text || '')].length;
 
 export function parseCaptions(input) {
+  const imported=extractStoryImport(input);input=imported.text;
   const captions = {};
-  const errors = [];
+  const errors = [...imported.errors];
   const headers = [...input.matchAll(/^\s*=====([A-Z_]+)=====\s*$/gm)];
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
@@ -33,7 +35,7 @@ export function parseCaptions(input) {
   for (const platform of PLATFORMS) captions[platform.id] ||= '';
   if(!Object.values(captions).some(value=>value.trim()))errors.push('Add at least one caption section.');
   captions.instagramStory ||= '';
-  return { captions, errors };
+  return { captions, errors,storyImport:imported.story,warnings:imported.warnings };
 }
 
 export function validateDraft(draft, media, xLength = countCharacters) {

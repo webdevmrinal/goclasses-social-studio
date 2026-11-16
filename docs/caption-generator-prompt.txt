@@ -1,0 +1,91 @@
+SOCIAL STUDIO: PROMPT FOR THE CAPTION/POSTER LLM
+
+Keep my existing research process, caption style, tone, language, factual
+detail and requested platforms unchanged. Apply only these output rules:
+
+1. Return plain text using these exact section headers. Omit any platform
+   I did not request. Do not include empty sections or explanatory text.
+
+=====INSTAGRAM=====
+<Instagram caption>
+
+=====LINKEDIN=====
+<LinkedIn caption>
+
+=====X=====
+<X caption>
+
+=====YOUTUBE_DA=====
+<YouTube GATE DA caption>
+
+=====YOUTUBE_CS=====
+<YouTube GATE CS caption>
+
+=====WHATSAPP=====
+<WhatsApp caption>
+
+=====TELEGRAM=====
+<Telegram caption>
+
+=====MANYCHAT=====
+<DM text including relevant URLs>
+
+[INSTAGRAM_STORY]
+enabled: true
+links:
+  1 | Apply Now | https://example.com/application
+  2 | Official Notice | https://example.com/notice.pdf
+  3 | View Details | https://example.com/details
+[/INSTAGRAM_STORY]
+
+2. Append exactly one Story block, outside all public caption sections.
+   enabled: true means share the feed post as a Story. Use enabled: false
+   when I explicitly request no Story. It does not select music.
+
+3. Research and rank useful destinations for this specific post. Priority
+   1 is the primary action promised by the post. Usually prefer the current
+   official application/registration page, then the official notice, then
+   an official information page. Adjust for the topic: a results post can
+   prioritize Check Results; a course post can prioritize Explore Courses.
+   Do not invent URLs or promote expired applications as open.
+
+4. Each link is one line: positive integer | short action label | URL.
+   Use distinct priority numbers. The app selects the highest-priority
+   valid link for its one sticker. Other ranked links remain selectable.
+   Include only relevant links; three is a suggestion, not a requirement.
+
+5. Labels must be 1-20 characters including spaces. Choose a clear,
+   topic-specific action: Apply Now, Register, Check Eligibility, Read
+   Notice, View Results, Explore Courses, Download Brochure, etc.
+   Vary wording according to the actual action, without misleading claims.
+   Do not put a pipe character inside a label. No quotes, bold markers,
+   bullet characters, or Markdown links inside the Story block.
+
+6. Use complete HTTP(S) URLs. Preserve required query parameters and
+   fragments. Prefer direct official links without unnecessary tracking.
+   Never include credentials. Do not shorten a URL yourself.
+
+7. If there is no useful link, output this block for a normal Story:
+
+[INSTAGRAM_STORY]
+enabled: true
+links: []
+[/INSTAGRAM_STORY]
+
+8. Keep dates, deadlines, pay, vacancies, eligibility, and claims consistent
+   across captions. Keep my existing caption writing style unchanged.
+   Respect character limits: Instagram 2200 (at most 5 hashtags), LinkedIn
+   3000, X 280 (URLs use X's weighted length), each YouTube caption 1500,
+   WhatsApp 1024, Telegram with images 1024, ManyChat 1000.
+   Do not place the Story block inside a published caption.
+
+9. Name poster exports using these unambiguous prefixes:
+   01_cover_<topic>.png
+   02_slide_<topic>.png
+   03_slide_<topic>.png
+   Continue numeric ordering for further slides. Use exactly one cover.
+   The cover is first; the detail slide is second. Social Studio normally
+   uses Instagram photo 2 for LinkedIn, WhatsApp and Telegram. X and both
+   YouTube channels follow the Instagram order unless edited separately.
+
+Do not change any other aspect of my existing instructions.

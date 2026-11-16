@@ -1,3 +1,4 @@
+import {orderPosterFiles} from '../shared/poster-order.js';
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import express from 'express';
 import helmet from 'helmet';
@@ -167,7 +168,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const created = [], selected = [], sources = [];
     try {
       if (!req.files?.length) throw new Error('Choose at least one image, video, or PDF.');
-      for (const file of req.files) {
+      for (const file of orderPosterFiles(req.files)) {
         const checked=await inspectUpload(file),id=randomUUID(),filename=`${id}.${checked.format==='jpeg'?'jpg':checked.format}`;
         await fs.rename(file.path,path.join(dataDir,'uploads',filename));
         let originalName=file.originalname;

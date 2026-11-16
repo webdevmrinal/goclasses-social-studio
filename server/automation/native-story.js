@@ -7,6 +7,8 @@ import {digest} from './native-photos.js';
 import {assistNativeStage} from './native-music.js';
 import {scopedNativeControl} from './native-scoped-control.js';
 import {recoverNativeNavigation} from './native-navigation.js';
+import {storyUploadState} from '../../shared/story-upload.js';
+import {setTimeout as delay} from 'node:timers/promises';
 const has=(nodes,id)=>nodes.some(n=>n.displayed==='true'&&n['resource-id']===nativeId(id));
 export async function changedSticker(before,after,canvas,lower=false) {
   const left=canvas.x+24,top=Math.round(canvas.y+canvas.height*(lower==='all'?.3:lower?.68:.34));
@@ -151,12 +153,24 @@ export function nativeStoryPublicationEvidence(nodes){
  if(current.filter(n=>n['resource-id']===nativeId('direct_recipient_add_to_highlights_row')).length!==1||!exact('add_to_highlights_label','Add to highlights')||!completionDone(current))return null;
  return {verifiedBy:'native_story_completion_sheet',instagramAccepted:true,acknowledgement:'also_share_to_done'};
 }
-export async function confirmNativeStoryPublication(s,{onDiagnostic,timeout=30000,handle,preview,submittedAt}={}){
+export async function confirmNativeStoryPublication(s,{onDiagnostic,timeout=180000,handle,preview,submittedAt,settleMs=1500}={}){
  s.signal?.throwIfAborted();
  const report=async details=>{await onDiagnostic?.(details);s.signal?.throwIfAborted();};
  await report({phase:'waiting_for_acknowledgement'});
- const evidence=await s.until(nodes=>nativeStoryPublicationEvidence(nodes)||(preview&&storyReadbackAvailable(nodes)?{readback:true}:null),'Story submission began. Check Instagram before retrying; no duplicate send was attempted.',timeout);
- if(evidence.readback){const receipt=await verifyOwnPublishedStory(s,{handle,preview,submittedAt});await report({phase:'acknowledged',...receipt});return receipt;}
+ const end=Date.now()+timeout,readyAfter=Number.isFinite(submittedAt)?submittedAt+settleMs:0,message='Story submission began. Check Instagram before retrying; no duplicate send was attempted.';let lastUpload='',evidence;
+ const ready=async nodes=>{
+  const upload=storyUploadState(nodes);
+  if(upload?.state==='failed')throw new InterventionError('Instagram reported that the Story upload failed. Check the existing upload before retrying; Share was not repeated.');
+  if(upload){const stamp=JSON.stringify(upload);if(stamp!==lastUpload){lastUpload=stamp;await report({phase:'uploading',...upload});}return false;}
+  lastUpload='';return nativeStoryPublicationEvidence(nodes)||(preview&&Date.now()>=readyAfter&&storyReadbackAvailable(nodes)?{readback:true}:null);
+ };
+ while(true){
+  evidence=await s.until(ready,message,Math.max(1,end-Date.now()));
+  if(!evidence)throw new InterventionError(message);
+  if(!evidence.readback)break;
+  try{const receipt=await verifyOwnPublishedStory(s,{handle,preview,submittedAt});await report({phase:'acknowledged',...receipt});return receipt;}
+  catch(error){s.signal?.throwIfAborted();if(error.code!=='STORY_NOT_READY'||Date.now()>=end)throw error;await report({phase:'waiting_for_upload',message:'Waiting for the submitted Story to finish uploading and appear. No new Share action.'});await delay(Math.min(1500,end-Date.now()),undefined,{signal:s.signal});}
+ }
  const receipt={...evidence,verifiedAt:new Date().toISOString(),completionDismissed:false};
  await report({phase:'acknowledged',...receipt});
  if(evidence.verifiedBy!=='native_story_completion_sheet')return receipt;

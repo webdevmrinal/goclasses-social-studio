@@ -2,6 +2,11 @@
 import {defaultMediaFor,mediaKind} from './media-capabilities.js';
 export const TEXT_ONLY_PLATFORMS = Object.freeze(['linkedin', 'x', 'youtubeDA', 'youtubeCS', 'whatsapp', 'telegram']);
 export const SECOND_IMAGE_PLATFORMS=Object.freeze(['linkedin','whatsapp','telegram']);
+export const INSTAGRAM_ORDER_PLATFORMS=Object.freeze(['x','youtubeDA','youtubeCS']);
+export function orderMediaLikeInstagram(draft,media){
+ const order=draft.mediaByPlatform?.instagram||draft.mediaIds||[],rank=new Map(order.map((id,index)=>[id,index]));
+ return media.map((item,index)=>({item,index})).sort((a,b)=>(rank.get(a.item.id)??order.length+a.index)-(rank.get(b.item.id)??order.length+b.index)).map(row=>row.item);
+}
 export function instagramPhotos(draft,media){
  const selected=Object.hasOwn(draft.mediaByPlatform||{},'instagram')?(Array.isArray(draft.mediaByPlatform.instagram)?draft.mediaByPlatform.instagram:[]).map(id=>media.find(item=>item.id===id)).filter(Boolean):defaultMediaFor('instagram',media);
  return selected.filter(item=>mediaKind(item)==='image');
@@ -17,7 +22,8 @@ export function mediaFor(draft, media, id) {
   if(['instagramMusic','instagramStory','manychat'].includes(id))return [];
   if (!Object.hasOwn(draft.mediaByPlatform || {}, id)) {
     if(followsInstagramSecond(draft,id)){const photos=instagramPhotos(draft,media);if(photos.length)return [photos[1]||photos[0]];}
-    return media.every(item=>mediaKind(item)==='image')?(id==='whatsapp'?media.slice(0,1):media):defaultMediaFor(id,media);
+    const chosen=media.every(item=>mediaKind(item)==='image')?(id==='whatsapp'?media.slice(0,1):media):defaultMediaFor(id,media);
+    return INSTAGRAM_ORDER_PLATFORMS.includes(id)?orderMediaLikeInstagram(draft,chosen):chosen;
   }
   return Array.isArray(draft.mediaByPlatform[id]) ? draft.mediaByPlatform[id].map(key => media.find(item => item.id === key)).filter(Boolean) : [];
 }

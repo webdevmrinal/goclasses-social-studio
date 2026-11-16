@@ -13,6 +13,7 @@ import { prepareXSubmit } from './x-submit.js';
 import { recoverablePage } from './recoverable-page.js';
 import { selectedMediaKind, prepareInstagramReel, prepareLinkedInVideo, prepareLinkedInDocument, prepareXVideo } from './media-posts.js';
 import { prepareYouTubeUpload } from './youtube-upload.js';
+import {uploadOrderedImages,verifyOrderedImages} from './ordered-images.js';
 
 export function destinationUrl(id, config) {
   const p = config.platforms[id];
@@ -278,12 +279,14 @@ async function linkedin(ctx) {
 
 async function x(ctx) {
   const { page, files, caption, step, snapshot } = ctx;
+  let imageOrder;
   await navigate(page, 'https://x.com/compose/post', step);
   await assertNoChallenge(page);
   const dialog = page.getByRole('dialog').filter({ has: page.getByTestId('tweetTextarea_0') }).last();
   await dialog.waitFor({ state: 'visible', timeout: 60000 });
   if (files.length) {
-    await uploadImages(page, files, step, { input: dialog.locator('input[type="file"][accept*="image"]') });
+    if(files.length>1)imageOrder=await uploadOrderedImages(page,files,step,{input:dialog.locator('input[type="file"][accept*="image"]'),images:dialog.getByTestId('attachments').locator('img'),label:'X',signal:ctx.signal});
+    else await uploadImages(page, files, step, { input: dialog.locator('input[type="file"][accept*="image"]') });
     await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length);
     await snapshot('images-uploaded');
   }
@@ -296,7 +299,8 @@ async function x(ctx) {
   const result = await finishPost({ ...ctx,
     preflight: async () => {
       await verifyCaption(editor, caption);
-      if (files.length) await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length);
+      if(imageOrder)await verifyOrderedImages(page,dialog.getByTestId('attachments').locator('img'),imageOrder.sources,imageOrder.evidence,{label:'X'});
+      else if (files.length) await waitForImages(page, dialog.getByTestId('attachments').locator('img'), files.length);
       else await verifyTextOnlyComposer(dialog, dialog.getByTestId('attachments'), 'X');
       submission = await prepareXSubmit(page, dialog, post);
     },
@@ -309,6 +313,7 @@ async function x(ctx) {
 
 async function youtube(ctx) {
   const { page, files, caption, step, snapshot } = ctx;
+  let imageOrder;
   const expected = ctx.config.platforms[ctx.id];
   let baseline = await publicationBaseline(page, ctx.id, expected), publication;
   await step('Opening the community composer…');
@@ -319,7 +324,8 @@ async function youtube(ctx) {
   if (files.length) {
     await composer.getByRole('button', { name: 'Add an image', exact: true }).click();
     const media = composer.locator('ytd-backstage-multi-image-select-renderer');
-    await uploadImages(page, files, step, { input: media.locator('input[type="file"][multiple]') });
+    if(files.length>1)imageOrder=await uploadOrderedImages(page,files,step,{input:media.locator('input[type="file"][multiple]'),images:media.locator('img'),label:'YouTube',signal:ctx.signal});
+    else await uploadImages(page, files, step, { input: media.locator('input[type="file"][multiple]') });
     await waitForImages(page, media.locator('img'), files.length);
     await snapshot('images-uploaded', composer);
   }
@@ -332,6 +338,7 @@ async function youtube(ctx) {
   const result = await finishPost({ ...ctx,
     preflight: async () => {
       await verifyCaption(editor, caption);
+      if(imageOrder)await verifyOrderedImages(page,composer.locator('ytd-backstage-multi-image-select-renderer img'),imageOrder.sources,imageOrder.evidence,{label:'YouTube'});
       if (!files.length) await verifyTextOnlyComposer(composer, composer.locator('ytd-backstage-multi-image-select-renderer img,ytd-backstage-image-renderer,ytd-post-multi-image-renderer'), 'YouTube');
       baseline = [...new Set([...baseline, ...await publicationBaseline(page, ctx.id, expected)])];
     },

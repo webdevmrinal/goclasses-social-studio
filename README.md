@@ -108,6 +108,12 @@ Driver startup never starts a device or changes its display settings. Scanning, 
 
 ## Compose defaults
 
+Caption generators can use the complete format and instructions in [docs/caption-generator-prompt.txt](docs/caption-generator-prompt.txt). Append one `[INSTAGRAM_STORY]` block with `enabled: true` and ranked `priority | label | URL` rows. Priority 1 is highest. The first valid HTTP(S) link fills the editable sticker URL/label, turns the sticker on, and explicitly includes Story. `links: []` creates a normal shared-post Story without a sticker; `enabled: false` excludes Story. Without the new block, Story remains off by default. Legacy caption sections still work.
+
+Metadata is removed before parsing the public captions. Unicode caption text, query parameters and URL fragments are preserved. Invalid URLs are skipped with a warning; labels are cleaned and shortened to the native 20-character limit with a warning. The ranked choices remain available beside the editable sticker fields. Changing them manually survives refresh. Caption export writes the current selection back into the same format.
+
+Use poster filenames such as `01_cover_topic.png`, `02_slide_topic.png`, `03_slide_topic.png`. A new upload batch is automatically ordered only when all files have unambiguous role/number prefixes and exactly one cover. Ambiguous names retain upload order. Manual drag ordering remains authoritative. X and both YouTube channels default to Instagram's order, with an **Instagram order** action to restore that order after a destination-specific edit. Multi-photo browser uploads use sequential, numbered payloads and compare each composer's visible images against the reviewed order before publishing. Numbered payload names do not alter the stored image bytes or quality.
+
 Photo uploads automatically remove removable embedded origin metadata before selection. The original is retained separately, and the cleaned image is rescanned and checked for identical decoded pixels, dimensions and compressed image data. This is a container-metadata check, not a prediction of platform AI labels. Videos and PDFs stay unchanged. Idle older drafts with embedded origin markers are cleaned when opened or reviewed.
 
 New drafts default LinkedIn, WhatsApp and Telegram to Instagram photo 2 (or its only photo). The selection follows Instagram's order and cleaned-file replacements. Pick another thumbnail to override one channel; use its Instagram #2 button to follow again. The default switch preserves custom channel selections. X and both YouTube accounts keep their normal media selection.
@@ -408,6 +414,8 @@ This is a screen shield rather than a hardware input lock: the phone's Power but
 ### Current Android UI, interruptions and Activity timing
 
 Story confirmation supports both Instagram's legacy header and its current Compose header. After the one final share, Studio can read back your own recent Story and compare its pixels with the reviewed card/link. A changed username, old timestamp or mismatched image never proves publication. The same account recognition returns Android to your profile after confirmation.
+
+After Share, confirmation waits up to three minutes for upload status and the published Story. A visible upload progress bar, including 90% or 100%, is pending work rather than success. Activity shows upload progress, and delayed own-Story appearance gets bounded read-only rechecks. These checks never press Share again. An explicit upload failure, an unknown account/screen, cancellation or an exhausted wait still requires review.
 
 Preparation resolves exact resource IDs with or without the Compose package prefix. Safe navigation can use visible labels and bounded button wrappers; Story link confirmation recognizes the current icon wrapper and its actual clickable child, while rechecking the reviewed URL and sticker text. Sticker and link navigation can use bounded Gemini recovery. Repeated screens, ambiguous controls and lost action responses do not trigger blind retries. Save/Share authorization and publication receipts remain local checks, outside AI control.
 

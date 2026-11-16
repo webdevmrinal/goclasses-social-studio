@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mrinal. All rights reserved.
 import { detectManychatLinks, instagramPostUrl } from './manychat.js';
+import {rankedStoryLinks} from './story-import.js';
 export const INSTAGRAM_STORY = { id:'instagramStory', delimiter:'INSTAGRAM_STORY', name:'Instagram Story', detail:'Share the feed post', color:'#c54786', icon:'instagram', maxImages:0, limit:0, optionalImport:true, textOnly:true, parentId:'instagram' };
 export const INSTAGRAM_MUSIC={id:'instagramMusic',delimiter:'INSTAGRAM_MUSIC',name:'Instagram music',detail:'Add music to the published feed',icon:'instagram',color:'#c54786',maxImages:0,limit:0,optionalImport:true,textOnly:true,parentId:'instagram'};
 export function musicReference(value={}){
@@ -13,8 +14,8 @@ export const DEFAULT_STORY_LAYOUT = {card:{x:.5,y:.43,width:.8},link:{x:.5,y:.81
 export function storyUrl(value) {
   try { const u=new URL(value); return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password&&u.hostname&&u.href.length<=2048?u.href:null; } catch{return null;}
 }
-export function storyLinks(captions={}) {
-  const found=[],seen=new Set();
+export function storyLinks(captions={},imported=[]) {
+  const found=rankedStoryLinks(imported).map(l=>({...l,source:'import',score:1000-l.priority})),seen=new Set(found.map(l=>l.url));
   for(const id of ['instagramStory','linkedin','youtubeDA','youtubeCS','manychat','telegram','whatsapp','instagram']) {
     for(const link of detectManychatLinks(captions[id]||'')) {
       const url=storyUrl(link.url); if(!url||seen.has(url))continue;seen.add(url);
@@ -22,7 +23,7 @@ export function storyLinks(captions={}) {
       found.push({url,label:admission?'Application Form':link.label,source:id,score:admission?1:0});
     }
   }
-  return found.sort((a,b)=>b.score-a.score);
+  return found.filter(l=>l.source==='import').concat(found.filter(l=>l.source!=='import').sort((a,b)=>b.score-a.score));
 }
 export function storyLayout(value=DEFAULT_STORY_LAYOUT) {
   const out={};
@@ -71,9 +72,9 @@ export function storyErrors(story={},selected=[]) {
   try{storyLayout(story.layout);}catch(e){errors.push(e.message);}
   return errors;
 }
-export function importStory(captions) {
-  const raw=captions.instagramStory||'',link=storyLinks({instagramStory:raw})[0];
-  return {enabled:false,enabledByUser:false,alignment:'auto',facebookEnabled:false,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',layout:structuredClone(DEFAULT_STORY_LAYOUT)};
+export function importStory(captions,metadata) {
+  const importedLinks=rankedStoryLinks(metadata?.links),raw=captions.instagramStory||'',link=metadata?importedLinks[0]:storyLinks({instagramStory:raw})[0],enabled=Boolean(metadata&&metadata.enabled!==false);
+  return {enabled,enabledByUser:enabled,alignment:'auto',facebookEnabled:false,linkEnabled:Boolean(link),url:link?.url||'',label:link?.label||'',sourcePostUrl:'',importedLinks,layout:structuredClone(DEFAULT_STORY_LAYOUT)};
 }
 
 // Positions stay normalized so mouse, touch and keyboard edits share the same review.
