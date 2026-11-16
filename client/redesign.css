@@ -218,7 +218,9 @@ body{font-family:Inter,Devanagari,Arial,sans-serif}
 .app .state-cell small{display:block;color:var(--soft);font-size:9px;margin-top:5px}
 .app .run-total-time{display:flex;flex-direction:column;gap:4px;font-variant-numeric:tabular-nums}
 .app .run-total-time small{font-size:9px;color:var(--soft)}
-@media(max-width:700px){.app .activity-summary .run-total-time{display:flex;grid-column:1;grid-row:2;flex-direction:row;align-items:center;gap:7px;font-size:11px}.app .activity-summary .run-total-time small{font-size:10px}}
+.app .run-total-inline{display:none;gap:4px;font-variant-numeric:tabular-nums;white-space:nowrap}
+@media(max-width:1250px){.app .activity-summary .run-total-time{display:none}.app .run-total-inline{display:inline-flex;margin-left:8px}}
+@media(max-width:700px){.app .run-total-inline{display:flex;margin:4px 0 0;font-size:10px}}
 .app .logo-stack .logo{width:13px;height:13px}
 .app .logo-stack .additional{display:flex;align-items:center;justify-content:center;font-size:8px}
 .app .run-card[open]{background:#171C25}
