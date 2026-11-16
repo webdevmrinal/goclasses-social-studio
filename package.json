@@ -14,7 +14,7 @@
     "dev": "node --watch --env-file-if-exists=.env server/index.js",
     "setup": "playwright install chromium",
     "test": "node --test tests/*.test.js",
-    "test:ui": "node tests/redesign-ui.js && node tests/compose-polish-ui.js",
+    "test:ui": "node tests/redesign-ui.js && node tests/compose-polish-ui.js && node tests/pipeline-ui.js",
     "test:browser": "node tests/browser-smoke.js",
     "test:accounts": "node tests/accounts-smoke.js",
     "test:editors": "node tests/editor-smoke.js",
@@ -54,6 +54,7 @@
     "phone:driver": "node scripts/phone-worker.mjs server-start",
     "phone:doctor": "node scripts/phone-worker.mjs doctor",
     "test:redesign": "node tests/redesign-ui.js",
+    "test:pipeline": "node --test tests/run-pipeline.test.js tests/story-music-inheritance.test.js && node tests/pipeline-ui.js",
     "test:compose": "node --test tests/compose-defaults.test.js && node tests/compose-polish-ui.js"
   },
   "dependencies": {

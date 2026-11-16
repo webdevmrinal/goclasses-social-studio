@@ -15,6 +15,7 @@ import { mediaFor } from '../shared/media.js';
 import {mediaKind} from '../shared/media-capabilities.js';
 import { usesInstagramAndroid, instagramNeedsMusicEdit } from '../shared/instagram.js';
 import { publicationUrl } from './automation/publication.js';
+import {executionLane,executionDependency,pipelineCandidates,pipelineContinuable} from '../shared/run-pipeline.js';
 
 const busyStates = ['running', 'pausing', 'paused', 'stopping', 'attention', 'awaiting_manual', 'waiting_for_input'];
 export class Queue extends EventEmitter {
@@ -58,7 +59,7 @@ export class Queue extends EventEmitter {
     this.persistChain = this.persistChain.then(() => atomicWrite(path.join(this.dataDir, 'runs.json'), snapshot));
     return this.persistChain;
   }
-  async change() { await this.persist(); this.emit('change', this.state()); }
+  async change() { for(const run of this.runs)if(run.pipeline)this.syncPipeline(run);await this.persist(); this.emit('change', this.state()); }
   async start({ draft, config, mode = 'TEST', confirmation, media, retryOf = null, sourceInstagramPublication }) {
     if (this.recoveryTaskActive || this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('A run or login check is already active. Close any manual sign-in window before continuing.');
     if (mode !== 'TEST' && mode !== 'LIVE') throw new Error('Invalid run mode.');
@@ -73,6 +74,7 @@ export class Queue extends EventEmitter {
       mediaByPlatform: Object.fromEntries(ordered.map(id => [id, ['instagramStory','instagramMusic'].includes(id)?[]:mediaFor(draft, media, id).map(m => m.id)])),
       items: ordered.map(id => ({ id, status: 'queued', message: 'Waiting in queue', screenshots: [], submitting: false }))
     };
+    if(run.items.some(i=>usesInstagramAndroid(run.instagram,i.id))&&run.items.some(i=>!usesInstagramAndroid(run.instagram,i.id)))run.pipeline={version:1};
     if (draft.selected.includes('manychat')) run.manychat = { ...validateManychatDraft(draft.manychat, draft.captions?.manychat), replies: replyBatch(config.platforms.manychat.replyMessages, this.replyRotation.offset) };
     if (mode === 'LIVE' && run.manychat && !run.manychat.postUrl && !draft.selected.includes('instagram') && !manychatPublicationSource(sourceInstagramPublication)) throw new Error('ManyChat: select Instagram in this run, or paste the exact Instagram post URL in Compose.');
     if(ordered.includes('instagramMusic')&&!ordered.includes('instagram')&&!instagramPostUrl(sourceInstagramPublication?.postUrl))throw new Error('Instagram music needs the exact confirmed feed post from this run.');
@@ -84,27 +86,30 @@ export class Queue extends EventEmitter {
     this.process(run).catch(error => this.emit('workerError', error));
     return run;
   }
-  async control(action, expectedRunId) {
+  async control(action, expectedRunId, expectedItemId) {
     const run = this.active;
     if (!run) throw new Error('There is no active run.');
     if(expectedRunId&&run.id!==expectedRunId)throw new Error('That activity is no longer active. No other run was stopped.');
-    if (action === 'pause' && run.status === 'running') run.status = 'pausing';
-    else if (action === 'resume' && run.status === 'paused') run.status = 'running';
-    else if (action === 'continue' && run.status === 'attention') {
-      const item = run.items.find(i => i.status === 'attention');
-      if (item) {item.failureMessage ||= item.message;item.status = 'queued';}
+    if (action === 'pause' && (run.status === 'running'||run.pipeline&&!run.pauseRequested&&!run.stopRequested)) {if(run.pipeline)run.pauseRequested=true;run.status = 'pausing';}
+    else if (action === 'resume' && (run.status === 'paused'||run.pipeline&&run.pauseRequested)) {delete run.pauseRequested;run.status = 'running';}
+    else if (action === 'continue' && (run.status === 'attention'||run.pipeline&&!run.stopRequested)) {
+      const item = run.items.find(i => (run.pipeline?pipelineContinuable(run,i):i.status==='attention')&&(!expectedItemId||i.id===expectedItemId));
+      if(!item)throw new Error('Verify or finish the dependent step first. No destination was restarted.');
+      item.failureMessage ||= item.message;item.status = 'queued';delete item.dependencyBlocked;delete item.dependsOn;
       run.status = 'running';
-    } else if (action === 'done' && run.status === 'awaiting_manual') {
+    } else if (action === 'done' && (run.status === 'awaiting_manual'||run.pipeline&&run.items.some(i=>i.status==='awaiting_manual'))) {
       const item = run.items.find(i => i.status === 'awaiting_manual');
       item.status = 'posted'; item.finishedAt = new Date().toISOString(); item.message = 'ManyChat update confirmed by operator.';
       run.status = run.pauseAfterManual ? 'paused' : 'running';
       delete run.pauseAfterManual;
       try { if(!usesInstagramAndroid(run.instagram,item.id))await this.snapshot(run, item, await this.browser.page(item.id), 'operator-confirmed'); } catch { /* Operator confirmation remains authoritative for this manual step. */ }
     } else if (action === 'kill') {
+      if(run.pipeline)run.stopRequested=true;
       run.status='stopping';run.confirmedLive=false;run.killRequested=true;
       for(const item of run.items){if(['queued','attention'].includes(item.status)){item.status='skipped';item.message='Stopped before this destination started.';}if(item.status==='awaiting_manual'){item.status='uncertain';item.message='Stopped. Check the existing assisted update before retrying.';}}
       if(this.runController?.runId===run.id)this.runController.controller.abort(new InterventionError('Stopped by operator. No further publication actions are allowed.'));
     } else if (action === 'stop') {
+      if(run.pipeline)run.stopRequested=true;
       run.status = 'stopping';
       if(this.interventions.pending?.run===run)this.runController?.controller.abort(new InterventionError('Stopped by operator. No further publication actions are allowed.'));
       for (const item of run.items) {
@@ -113,6 +118,10 @@ export class Queue extends EventEmitter {
       }
     } else throw new Error('That action is not available in the current state.');
     await this.change();
+    if(run.pipeline){
+      if(!this.processing&&(!run.pauseRequested||run.stopRequested)&&!['completed','completed_with_errors','stopped','interrupted'].includes(run.status))this.process(run).catch(error=>this.emit('workerError',error));
+      return;
+    }
     if (run.status === 'running' || run.status === 'stopping') {
       if (this.processing) this.pendingKick = run;
       else this.process(run).catch(error => this.emit('workerError', error));
@@ -232,6 +241,55 @@ export class Queue extends EventEmitter {
       if(postUrl)return {postUrl};
     }
   }
+  syncPipeline(run){
+    if(!run.pipeline||['completed','completed_with_errors','stopped','interrupted'].includes(run.status))return;
+    if(run.stopRequested||run.status==='stopping'){run.status='stopping';return;}
+    if(run.pauseRequested){run.status=this.pipelineLanes?.size?'pausing':'paused';return;}
+    run.status=run.items.some(i=>i.status==='waiting_for_input')?'waiting_for_input':run.items.some(i=>i.status==='attention')?'attention':run.items.some(i=>i.status==='awaiting_manual')?'awaiting_manual':'running';
+  }
+  async processPipeline(run,controller){
+    const active=new Map();this.pipelineLanes=active;
+    const waitForProgress=async()=>{
+      let wake;
+      const changed=new Promise(resolve=>{wake=resolve;this.once('change',wake);this.once('pipeline-tick',wake);});
+      try{await Promise.race([...active.values(),changed]);}
+      finally{this.off('change',wake);this.off('pipeline-tick',wake);}
+    };
+    try{
+      while(true){
+        this.syncPipeline(run);
+        const stopping=run.stopRequested||run.status==='stopping';
+        if(!stopping&&!run.pauseRequested){
+          let changed=false;
+          for(const item of run.items.filter(i=>i.status==='queued')){
+            const dependency=executionDependency(run,item);
+            if(dependency.state==='blocked'){
+              item.status='attention';item.dependencyBlocked=true;item.dependsOn=dependency.dependsOn;item.message=dependency.message;changed=true;
+            }else if(dependency.state==='waiting'&&item.message!==dependency.message){item.message=dependency.message;changed=true;}
+          }
+          if(changed)await this.change();
+          for(const item of pipelineCandidates(run,new Set(active.keys()))){
+            if(item.status!=='queued'||run.stopRequested||run.pauseRequested)break;
+            const lane=executionLane(run,item);
+            const task=this.executeItem(run,item,controller).finally(()=>{active.delete(lane);this.emit('pipeline-tick');});
+            task.catch(()=>{});active.set(lane,task);
+          }
+        }
+        if(!active.size){
+          if(stopping){run.status='stopped';run.finishedAt=new Date().toISOString();run.confirmedLive=false;await this.change();break;}
+          if(run.pauseRequested){run.status='paused';await this.change();break;}
+          if(run.items.some(i=>['attention','waiting_for_input','awaiting_manual'].includes(i.status))){await this.change();break;}
+          if(!run.items.some(i=>i.status==='queued')){
+            run.status=run.items.some(i=>['failed','uncertain','needs_setup'].includes(i.status))?'completed_with_errors':'completed';
+            run.finishedAt=new Date().toISOString();run.confirmedLive=false;await this.change();break;
+          }
+          throw new Error('The pipeline could not resolve a queued dependency. No new destination was started.');
+        }
+        await waitForProgress();
+      }
+    }catch(error){controller.abort(error);throw error;}
+    finally{await Promise.allSettled([...active.values()]);if(this.pipelineLanes===active)this.pipelineLanes=null;}
+  }
   async process(run) {
     if (this.processing) return;
     this.processing = true;
@@ -239,7 +297,7 @@ export class Queue extends EventEmitter {
     try {
       const nativeItem=run.items.find(item=>item.status==='queued'&&usesInstagramAndroid(run.instagram,item.id));
       if(nativeItem&&this.instagramWorker&&run.status!=='stopping'){
-        await this.log(run,nativeItem,'Checking the selected phone?s Instagram account before any destination runs...');
+        await this.log(run,nativeItem,"Checking the selected phone's Instagram account before any destination runs...");
         try{await this.instagramWorker.checkAccount(run.config,{runId:run.id,signal:runController.signal,connectionContext:{navigationAI:this.navigationAI,signal:runController.signal,canRecoverConnection:()=>!nativeItem.submitting&&!runController.signal.aborted&&run.status!=='stopping',reportRecovery:event=>this.reportRecovery(run,nativeItem,event),step:message=>this.log(run,nativeItem,message)},onProgress:message=>{runController.signal.throwIfAborted();return this.log(run,nativeItem,message);}});}catch(error){if(run.status!=='stopping'){nativeItem.status='attention';nativeItem.message=nativeItem.failureMessage||error.message;nativeItem.recoveryMessage=error.message;run.status='attention';await this.change();return;}}
       }
       for (const channelId of ['whatsapp', 'telegram']) {
@@ -259,7 +317,8 @@ export class Queue extends EventEmitter {
         }
         await this.change();
       }
-      while (run.status === 'running' || run.status === 'stopping' || run.status === 'pausing') {
+      if(run.pipeline)await this.processPipeline(run,runController);
+      else while (run.status === 'running' || run.status === 'stopping' || run.status === 'pausing') {
         if (run.status === 'pausing') { run.status = 'paused'; await this.change(); break; }
         const item = run.items.find(i => i.status === 'queued');
         if (!item || run.status === 'stopping') {
@@ -267,112 +326,7 @@ export class Queue extends EventEmitter {
           run.finishedAt = new Date().toISOString(); run.confirmedLive = false;
           await this.change(); break;
         }
-        delete item.recoveryMessage;
-        item.status = 'running'; item.startedAt = new Date().toISOString(); delete item.finishedAt;
-        await this.change();
-        let page, timer, task;
-        const native=usesInstagramAndroid(run.instagram,item.id),controller=new AbortController();
-        const cancel=()=>controller.abort(runController.signal.reason);runController.signal.addEventListener('abort',cancel,{once:true});if(runController.signal.aborted)cancel();
-        try {
-          // A TEST may rehearse a successful feed against an existing post, but
-          // a failed or uncertain feed must never select an unrelated old post.
-          const feed=['instagramStory','instagramMusic'].includes(item.id)&&run.items.find(i=>i.id==='instagram');
-          if(feed&&feed.status!=='posted'&&!(run.mode==='TEST'&&feed.status==='dry_run'))throw new InterventionError('This run\'s Instagram feed did not finish successfully. Verify or retry that feed before starting its Story. No earlier post was selected.');
-          const musicItem=item.id==='instagramStory'&&run.items.find(i=>i.id==='instagramMusic');
-          if(musicItem&&!['posted','dry_run'].includes(musicItem.status))throw new InterventionError('Verify or finish this post’s music step before sharing its Story. The feed was not posted again.');
-          const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
-          await verifyMediaIntegrity(destinationMedia, this.dataDir);
-          if(!native)page = await this.browser.page(item.id);
-          const deadline = destinationMedia.some(media=>mediaKind(media)==='video')?this.videoDeadline:native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
-          let armDeadline;
-          const timeout = new Promise((_, reject) => {
-            armDeadline=()=>{clearTimeout(timer);timer=setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); page?.close().catch(() => {}); }, deadline);};
-            armDeadline();
-          });
-          task = this.runner({
-            page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
-            media:destinationMedia, mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
-            navigationAI:this.navigationAI,ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:item.id==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,recordOwnedDraft:async proof=>{item.preparation={...item.preparation,ownedDraft:proof};await this.change();},reportRecovery:event=>this.reportRecovery(run,item,event),canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing'].includes(run.status),canRecoverConnection:()=>!item.submitting&&!controller.signal.aborted&&['running','pausing','waiting_for_input'].includes(run.status),
-            manychat: run.manychat, instagramCaption: run.captions.instagram,
-            instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
-            instagramMusicPublication:run.items.find(i=>i.id==='instagramMusic'&&i.status==='posted')?.publication,
-            instagramTestPublication:this.testInstagramPublication(run),
-            captureInstagramPost: run.items.some(i=>['instagramStory','instagramMusic'].includes(i.id)) || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
-            step: message => { controller.signal.throwIfAborted(); return this.log(run, item, message); }, snapshot: (label, target = page) => { controller.signal.throwIfAborted(); return this.snapshot(run, item, page, label, false, target); },
-            intervene: native ? (details,inspect)=>this.interventions.wait(run,item,controller.signal,details,inspect,{pause:()=>clearTimeout(timer),resume:armDeadline}) : undefined,
-            recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = {...details,...(item.preparation?.ownedDraft?{ownedDraft:item.preparation.ownedDraft}:{})}; await this.change(); },
-            markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping'||run.status==='waiting_for_input')throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
-          });
-          const result = await Promise.race([task, timeout]);
-          clearTimeout(timer);
-          if (result?.manual) {
-            if (result.libraryOnly) {
-              item.status = 'needs_setup'; item.message = 'ManyChat library loaded. Select the exact automation URL in Connections before its message can be prepared. No automation was edited or saved.';
-              await this.snapshot(run, item, page, 'manychat-needs-flow');
-              await page.goto('about:blank');
-            } else if (run.mode === 'TEST') {
-              item.status = 'dry_run'; item.message = 'TEST: ManyChat flow opened and captured. No edits or saves performed.';
-              await this.snapshot(run, item, page, 'manychat-test');
-              await page.goto('about:blank');
-            } else if (run.status === 'stopping') {
-              item.status = 'skipped'; item.message = 'Stopped before assisted update.';
-            } else {
-              run.pauseAfterManual = run.status === 'pausing';
-              item.status = 'awaiting_manual'; item.submitting = true; run.status = 'awaiting_manual';
-              item.message = 'Open the intended flow, copy the message from this workspace, paste it into the correct message block, then save/publish in ManyChat. Confirm here only after saving.';
-              await this.snapshot(run, item, page, 'manychat-awaiting-operator');
-            }
-          } else {
-            item.status = typeof result === 'string' ? result : result.status;
-            delete item.failureMessage;delete item.recoveryMessage;
-            if (result?.publication) item.publication = result.publication;
-            item.message = item.status === 'posted' ? item.id === 'manychat' ? 'Automation activated; Edit and Stop controls confirmed.' : item.id==='instagramMusic'?'Music saved and verified on the existing feed post.':'Published and confirmed by platform.' : item.id === 'manychat' ? 'TEST complete Â· automation prepared; Go live was not clicked.' : 'TEST complete Â· nothing published.';
-            if (item.status === 'posted') await this.advanceReplies(run, item);
-          }
-          if (item.status !== 'awaiting_manual') item.finishedAt = new Date().toISOString();
-        } catch (originalError) {
-          clearTimeout(timer);
-          let error = originalError;
-          if(native&&controller.signal.aborted&&task){
-            // The driver must disconnect before another destination or run can
-            // reuse Android. No web fallback and no repeat of a final Share.
-            await this.log(run,item,run.killRequested?'Stopping Android and preserving its unsent draft...':'Android timed out. Disconnecting the worker and preserving its unsent draft...');
-            let cleanupTimer;
-            const settled=await Promise.race([task.then(()=>true,()=>true),new Promise(resolve=>{cleanupTimer=setTimeout(()=>resolve(false),60000);})]);
-            clearTimeout(cleanupTimer);
-            if(!settled)error=new InterventionError('Android has not finished stopping. Keep the phone draft open for review; restart the worker before another Android attempt. No automatic retry was started.');
-          }
-          if (!item.submitting && page && !page.isClosed()) {
-            try { await assertNoChallenge(page); } catch (challenge) { error = challenge; }
-          }
-          item.status = item.submitting ? 'uncertain' : run.killRequested ? 'skipped' : 'failed';
-          const message = error.message.replace(/\u001b\[[0-9;]*m/g, '');
-          item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
-          const recovery=this.recoveryLog.state();
-          if(!recovery||recovery.runId!==run.id||recovery.itemId!==item.id||recovery.status==='succeeded'){
-            this.recoveryLog.begin({problem:item.message,runId:run.id,itemId:item.id});
-            item.recovery=this.recoveryLog.report({phase:'paused',message:item.submitting?'Publication outcome is uncertain. Gemini will not retry a send or create a duplicate.':'This failure has no verified recovery action yet. The problem is preserved for review; Gemini was not called blindly.'});
-          }
-          item.finishedAt = new Date().toISOString();
-          if (!item.submitting && run.status !== 'stopping' && (native || error instanceof InterventionError || error instanceof NetworkError)) {
-            // A native driver error can leave an unfinished editor even when
-            // its error type is generic. Stop before Story or another destination.
-            if(native){
-              item.failureMessage ||= originalError.message.replace(/\u001b\[[0-9;]*m/g, '');
-              item.message = item.failureMessage;
-              if(message!==item.message)item.recoveryMessage=message;
-              else if(!(error instanceof InterventionError)&&!(error instanceof NetworkError))item.recoveryMessage='Check the Android app for an unfinished draft before choosing Continue. No automatic retry was started.';
-            }else item.failureMessage=item.message;
-            item.status = 'attention'; run.status = 'attention';
-          }
-          if (page && !page.isClosed()) { try { await this.snapshot(run, item, page, 'error', true); } catch { /* Browser may already be gone. */ } }
-          await this.log(run, item, item.message);
-        }
-        runController.signal.removeEventListener('abort',cancel);
-        if(item.status==='posted'&&page&&!native){
-          try{await this.browser.release?.(item.id);}catch{/* Cleanup cannot downgrade a confirmed publication. */}
-        }
-        await this.change();
+        await this.executeItem(run,item,runController);
       }
     } finally {
       // A pause, stop or failure at the destination boundary must not retain a native session.
@@ -383,6 +337,114 @@ export class Queue extends EventEmitter {
       const pending = this.pendingKick; this.pendingKick = null;
       if (pending && this.active === pending && ['running', 'stopping'].includes(pending.status)) this.process(pending).catch(error => this.emit('workerError', error));
     }
+  }
+  async executeItem(run,item,runController){
+    delete item.recoveryMessage;
+    item.status = 'running'; item.startedAt = new Date().toISOString(); delete item.finishedAt;
+    await this.change();
+    let page, timer, task;
+    const native=usesInstagramAndroid(run.instagram,item.id),controller=new AbortController();
+    const cancel=()=>controller.abort(runController.signal.reason);runController.signal.addEventListener('abort',cancel,{once:true});if(runController.signal.aborted)cancel();
+    try {
+      // A TEST may rehearse a successful feed against an existing post, but
+      // a failed or uncertain feed must never select an unrelated old post.
+      const feed=['instagramStory','instagramMusic'].includes(item.id)&&run.items.find(i=>i.id==='instagram');
+      if(feed&&feed.status!=='posted'&&!(run.mode==='TEST'&&feed.status==='dry_run'))throw new InterventionError('This run\'s Instagram feed did not finish successfully. Verify or retry that feed before starting its Story. No earlier post was selected.');
+      const musicItem=item.id==='instagramStory'&&run.items.find(i=>i.id==='instagramMusic');
+      if(musicItem&&!['posted','dry_run'].includes(musicItem.status))throw new InterventionError('Verify or finish this post’s music step before sharing its Story. The feed was not posted again.');
+      const destinationMedia = mediaFor({ mediaByPlatform: run.mediaByPlatform }, run.media, item.id);
+      await verifyMediaIntegrity(destinationMedia, this.dataDir);
+      if(!native)page = await this.browser.page(item.id);
+      const deadline = destinationMedia.some(media=>mediaKind(media)==='video')?this.videoDeadline:native?this.nativeDeadline:['whatsapp', 'telegram'].includes(item.id) ? this.channelDeadline : this.deadline;
+      let armDeadline;
+        const timeout = new Promise((_, reject) => {
+          armDeadline=()=>{clearTimeout(timer);timer=setTimeout(() => { const error=native?new InterventionError('Android preparation timed out. Its draft was preserved. Close the unfinished draft before retrying Android, or choose Web in Compose for a faster feed post.'):new Error(`Preparation exceeded ${Math.round(deadline / 1000)} seconds. Inspect the worker browser before continuing.`); controller.abort(error); reject(error); Promise.resolve(page?.close?.()).catch(() => {}); }, deadline);};
+        armDeadline();
+      });
+      task = this.runner({
+        page, id: item.id, runId:run.id, continueInstagramStory:['instagram','instagramMusic'].includes(item.id)&&run.items[run.items.indexOf(item)+1]?.id==='instagramStory'&&run.items[run.items.indexOf(item)+1]?.status==='queued', config: run.config, caption: run.captions[item.id==='instagramMusic'?'instagram':item.id], files: destinationMedia.map(m => path.join(this.dataDir, 'uploads', m.filename)),
+        media:destinationMedia, mode: run.mode, confirmedLive: run.confirmedLive, signal:controller.signal, instagram:run.instagram, instagramWorker:this.instagramWorker,
+        navigationAI:this.navigationAI,ai:this.navigationAI?.state().automatic?this.navigationAI:undefined,ownedDraftRecovery:item.id==='whatsapp'?this.ownedWhatsAppDraft(run.config):undefined,recordOwnedDraft:async proof=>{item.preparation={...item.preparation,ownedDraft:proof};await this.change();},reportRecovery:event=>this.reportRecovery(run,item,event),canRecoverNavigation:()=>!item.submitting&&!controller.signal.aborted&&(run.pipeline?!run.stopRequested:['running','pausing'].includes(run.status)),canRecoverConnection:()=>!item.submitting&&!controller.signal.aborted&&(run.pipeline?!run.stopRequested:['running','pausing','waiting_for_input'].includes(run.status)),
+        manychat: run.manychat, instagramCaption: run.captions.instagram,
+        instagramPublication: run.items.some(i=>i.id==='instagram')?run.items.find(i=>i.id==='instagram'&&i.status==='posted')?.publication:run.sourceInstagramPublication,
+        instagramMusicPublication:run.items.find(i=>i.id==='instagramMusic'&&i.status==='posted')?.publication,
+        instagramTestPublication:this.testInstagramPublication(run),
+        captureInstagramPost: run.items.some(i=>['instagramStory','instagramMusic'].includes(i.id)) || run.items.some(i=>i.id==='manychat')&&!run.manychat?.postUrl,
+        step: message => { controller.signal.throwIfAborted(); return this.log(run, item, message); }, snapshot: (label, target = page) => { controller.signal.throwIfAborted(); return this.snapshot(run, item, page, label, false, target); },
+        intervene: native ? (details,inspect)=>{controller.signal.throwIfAborted();if(run.stopRequested||run.status==='stopping')throw new InterventionError('Stopped before opening another Android handoff.');return this.interventions.wait(run,item,controller.signal,details,inspect,{pause:()=>clearTimeout(timer),resume:armDeadline});} : undefined,
+        recordPreparation: async details => { controller.signal.throwIfAborted(); item.preparation = {...details,...(item.preparation?.ownedDraft?{ownedDraft:item.preparation.ownedDraft}:{})}; await this.change(); },
+        markSubmitting: async () => { controller.signal.throwIfAborted(); if(run.status==='stopping'||run.stopRequested||(run.pipeline?item.status==='waiting_for_input':run.status==='waiting_for_input'))throw new Error('Stopped before publication.'); item.submitting = true; await this.change(); }
+      });
+      const result = await Promise.race([task, timeout]);
+      clearTimeout(timer);
+      if (result?.manual) {
+        if (result.libraryOnly) {
+          item.status = 'needs_setup'; item.message = 'ManyChat library loaded. Select the exact automation URL in Connections before its message can be prepared. No automation was edited or saved.';
+          await this.snapshot(run, item, page, 'manychat-needs-flow');
+          await page.goto('about:blank');
+        } else if (run.mode === 'TEST') {
+          item.status = 'dry_run'; item.message = 'TEST: ManyChat flow opened and captured. No edits or saves performed.';
+          await this.snapshot(run, item, page, 'manychat-test');
+          await page.goto('about:blank');
+        } else if (run.status === 'stopping') {
+          item.status = 'skipped'; item.message = 'Stopped before assisted update.';
+        } else {
+          run.pauseAfterManual = run.status === 'pausing';
+          item.status = 'awaiting_manual'; item.submitting = true; run.status = 'awaiting_manual';
+          item.message = 'Open the intended flow, copy the message from this workspace, paste it into the correct message block, then save/publish in ManyChat. Confirm here only after saving.';
+          await this.snapshot(run, item, page, 'manychat-awaiting-operator');
+        }
+      } else {
+        item.status = typeof result === 'string' ? result : result.status;
+        delete item.failureMessage;delete item.recoveryMessage;
+        if (result?.publication) item.publication = result.publication;
+        item.message = item.status === 'posted' ? item.id === 'manychat' ? 'Automation activated; Edit and Stop controls confirmed.' : item.id==='instagramMusic'?'Music saved and verified on the existing feed post.':'Published and confirmed by platform.' : item.id === 'manychat' ? 'TEST complete Â· automation prepared; Go live was not clicked.' : 'TEST complete Â· nothing published.';
+        if (item.status === 'posted') await this.advanceReplies(run, item);
+      }
+      if (item.status !== 'awaiting_manual') item.finishedAt = new Date().toISOString();
+    } catch (originalError) {
+      clearTimeout(timer);
+      let error = originalError;
+      if(native&&controller.signal.aborted&&task){
+        // The driver must disconnect before another destination or run can
+        // reuse Android. No web fallback and no repeat of a final Share.
+        await this.log(run,item,run.killRequested?'Stopping Android and preserving its unsent draft...':'Android timed out. Disconnecting the worker and preserving its unsent draft...');
+        let cleanupTimer;
+        const settled=await Promise.race([task.then(()=>true,()=>true),new Promise(resolve=>{cleanupTimer=setTimeout(()=>resolve(false),60000);})]);
+        clearTimeout(cleanupTimer);
+        if(!settled)error=new InterventionError('Android has not finished stopping. Keep the phone draft open for review; restart the worker before another Android attempt. No automatic retry was started.');
+      }
+      if (!item.submitting && page && !page.isClosed()) {
+        try { await assertNoChallenge(page); } catch (challenge) { error = challenge; }
+      }
+      item.status = item.submitting ? 'uncertain' : run.killRequested ? 'skipped' : 'failed';
+      const message = error.message.replace(/\u001b\[[0-9;]*m/g, '');
+      item.message = item.submitting ? `Publication may have occurred. Verify on the platform before retrying. ${message}` : message;
+      const recovery=this.recoveryLog.state();
+      if(!recovery||recovery.runId!==run.id||recovery.itemId!==item.id||recovery.status==='succeeded'){
+        this.recoveryLog.begin({problem:item.message,runId:run.id,itemId:item.id});
+        item.recovery=this.recoveryLog.report({phase:'paused',message:item.submitting?'Publication outcome is uncertain. Gemini will not retry a send or create a duplicate.':'This failure has no verified recovery action yet. The problem is preserved for review; Gemini was not called blindly.'});
+      }
+      item.finishedAt = new Date().toISOString();
+      if (!item.submitting && run.status !== 'stopping' && (native || error instanceof InterventionError || error instanceof NetworkError)) {
+        // A native driver error can leave an unfinished editor even when
+        // its error type is generic. Stop before Story or another destination.
+        if(native){
+          item.failureMessage ||= originalError.message.replace(/\u001b\[[0-9;]*m/g, '');
+          item.message = item.failureMessage;
+          if(message!==item.message)item.recoveryMessage=message;
+          else if(!(error instanceof InterventionError)&&!(error instanceof NetworkError))item.recoveryMessage='Check the Android app for an unfinished draft before choosing Continue. No automatic retry was started.';
+        }else item.failureMessage=item.message;
+        item.status = 'attention'; run.status = 'attention';
+      }
+      if (page && !page.isClosed()) { try { await this.snapshot(run, item, page, 'error', true); } catch { /* Browser may already be gone. */ } }
+      await this.log(run, item, item.message);
+    }
+    runController.signal.removeEventListener('abort',cancel);
+    if(item.status==='posted'&&page&&!native){
+      try{await this.browser.release?.(item.id);}catch{/* Cleanup cannot downgrade a confirmed publication. */}
+    }
+    await this.change();
   }
   async checkLogins(config, selected, saveDetected = async () => {}, {instagram}={}) {
     if (this.maintenance || this.active || this.login.running || this.processing || this.browser.manualProcess || this.instagramWorker?.busy) throw new Error('Finish the current run or login check, and close any manual sign-in window first.');

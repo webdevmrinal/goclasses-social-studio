@@ -230,6 +230,11 @@ body{font-family:Inter,Devanagari,Arial,sans-serif}
 .app .run-item h3{font-size:11px}
 .app .run-item p{font-size:10px;overflow-wrap:anywhere}
 .app .run-actions{gap:8px;flex-wrap:wrap}
+.app .run-pipeline{display:flex;flex-wrap:wrap;gap:8px 20px;padding:0 0 15px;font-size:10px;color:var(--muted)}
+.app .pipeline-lane{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.app .pipeline-lane b{font-weight:500;color:var(--text)}
+.app .pipeline-lane::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.app .pipeline-lane.is-running::before{background:var(--blue,#4b80ff)}
 .app .run-links{overflow-wrap:anywhere}
 .app .recovery-panel{margin-bottom:20px}
 .app .mode-options{width:100%;flex-wrap:wrap}

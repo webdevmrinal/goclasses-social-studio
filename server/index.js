@@ -281,7 +281,9 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
     const errors = setupErrors(config, selected);
     if (errors.length) return res.status(400).json({ error: errors.join('\n') });
     const instagramItem = original.items.find(item => item.id === 'instagram' && item.status === 'posted');
-    const sourceInstagramPublication = instagramItem?.publication || original.sourceInstagramPublication;
+    let sourceInstagramPublication = instagramItem?.publication || original.sourceInstagramPublication;
+    const savedMusic=original.items.find(item=>item.id==='instagramMusic'&&item.status==='posted')?.publication;
+    if(sourceInstagramPublication?.postUrl&&savedMusic?.postUrl===sourceInstagramPublication.postUrl&&savedMusic.music?.title&&savedMusic.music?.artist)sourceInstagramPublication={...sourceInstagramPublication,music:structuredClone(savedMusic.music)};
     const retryDraft = { selected, captions: original.captions, manychat: original.manychat, mediaIds: original.media.map(m => m.id), mediaByPlatform: original.mediaByPlatform, instagram:structuredClone(original.instagram||{}) };
     if(selected.includes('instagramStory')&&!selected.includes('instagram')&&sourceInstagramPublication?.postUrl)retryDraft.instagram.story.sourcePostUrl=sourceInstagramPublication.postUrl;
     const draftErrors = validateDraft(retryDraft, original.media, xLength);
@@ -309,7 +311,7 @@ export async function createApp({ browser = new BrowserManager(), dataDir = DATA
   app.post('/api/instagram/music/close',async(req,res)=>{requireIdle();try{await instagramWorker.cancelPicker();res.json({ok:true});}finally{queue.emit('change',queue.state());}});
   app.post('/api/runs/:id/kill',async(req,res)=>{await queue.control('kill',req.params.id);res.json({ok:true});});
   app.post('/api/android/intervention', async (req,res)=>{res.json(await queue.interventions.act(req.body));});
-  app.post('/api/control', async (req, res) => { await queue.control(req.body.action); res.json({ ok: true }); });
+  app.post('/api/control', async (req, res) => { await queue.control(req.body.action,req.body.runId,req.body.itemId); res.json({ ok: true }); });
   app.post('/api/runs/:id/resolve', async (req, res) => { await queue.resolve(req.params.id, req.body.platform, req.body.resolution, req.body.publication); res.json({ ok: true }); });
   const beginLoginCheck = (selected, instagram) => queue.checkLogins(config, selected, async (id, detected) => {
       const updated = structuredClone(config);

@@ -27,10 +27,10 @@ test('pausing between feed and Story releases the retained native session and re
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'mrinal-story-flow-')),calls=[];let closed=0,queue;
  const worker={handoff:null,busy:false,checkAccount:async()=>{},close:async()=>{closed++;worker.handoff=null;worker.busy=false;}};
  try{
-  queue=new Queue(browser,{dataDir:dir,instagramWorker:worker,runner:async ctx=>{calls.push(ctx.id);if(ctx.id==='instagram'){worker.handoff={runId:ctx.runId,postUrl};worker.busy=true;await queue.control('pause');return {status:'posted',publication:{postUrl}};}assert.equal(ctx.instagramPublication.postUrl,postUrl);return 'dry_run';}});await queue.init();
+  queue=new Queue(browser,{dataDir:dir,instagramWorker:worker,runner:async ctx=>{calls.push(ctx.id);if(ctx.id==='x')return 'dry_run';if(ctx.id==='instagram'){worker.handoff={runId:ctx.runId,postUrl};worker.busy=true;await queue.control('pause');return {status:'posted',publication:{postUrl}};}assert.equal(ctx.instagramPublication.postUrl,postUrl);return 'dry_run';}});await queue.init();
   const run=await queue.start({draft:{selected:['instagram','x','instagramStory'],captions:{},instagram:{music:{enabled:true}}},config:defaults,media:[]});
-  await wait(()=>run.status==='paused'&&!queue.processing);assert.equal(closed,1);assert.equal(worker.busy,false);assert.deepEqual(calls,['instagram']);
-  await queue.control('resume');await wait(()=>run.status==='completed'&&!queue.processing);assert.deepEqual(calls,['instagram','instagramStory','x']);
+  await wait(()=>run.status==='paused'&&!queue.processing);assert.equal(closed,1);assert.equal(worker.busy,false);assert.deepEqual(calls,['instagram','x']);
+  await queue.control('resume');await wait(()=>run.status==='completed'&&!queue.processing);assert.deepEqual(calls,['instagram','x','instagramStory']);
  }finally{await cleanup(dir);}
 });
 test('native handoff requires the same run, account and confirmed post, and never retains TEST drafts',async()=>{

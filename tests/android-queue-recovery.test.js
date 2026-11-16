@@ -39,19 +39,19 @@ function priorPost(queue){
   queue.runs.push({id:'prior-confirmed-feed',mode:'LIVE',status:'completed',config,items:[{id:'instagram',status:'posted',publication:{postUrl}}]});
 }
 
-test('generic native preparation errors pause TEST and LIVE before Story or another destination',async t=>{
+test('native preparation errors hold Story while independent browser work finishes in TEST and LIVE',async t=>{
   for(const mode of ['TEST','LIVE'])await t.test(mode,async t=>{
     const calls=[],native=worker(),message='Timed out after 30000ms waiting for root AccessibilityNodeInfo';
     const queue=await fixture(t,{instagramWorker:native,runner:async ctx=>{
-      calls.push(ctx.id);
+      calls.push(ctx.id);if(ctx.id==='x')return mode==='LIVE'?'posted':'dry_run';
       await ctx.recordPreparation({stage:'opening_music'});
       await ctx.step('Opening music');
       throw Error('\u001b[31m'+message+'\u001b[0m');
     }});
     const reviewed=params(),run=await queue.start({...reviewed,mode,...(mode==='LIVE'?{confirmation:'POST'}:{})});
     await settled(queue);
-    assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
-    assert.deepEqual(run.items.map(item=>item.status),['attention','queued','queued']);
+    assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
+    assert.deepEqual(run.items.map(item=>item.status),['attention','queued',mode==='LIVE'?'posted':'dry_run']);
     assert.equal(run.items[0].submitting,false);
     assert.equal(run.items[0].message,message);assert.equal(run.items[0].failureMessage,message);
     assert.match(run.items[0].recoveryMessage,/unfinished draft/);
@@ -64,11 +64,11 @@ test('generic native preparation errors pause TEST and LIVE before Story or anot
 test('Continue preserves the first native failure and restart leaves only that destination retryable',async t=>{
   let checks=0;const calls=[],native=worker();
   native.checkAccount=async()=>{if(++checks>1)throw Error('Close the unsent Instagram Android draft before continuing.');};
-  const queue=await fixture(t,{instagramWorker:native,runner:async ctx=>{calls.push(ctx.id);throw Error('The native music library could not read its accessibility root.');}});
+  const queue=await fixture(t,{instagramWorker:native,runner:async ctx=>{calls.push(ctx.id);if(ctx.id==='x')return 'dry_run';throw Error('The native music library could not read its accessibility root.');}});
   const reviewed=params(),run=await queue.start(reviewed);await settled(queue);
   const firstFailure=run.items[0].message;
   await queue.control('continue');await settled(queue);
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
   assert.equal(run.items[0].message,firstFailure);assert.equal(run.items[0].failureMessage,firstFailure);
   assert.match(run.items[0].recoveryMessage,/Close the unsent/);
 
@@ -76,7 +76,7 @@ test('Continue preserves the first native failure and restart leaves only that d
   await restarted.init();
   const interrupted=restarted.runs.find(item=>item.id===run.id);
   assert.equal(interrupted.status,'interrupted');assert.equal(interrupted.confirmedLive,false);
-  assert.deepEqual(interrupted.items.map(item=>item.status),['failed','skipped','skipped']);
+  assert.deepEqual(interrupted.items.map(item=>item.status),['failed','skipped','dry_run']);
   assert.match(interrupted.items[0].message,/accessibility root/);
   assert.match(interrupted.items[0].message,/Retry only this failed destination/);
   assert.match(interrupted.items[0].recoveryMessage,/Close the unsent/);
@@ -90,12 +90,12 @@ test('a failed web feed cannot bypass its Story dependency through TEST source r
   const calls=[],queue=await fixture(t,{instagramWorker:worker(),runner:async ctx=>{calls.push(ctx.id);if(ctx.id==='instagram')throw Error('Feed preparation failed');return 'dry_run';}});
   priorPost(queue);
   const run=await queue.start({...params(undefined,'web'),sourceInstagramPublication:{postUrl}});await settled(queue);
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
-  assert.deepEqual(run.items.map(item=>item.status),['failed','attention','queued']);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
+  assert.deepEqual(run.items.map(item=>item.status),['failed','attention','dry_run']);
   assert.match(run.items[1].message,/feed did not finish successfully/);
   assert.equal(run.items[1].submitting,false);assert.equal(queue.testInstagramPublication(run),undefined);
-  await queue.control('continue');await settled(queue);
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
+  await assert.rejects(queue.control('continue'),/dependent step/);await settled(queue);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
 });
 
 test('a successful TEST feed still rehearses Story with its confirmed same-account source',async t=>{
@@ -107,22 +107,22 @@ test('a successful TEST feed still rehearses Story with its confirmed same-accou
   }});
   priorPost(queue);
   const run=await queue.start(params());await settled(queue);
-  assert.equal(run.status,'completed');assert.deepEqual(calls,['instagram','instagramStory','x']);
+  assert.equal(run.status,'completed');assert.deepEqual(calls.filter(id=>id!=='x'),['instagram','instagramStory']);assert.equal(calls.filter(id=>id==='x').length,1);
   assert(run.items.every(item=>item.status==='dry_run'&&!item.submitting));
 });
 
 test('native errors after submitting stay uncertain and never retry the feed or run its Story',async t=>{
   const calls=[],queue=await fixture(t,{instagramWorker:worker(),runner:async ctx=>{
-    calls.push(ctx.id);await ctx.markSubmitting();throw Error('Android disconnected after Share');
+    calls.push(ctx.id);if(ctx.id==='x')return 'posted';await ctx.markSubmitting();throw Error('Android disconnected after Share');
   }});
   priorPost(queue);
   const run=await queue.start({...params(),mode:'LIVE',confirmation:'POST'});await settled(queue);
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
-  assert.deepEqual(run.items.map(item=>item.status),['uncertain','attention','queued']);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
+  assert.deepEqual(run.items.map(item=>item.status),['uncertain','attention','posted']);
   assert.equal(run.items[0].submitting,true);assert.match(run.items[0].message,/Publication may have occurred/);
   assert.equal(queue.testInstagramPublication({...run,mode:'TEST'}),undefined);
-  await queue.control('continue');await settled(queue);
-  assert.deepEqual(calls,['instagram']);assert.equal(run.items[0].status,'uncertain');
+  await assert.rejects(queue.control('continue'),/dependent step/);await settled(queue);
+  assert.deepEqual(calls,['instagram','x']);assert.equal(run.items[0].status,'uncertain');
   const restarted=new Queue(browser,{dataDir:queue.dataDir,runner:async()=>assert.fail('Restart must never publish')});await restarted.init();
   assert.equal(restarted.runs[0].items[0].status,'uncertain');
   assert.equal(restarted.runs[0].items[0].submitting,true);assert.equal(restarted.runs[0].confirmedLive,false);
@@ -130,15 +130,15 @@ test('native errors after submitting stay uncertain and never retry the feed or 
 
 test('a generic Story preparation failure preserves the posted feed and permits only a Story retry after restart',async t=>{
   const calls=[],queue=await fixture(t,{instagramWorker:worker(),runner:async ctx=>{
-    calls.push(ctx.id);if(ctx.id==='instagram')return {status:'posted',publication:{postUrl}};
+    calls.push(ctx.id);if(ctx.id==='x')return 'posted';if(ctx.id==='instagram')return {status:'posted',publication:{postUrl}};
     throw Error('Native Story placement driver failed');
   }});
   const reviewed=params(),run=await queue.start({...reviewed,mode:'LIVE',confirmation:'POST'});await settled(queue);
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','instagramStory']);
-  assert.deepEqual(run.items.map(item=>item.status),['posted','attention','queued']);
+  assert.equal(run.status,'attention');assert.deepEqual(calls.filter(id=>id!=='x'),['instagram','instagramStory']);assert.equal(calls.filter(id=>id==='x').length,1);
+  assert.deepEqual(run.items.map(item=>item.status),['posted','attention','posted']);
   const retryCalls=[],restarted=new Queue(browser,{dataDir:queue.dataDir,instagramWorker:worker(),runner:async ctx=>{retryCalls.push(ctx.id);assert.equal(ctx.instagramPublication.postUrl,postUrl);return 'dry_run';}});
   await restarted.init();const original=restarted.runs[0];
-  assert.deepEqual(original.items.map(item=>item.status),['posted','failed','skipped']);
+  assert.deepEqual(original.items.map(item=>item.status),['posted','failed','posted']);
   const retry=await restarted.start({...reviewed,draft:{...reviewed.draft,selected:['instagramStory']},sourceInstagramPublication:original.items[0].publication,retryOf:run.id});await settled(restarted);
   assert.equal(retry.status,'completed');assert.deepEqual(retryCalls,['instagramStory']);
   assert.equal(original.items[0].publication.postUrl,postUrl);assert.deepEqual(retry.instagram,reviewed.draft.instagram);
@@ -176,8 +176,8 @@ test('resolving an uncertain feed with its exact permalink continues Story and q
     await ctx.markSubmitting();return 'posted';
   }});
   const reviewed=params(),run=await queue.start({...reviewed,mode:'LIVE',confirmation:'POST'});await settled(queue);
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
-  assert.deepEqual(run.items.map(item=>item.status),['uncertain','attention','queued']);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
+  assert.deepEqual(run.items.map(item=>item.status),['uncertain','attention','posted']);
   assert.equal(native.preflight,null);
   const uncertain=structuredClone(run.items[0]);
   for(const postUrl of ['https://example.com/p/WRONG/','/p/RELATIVE/','https://www.instagram.com/reel/WRONG/']){
@@ -188,8 +188,8 @@ test('resolving an uncertain feed with its exact permalink continues Story and q
     postUrl:'https://instagram.com/p/NEW_123-AB/?igsh=tracking',
     verifiedBy:'read_only_recheck',verifiedAt:'forged-client-time',candidates:['https://www.instagram.com/p/OLD/']
   });
-  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram']);
-  assert.deepEqual(run.items.map(item=>item.status),['posted','attention','queued']);
+  assert.equal(run.status,'attention');assert.deepEqual(calls,['instagram','x']);
+  assert.deepEqual(run.items.map(item=>item.status),['posted','attention','posted']);
   assert.equal(run.items[0].publication.postUrl,exact);
   assert.equal(run.items[0].publication.verifiedBy,'operator_confirmation');
   assert.notEqual(run.items[0].publication.verifiedAt,'forged-client-time');
@@ -198,9 +198,9 @@ test('resolving an uncertain feed with its exact permalink continues Story and q
   const persisted=JSON.parse(await fs.readFile(path.join(queue.dataDir,'runs.json'),'utf8'))[0];
   assert.equal(persisted.items[0].publication.postUrl,exact);assert.equal(persisted.items[0].status,'posted');
   await queue.control('continue');await settled(queue);
-  assert.equal(run.status,'completed');assert.deepEqual(calls,['instagram','instagramStory','x']);
+  assert.equal(run.status,'completed');assert.deepEqual(calls,['instagram','x','instagramStory']);
   assert(run.items.every(item=>item.status==='posted'));
   assert.deepEqual(run.captions,reviewed.draft.captions);assert.deepEqual(run.instagram,reviewed.draft.instagram);
   await queue.resolve(run.id,'instagram','posted',{postUrl:exact});
-  assert.deepEqual(calls,['instagram','instagramStory','x']);
+  assert.deepEqual(calls,['instagram','x','instagramStory']);
 });

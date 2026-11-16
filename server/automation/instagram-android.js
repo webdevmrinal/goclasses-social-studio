@@ -172,6 +172,15 @@ export class InstagramAndroidWorker {
     await s.until(n=>n.some(x=>x['resource-id']===nativeId('story_share_controls_action_bar'))&&!n.some(x=>x['resource-id']===nativeId('music_editor_done_button')&&x.displayed==='true'),'Story music did not return to the editor.');
     return {...match,segmentStart:segment,style:'Music Only'};
   }
+  async inheritPostMusic(s,music,publication,url){
+    if(instagramPostUrl(publication?.postUrl)!==instagramPostUrl(url)||!instagramPostUrl(url)||!matchesMusicReference(publication?.music,music))return null;
+    const nodes=await s.screen(),own=nodes.filter(n=>n.displayed==='true'&&n.package==='com.instagram.android');
+    if(nodes.some(n=>n.displayed==='true'&&(n.password==='true'||n.package&&n.package!=='com.instagram.android'))||own.filter(n=>n['resource-id']===nativeId('story_share_controls_action_bar')).length!==1||own.filter(n=>n['resource-id']===nativeId('camera_photo_texture_view')).length!==1||own.some(n=>/music_editor_controls_container|music_browser_container|row_search_edit_text|link_sticker_list_web_url_edit_text/.test(n['resource-id']||'')))throw new InterventionError('Return to the shared-post Story editor to keep its confirmed feed music. No song was selected again.');
+    // Reposting the exact post inherits its already-confirmed audio. Keep that
+    // inheritance; reopening Music can unnecessarily replace the native clip.
+    const {segmentStart,durationSeconds,selector,...track}=publication.music;
+    return {...track,inherited:true,sourceVerified:true,sourcePostUrl:instagramPostUrl(url),verifiedBy:'confirmed_feed_audio_inheritance'};
+  }
   async openForRun(ctx){
     if(!this.preflight)return this.open(ctx.config,ctx.signal,ctx.step,ctx);
     const held=this.preflight;this.preflight=null;
@@ -214,7 +223,7 @@ export class InstagramAndroidWorker {
       const source=options.story.sourcePostUrl||ctx.instagramPublication?.postUrl||(ctx.mode==='TEST'?ctx.instagramTestPublication?.postUrl:undefined);
       url=instagramPostUrl(source);
       const proof=ctx.instagramMusicPublication||ctx.instagramPublication;
-      if(music&&proof?.postUrl===url&&proof.music?.title&&proof.music?.artist)music={...music,...proof.music};
+      if(music&&proof?.postUrl===url&&proof.music?.title&&proof.music?.artist&&(music.manual||matchesMusicReference(proof.music,music)))music={...music,...proof.music};
       if(!url&&ctx.mode!=='TEST')throw new InterventionError('The exact feed-post permalink is not confirmed. Enter its URL or verify the feed result before retrying only this Story.');
       // The retained session comes only from this run's confirmed native feed.
       // Standalone Story retries still verify ownership through the exact permalink.
@@ -242,7 +251,12 @@ export class InstagramAndroidWorker {
         await ctx.step('Applying the reviewed shared-post card layout...');
         await placeRepost(s,options.story.layout,{hasLink:options.story.linkEnabled});
         let audio=null;
-        if(music){await ctx.step('Adding the selected Story music...');const proof=ctx.instagramMusicPublication||ctx.instagramPublication;audio=await this.applyStoryMusic(s,music,{ctx,allowInherited:proof?.postUrl===url&&matchesMusicReference(proof.music,music)});}
+        if(music){
+          const proof=ctx.instagramMusicPublication||ctx.instagramPublication;
+          audio=await this.inheritPostMusic(s,music,proof,url);
+          if(audio)await ctx.step('Keeping the music inherited from the confirmed feed post. No second music selection...');
+          else{await ctx.step('Checking music for this Story...');audio=await this.applyStoryMusic(s,music,{ctx,allowInherited:proof?.postUrl===url&&matchesMusicReference(proof.music,music)});}
+        }
         if(options.story.linkEnabled){
           await ctx.step('Placing the reviewed Story link...');
           const stash=await stashRepost(s);await addStoryLink(s,options.story,ctx);await restoreRepost(s,stash,options.story.layout);

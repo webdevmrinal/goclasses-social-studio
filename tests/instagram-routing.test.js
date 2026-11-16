@@ -52,12 +52,12 @@ test('switching transport permits review after failed preparation, never after a
 test('native timeout waits for disconnect, prevents late preparation and Share, and never falls back to Web',async()=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'mrinal-native-timeout-'));let stopped=false;const calls=[];
   try{
-    const queue=new Queue({page:async()=>assert.fail('No native browser page')},{dataDir:dir,deadline:25,instagramWorker:{checkAccount:async()=>{}},runner:async ctx=>{
-      calls.push(ctx.id);
+    const queue=new Queue({page:async id=>{assert.equal(id,'x','Instagram must never fall back to Web');return {isClosed:()=>true};}},{dataDir:dir,deadline:25,instagramWorker:{checkAccount:async()=>{}},runner:async ctx=>{
+      calls.push(ctx.id);if(ctx.id==='x')return 'dry_run';
       try{
         await new Promise(resolve=>ctx.signal.addEventListener('abort',resolve,{once:true}));
         await new Promise(resolve=>setTimeout(resolve,45));
-        assert.equal(queue.processing,true);assert.equal(calls.length,1);
+        assert.equal(queue.processing,true);assert.equal(calls.filter(id=>id==='instagram').length,1);
         await assert.rejects(ctx.recordPreparation({bad:'late'}));
         assert.throws(()=>ctx.step('late progress'));
         await assert.rejects(ctx.markSubmitting());
@@ -66,7 +66,7 @@ test('native timeout waits for disconnect, prevents late preparation and Share, 
     }});await queue.init();
     const run=await queue.start({draft:{selected:['instagram','x'],captions:{},instagram:{postingMethod:'android'}},config:defaults,media:[]});
     await wait(()=>run.status==='attention'&&!queue.processing);
-    assert(stopped);assert.deepEqual(calls,['instagram']);assert.equal(run.items[0].submitting,false);assert.equal(run.items[0].preparation,undefined);assert.equal(run.items[1].status,'queued');
+    assert(stopped);assert.deepEqual(calls,['instagram','x']);assert.equal(run.items[0].submitting,false);assert.equal(run.items[0].preparation,undefined);assert.equal(run.items[1].status,'dry_run');
     assert.match(run.items[0].message,/choose Web/);
   }finally{await fs.rm(dir,{recursive:true,force:true});}
 });

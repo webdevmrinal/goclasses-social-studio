@@ -35,7 +35,8 @@ export class NativeInterventions{
  }
  async act({runId,itemId,id,action,reviewId}){
   const p=this.pending;
-  if(!p||p.run.id!==runId||p.item.id!==itemId||p.intervention.id!==id||p.run.status!=='waiting_for_input'||p.item.submitting&&!p.readOnly||p.signal.aborted)throw new InterventionError('This Android handoff is no longer active.');
+  const active=p&&(p.run.pipeline?!p.run.stopRequested&&p.item.status==='waiting_for_input'&&!['completed','completed_with_errors','stopped','interrupted'].includes(p.run.status):p.run.status==='waiting_for_input');
+  if(!p||!active||p.run.id!==runId||p.item.id!==itemId||p.intervention.id!==id||p.item.submitting&&!p.readOnly||p.signal.aborted)throw new InterventionError('This Android handoff is no longer active.');
   if(!['check','continue'].includes(action)||p.busy)throw new InterventionError('Wait for the current screen check.');
   p.busy=true;
   try{

@@ -1,0 +1,13 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import {once} from 'node:events';
+import {createApp} from '../server/index.js';import {defaults} from '../server/config.js';
+test('a Story-only retry keeps the confirmed song from that exact feed without retrying feed or music',async()=>{
+ const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'studio-story-music-retry-')),url='https://www.instagram.com/p/RETRY_SAME_POST/',music={title:'LOADED',artist:'Beast Inside Beats',key:'1234567890'},calls=[];
+ const config=structuredClone(defaults);config.platforms.instagram.handle='ours';await fs.writeFile(path.join(dataDir,'config.json'),JSON.stringify(config));
+ const {app,queue,phoneTools,manualRecoveryHelp}=await createApp({dataDir,browser:{page:()=>assert.fail('No web upload in a Story retry')},queueOptions:{instagramWorker:{busy:false,checkAccount:async()=>{},close:async()=>{}},runner:async ctx=>{calls.push(ctx.id);assert.deepEqual(ctx.instagramPublication.music,music);assert.equal(ctx.instagramPublication.postUrl,url);return 'dry_run';}}});
+ queue.runs.push({id:'previous-story-run',mode:'LIVE',status:'completed_with_errors',config,instagram:{postingMethod:'web',music:{enabled:true,source:'manual'},story:{enabled:true,linkEnabled:false}},captions:{instagram:'Reviewed'},media:[],mediaByPlatform:{instagram:[],instagramMusic:[],instagramStory:[]},items:[{id:'instagram',status:'posted',publication:{postUrl:url}},{id:'instagramMusic',status:'posted',publication:{postUrl:url,music,verifiedBy:'existing_post_saved_audio'}},{id:'instagramStory',status:'failed'}]});await queue.persist();
+ const server=app.listen(0,'127.0.0.1');await once(server,'listening');const origin='http://127.0.0.1:'+server.address().port;
+ try{
+  const response=await fetch(origin+'/api/runs/previous-story-run/retry',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({platform:'instagramStory',mode:'TEST'})});assert.equal(response.status,201,await response.clone().text());
+  for(let i=0;queue.processing&&i<300;i++)await new Promise(r=>setTimeout(r,5));assert(!queue.processing);assert.deepEqual(calls,['instagramStory']);assert.equal(queue.runs[0].status,'completed');
+ }finally{server.closeAllConnections();await new Promise(r=>server.close(r));await queue.persistChain;await phoneTools.close();await manualRecoveryHelp.close();assert.equal(path.dirname(dataDir),path.resolve(os.tmpdir()));assert(path.basename(dataDir).startsWith('studio-story-music-retry-'));await fs.rm(dataDir,{recursive:true,force:true});}
+});
