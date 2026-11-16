@@ -324,7 +324,7 @@ async function youtube(ctx) {
   if (files.length) {
     await composer.getByRole('button', { name: 'Add an image', exact: true }).click();
     const media = composer.locator('ytd-backstage-multi-image-select-renderer');
-    if(files.length>1)imageOrder=await uploadOrderedImages(page,files,step,{input:media.locator('input[type="file"][multiple]'),images:media.locator('img'),label:'YouTube',signal:ctx.signal});
+    if(files.length>1)imageOrder=await uploadOrderedImages(page,files,step,{input:media.locator('input[type="file"][multiple]'),appendInput:media.locator('#add-image-button-container input[type="file"]'),images:media.locator('ytd-backstage-multi-image-thumbnail-renderer img'),label:'YouTube',signal:ctx.signal});
     else await uploadImages(page, files, step, { input: media.locator('input[type="file"][multiple]') });
     await waitForImages(page, media.locator('img'), files.length);
     await snapshot('images-uploaded', composer);
@@ -338,7 +338,7 @@ async function youtube(ctx) {
   const result = await finishPost({ ...ctx,
     preflight: async () => {
       await verifyCaption(editor, caption);
-      if(imageOrder)await verifyOrderedImages(page,composer.locator('ytd-backstage-multi-image-select-renderer img'),imageOrder.sources,imageOrder.evidence,{label:'YouTube'});
+      if(imageOrder)await verifyOrderedImages(page,composer.locator('ytd-backstage-multi-image-thumbnail-renderer img'),imageOrder.sources,imageOrder.evidence,{label:'YouTube'});
       if (!files.length) await verifyTextOnlyComposer(composer, composer.locator('ytd-backstage-multi-image-select-renderer img,ytd-backstage-image-renderer,ytd-post-multi-image-renderer'), 'YouTube');
       baseline = [...new Set([...baseline, ...await publicationBaseline(page, ctx.id, expected)])];
     },
