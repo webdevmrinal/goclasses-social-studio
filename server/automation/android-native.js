@@ -283,7 +283,19 @@ export class AndroidSession {
     this.armInspectionKeepAlive();
     let nodes=nativeNodes(await this.request('/source','GET',undefined,{deadline}));
     this.armInspectionKeepAlive();
-    const interrupted=androidInterruption(nodes,{expectedInstagram:Boolean(this.accountHandle)});
+    let interrupted=androidInterruption(nodes,{expectedInstagram:Boolean(this.accountHandle)});
+    if(interrupted?.kind==='notification'){
+      // Posting on another destination can notify this same office phone.
+      // Wait only on source reads; never tap/swipe a banner or replay a click.
+      await this.onLocatorRecovery?.('Waiting for a phone notification to clear. The Instagram draft is preserved...');
+      const end=Math.min(Date.now()+8000,deadline);
+      while(interrupted?.kind==='notification'&&Date.now()<end){
+        await inspectionPause(this.signal,250,end);if(Date.now()>=end)break;
+        try{nodes=nativeNodes(await this.request('/source','GET',undefined,{deadline:end}));}
+        catch(error){this.signal?.throwIfAborted();if(error.code==='ANDROID_READ_TIMEOUT')break;throw error;}
+        interrupted=androidInterruption(nodes,{expectedInstagram:Boolean(this.accountHandle)});
+      }
+    }
     if(interrupted){
       const failure=Object.assign(new InterventionError(interrupted.message),{code:'ANDROID_INTERRUPTION'});
       if(!this.onInterruption||this.interruptionPending)throw failure;
