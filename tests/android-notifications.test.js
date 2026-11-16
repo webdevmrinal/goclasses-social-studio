@@ -17,6 +17,11 @@ test('WhatsApp heads-up banners over Instagram are transient; calls and locks ke
  assert.equal(androidInterruption([...editor,node('com.android.systemui','com.android.systemui:id/notification_panel')])?.kind,'system_panel');
  assert.equal(androidInterruption([...editor,node('com.android.systemui','com.android.systemui:id/navigation_bar_frame')]),null);
  assert.equal(androidInterruption([banner]),null,'Do not infer an Instagram screen behind an unknown foreground');
+ assert.equal(androidInterruption([banner],{expectedInstagram:true})?.kind,'notification','A known Instagram session can expose only the top banner window');
+});
+
+test('a topmost banner window is waited out before Instagram becomes accessible again',async()=>{
+ const {s,calls}=session([[banner],editor]);const nodes=await s.screen();assert.equal(nodes.length,2);assert.equal(calls.length,2);
 });
 
 test('a banner caused by a parallel browser post clears through reads before Story inheritance',async()=>{
